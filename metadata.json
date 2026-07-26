@@ -1,0 +1,6 @@
+{
+  "name": "Micro Saler",
+  "description": "Local-first point-of-sale and inventory app for street/market-stall mica pigment sales by weight.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
