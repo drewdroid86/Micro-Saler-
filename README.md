@@ -1,10 +1,13 @@
 # ⚖️ Micro Saler — Local-First POS & Inventory System
 
+[![Deploy Web App](https://github.com/drewdroid86/Micro-Saler-/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/drewdroid86/Micro-Saler-/actions/workflows/deploy-pages.yml)
+[![Live Web App](https://img.shields.io/badge/live--demo-GitHub%20Pages-brightgreen.svg)](https://drewdroid86.github.io/Micro-Saler-/)
 [![Version](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)](https://github.com/drewdroid86/Micro-Saler-)
 [![Offline First](https://img.shields.io/badge/pwa-100%25--offline--local-blue.svg)](https://github.com/drewdroid86/Micro-Saler-)
-[![Tech Stack](https://img.shields.io/badge/stack-Android%20Kotlin%20%7C%20React%20%2B%20Vite-orange.svg)](https://github.com/drewdroid86/Micro-Saler-)
 
 **Micro Saler** is a high-performance, offline-first Point-of-Sale (POS) and Inventory Management system engineered specifically for market-stall, street vendor, and small-batch mica pigment sales by weight.
+
+👉 **[Launch Live Web App (GitHub Pages)](https://drewdroid86.github.io/Micro-Saler-/)**
 
 ---
 
@@ -46,6 +49,7 @@ graph TD
 - **Storage**: Browser IndexedDB (10 object stores matching Room entities)
 - **Styling**: Premium custom CSS design system (`styles.css`) with zero external frameworks
 - **PWA Support**: Registered Service Worker (`sw.js`) and Web App Manifest for home screen installation
+- **Deployment**: Automatic GitHub Actions deployment to [GitHub Pages](https://drewdroid86.github.io/Micro-Saler-/)
 
 ### 2. Android Native Application (`app/`)
 - **Language**: Kotlin 2.x
