@@ -319,31 +319,9 @@ export default class MicroSalerDB {
   // Seed Data
   // ========================================
 
-  /** Populate sample data only if the pigments store is empty. */
+  /** Reset DB or populate initial setup. Currently clean database ready for user entry. */
   async seedInitialData() {
-    const existing = await this.getAll('pigments');
-    if (existing.length > 0) return;
-
-    const pigments = [
-      { name: 'Super Gold', color_code: '#FFD700', finish_type: 'Metallic', stock_mg: 84500, total_cost_cents: 3481, default_pkg_cents: 35, retail_price_per_gram_cents: 250, wholesale_price_per_gram_cents: 150, is_archived: false },
-      { name: 'Deep Sea Blue', color_code: '#4169E1', finish_type: 'Mica Pearl', stock_mg: 112000, total_cost_cents: 4256, default_pkg_cents: 35, retail_price_per_gram_cents: 250, wholesale_price_per_gram_cents: 150, is_archived: false },
-      { name: 'Ruby Spark', color_code: '#E0115F', finish_type: 'Chameleon', stock_mg: 45200, total_cost_cents: 2260, default_pkg_cents: 35, retail_price_per_gram_cents: 250, wholesale_price_per_gram_cents: 150, is_archived: false },
-      { name: 'Lavender Satin', color_code: '#E6E6FA', finish_type: 'Satin', stock_mg: 200000, total_cost_cents: 6000, default_pkg_cents: 35, retail_price_per_gram_cents: 250, wholesale_price_per_gram_cents: 150, is_archived: false },
-      { name: 'Emerald Sheen', color_code: '#50C878', finish_type: 'Mica Pearl', stock_mg: 95000, total_cost_cents: 3990, default_pkg_cents: 35, retail_price_per_gram_cents: 250, wholesale_price_per_gram_cents: 150, is_archived: false },
-      { name: 'Copper Dust', color_code: '#B87333', finish_type: 'Matte Powder', stock_mg: 150000, total_cost_cents: 5250, default_pkg_cents: 35, retail_price_per_gram_cents: 250, wholesale_price_per_gram_cents: 150, is_archived: false },
-    ];
-
-    const customers = [
-      { name: 'Sarah Jenkins (Resin Crafts)', phone: '555-0192', credit_limit_cents: 5000, current_balance_cents: 1250, trust_status: 'GOOD_STANDING' },
-      { name: 'Marcus Vance', phone: '555-0148', credit_limit_cents: 2500, current_balance_cents: 0, trust_status: 'VIP' },
-      { name: 'Elena Rostova', phone: '555-0173', credit_limit_cents: 2500, current_balance_cents: 2100, trust_status: 'PAUSED' },
-    ];
-
-    for (const p of pigments) {
-      await this.add('pigments', p);
-    }
-    for (const c of customers) {
-      await this.add('customers', c);
-    }
+    // Clean initial state: no sample data populated
+    return;
   }
 }
