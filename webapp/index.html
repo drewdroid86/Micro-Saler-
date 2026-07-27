@@ -5,7 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="description" content="Micro Saler - Local-first point-of-sale and inventory app for street/market-stall mica pigment sales by weight.">
   <meta name="theme-color" content="#386B1F">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Micro Saler — POS & Inventory</title>
+  <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -81,5 +84,14 @@
   <div id="toast-container" style="position:fixed;top:80px;right:16px;z-index:2000;display:flex;flex-direction:column;gap:8px;"></div>
 
   <script type="module" src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .then(reg => console.log('PWA ServiceWorker registered:', reg.scope))
+          .catch(err => console.log('PWA ServiceWorker registration failed:', err));
+      });
+    }
+  </script>
 </body>
 </html>
