@@ -1,4 +1,4 @@
-import { MicroSalerDB } from './db.js';
+import MicroSalerDB from './db.js';
 import { PosRepository, formatCents, formatMgToGrams } from './repository.js';
 
 const state = {
