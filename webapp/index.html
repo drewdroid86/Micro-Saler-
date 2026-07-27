@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="description" content="Micro Saler - Local-first point-of-sale and inventory app for street/market-stall mica pigment sales by weight.">
+  <meta name="theme-color" content="#386B1F">
+  <title>Micro Saler — POS & Inventory</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Header -->
+    <header class="top-header">
+      <div class="header-brand">
+        <span class="header-brand-icon">⚖️</span>
+        <span>MICRO SALER</span>
+      </div>
+      <div class="offline-badge">100% OFFLINE LOCAL</div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs">
+      <button class="nav-tab active" data-tab="checkout">
+        <span class="nav-tab-icon">🛒</span>
+        Checkout
+      </button>
+      <button class="nav-tab" data-tab="inventory">
+        <span class="nav-tab-icon">📦</span>
+        Inventory
+      </button>
+      <button class="nav-tab" data-tab="customers">
+        <span class="nav-tab-icon">👥</span>
+        Customers
+      </button>
+      <button class="nav-tab" data-tab="history">
+        <span class="nav-tab-icon">📋</span>
+        History
+      </button>
+      <button class="nav-tab" data-tab="audit">
+        <span class="nav-tab-icon">🔒</span>
+        Audit
+      </button>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Checkout Screen -->
+      <section id="checkout-screen" class="screen active"></section>
+
+      <!-- Inventory Screen -->
+      <section id="inventory-screen" class="screen"></section>
+
+      <!-- Customers Screen -->
+      <section id="customers-screen" class="screen"></section>
+
+      <!-- History Screen -->
+      <section id="history-screen" class="screen"></section>
+
+      <!-- Audit Screen -->
+      <section id="audit-screen" class="screen"></section>
+    </main>
+  </div>
+
+  <!-- Modal Overlay (reusable) -->
+  <div id="modal-overlay" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="modal-title"></h2>
+        <button class="modal-close" id="modal-close-btn">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer" id="modal-footer"></div>
+    </div>
+  </div>
+
+  <!-- Payment Drawer (slide-up from bottom) -->
+  <div id="payment-drawer" class="payment-drawer"></div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" style="position:fixed;top:80px;right:16px;z-index:2000;display:flex;flex-direction:column;gap:8px;"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
