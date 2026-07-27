@@ -22,6 +22,7 @@ data class CheckoutUiState(
     val selectedCustomer: Customer? = null,
     val cartItems: List<CartItem> = emptyList(),
     val selectedPigment: Pigment? = null,
+    val pricingMode: String = "RETAIL", // RETAIL or WHOLESALE
     val isHandshakeOverrideEnabled: Boolean = false,
     val activePaymentDrawer: Boolean = false,
     val userErrorMessage: String? = null,
@@ -36,6 +37,7 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application, viewModelScope)
     private val repository = PosRepository(
+        db = db,
         pigmentDao = db.pigmentDao(),
         stockReceiptDao = db.stockReceiptDao(),
         customerDao = db.customerDao(),
@@ -77,6 +79,10 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
         _checkoutState.update { it.copy(selectedPigment = pigment) }
     }
 
+    fun setPricingMode(mode: String) {
+        _checkoutState.update { it.copy(pricingMode = mode) }
+    }
+
     fun setHandshakeOverride(enabled: Boolean) {
         _checkoutState.update { it.copy(isHandshakeOverrideEnabled = enabled) }
     }
@@ -99,10 +105,14 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
             ?: pigments.value.firstOrNull()
             ?: return
 
-        // Calculate default price: $2.50 / gram = 0.25 cents / mg, plus default packaging 35c
-        // Market price default formula: (weight_mg / 1000.0) * 250 + default_pkg_cents
+        // Default price uses this pigment's retail or wholesale price per gram, based on current pricing mode, plus packaging
+        val activePricePerGramCents = if (_checkoutState.value.pricingMode == "WHOLESALE") {
+            pigment.wholesale_price_per_gram_cents
+        } else {
+            pigment.retail_price_per_gram_cents
+        }
         val calculatedPriceCents = customPriceCents ?: (
-            (weightMg / 1000.0 * 250).toLong() + pigment.default_pkg_cents
+            (weightMg / 1000.0 * activePricePerGramCents).toLong() + pigment.default_pkg_cents
         )
 
         val unitCogsCents = if (pigment.stock_mg > 0) {
@@ -297,9 +307,19 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // CREATE NEW PIGMENT
-    fun createPigment(name: String, colorHex: String, finishType: String, initialGrams: Double, initialCostDollars: Double) {
+    fun createPigment(
+        name: String,
+        colorHex: String,
+        finishType: String,
+        initialGrams: Double,
+        initialCostDollars: Double,
+        retailPricePerGramDollars: Double = 2.50,
+        wholesalePricePerGramDollars: Double = 1.50
+    ) {
         val stockMg = (initialGrams * 1000).toLong()
         val totalCostCents = (initialCostDollars * 100).toLong()
+        val retailCentsPerGram = (retailPricePerGramDollars * 100).toLong()
+        val wholesaleCentsPerGram = (wholesalePricePerGramDollars * 100).toLong()
 
         viewModelScope.launch {
             repository.addPigment(
@@ -308,8 +328,21 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
                     color_code = colorHex,
                     finish_type = finishType,
                     stock_mg = stockMg,
-                    total_cost_cents = totalCostCents
+                    total_cost_cents = totalCostCents,
+                    retail_price_per_gram_cents = retailCentsPerGram,
+                    wholesale_price_per_gram_cents = wholesaleCentsPerGram
                 )
+            )
+        }
+    }
+
+    // UPDATE PIGMENT PRICING (retail + wholesale per-gram sale prices, audit-logged)
+    fun updatePigmentPrices(pigmentId: Long, retailPricePerGramDollars: Double, wholesalePricePerGramDollars: Double) {
+        viewModelScope.launch {
+            repository.updatePigmentPricing(
+                pigmentId = pigmentId,
+                retailPricePerGramCents = (retailPricePerGramDollars * 100).toLong(),
+                wholesalePricePerGramCents = (wholesalePricePerGramDollars * 100).toLong()
             )
         }
     }

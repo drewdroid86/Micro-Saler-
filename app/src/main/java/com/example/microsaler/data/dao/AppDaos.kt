@@ -28,6 +28,9 @@ interface PigmentDao {
 
     @Query("UPDATE pigments SET stock_mg = :newStockMg, total_cost_cents = :newTotalCostCents WHERE pigment_id = :id")
     suspend fun updateStockAndCost(id: Long, newStockMg: Long, newTotalCostCents: Long)
+
+    @Query("UPDATE pigments SET retail_price_per_gram_cents = :retailPricePerGramCents, wholesale_price_per_gram_cents = :wholesalePricePerGramCents WHERE pigment_id = :id")
+    suspend fun updatePricing(id: Long, retailPricePerGramCents: Long, wholesalePricePerGramCents: Long)
 }
 
 @Dao

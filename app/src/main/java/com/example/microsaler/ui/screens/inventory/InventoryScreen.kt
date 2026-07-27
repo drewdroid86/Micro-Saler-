@@ -2,6 +2,7 @@ package com.example.microsaler.ui.screens.inventory
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -35,6 +36,7 @@ fun InventoryScreen(
 ) {
     var pigmentToRestock by remember { mutableStateOf<Pigment?>(null) }
     var pigmentForShrinkage by remember { mutableStateOf<Pigment?>(null) }
+    var pigmentToEditPrice by remember { mutableStateOf<Pigment?>(null) }
     var showAddPigmentDialog by remember { mutableStateOf(false) }
 
     val sales by viewModel.sales.collectAsState()
@@ -87,7 +89,8 @@ fun InventoryScreen(
                 PigmentInventoryCard(
                     pigment = pigment,
                     onRestockClick = { pigmentToRestock = pigment },
-                    onShrinkageClick = { pigmentForShrinkage = pigment }
+                    onShrinkageClick = { pigmentForShrinkage = pigment },
+                    onEditPriceClick = { pigmentToEditPrice = pigment }
                 )
             }
         }
@@ -122,11 +125,23 @@ fun InventoryScreen(
     // Add Pigment Dialog
     if (showAddPigmentDialog) {
         AddPigmentDialog(
-            onConfirm = { name, colorHex, finish, grams, costDollars ->
-                viewModel.createPigment(name, colorHex, finish, grams, costDollars)
+            onConfirm = { name, colorHex, finish, grams, costDollars, retailDollars, wholesaleDollars ->
+                viewModel.createPigment(name, colorHex, finish, grams, costDollars, retailDollars, wholesaleDollars)
                 showAddPigmentDialog = false
             },
             onDismiss = { showAddPigmentDialog = false }
+        )
+    }
+
+    // Edit Price Dialog
+    pigmentToEditPrice?.let { pigment ->
+        EditPriceDialog(
+            pigment = pigment,
+            onConfirm = { retailDollars, wholesaleDollars ->
+                viewModel.updatePigmentPrices(pigment.pigment_id, retailDollars, wholesaleDollars)
+                pigmentToEditPrice = null
+            },
+            onDismiss = { pigmentToEditPrice = null }
         )
     }
 }
@@ -135,7 +150,8 @@ fun InventoryScreen(
 fun PigmentInventoryCard(
     pigment: Pigment,
     onRestockClick: () -> Unit,
-    onShrinkageClick: () -> Unit
+    onShrinkageClick: () -> Unit,
+    onEditPriceClick: () -> Unit
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MarketSurface),
@@ -160,17 +176,48 @@ fun PigmentInventoryCard(
                     }
                 }
 
-                Surface(
-                    color = MarketSurfaceVariant,
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        text = "WAC Cost: $${String.format("%.3f", pigment.costPerGramCents / 100.0)}/g",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MarketGreenDark,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                Column(horizontalAlignment = Alignment.End) {
+                    Surface(
+                        color = MarketSurfaceVariant,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = "WAC Cost: $${String.format("%.3f", pigment.costPerGramCents / 100.0)}/g",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MarketGreenDark,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        color = MarketSurfaceVariant,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.clickable(onClick = onEditPriceClick)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.padding(start = 8.dp, top = 4.dp, bottom = 4.dp)) {
+                                Text(
+                                    text = "Retail: $${String.format("%.2f", pigment.retail_price_per_gram_cents / 100.0)}/g",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MarketTextPrimary
+                                )
+                                Text(
+                                    text = "Wholesale: $${String.format("%.2f", pigment.wholesale_price_per_gram_cents / 100.0)}/g",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MarketTextSecondary
+                                )
+                            }
+                            Icon(
+                                Icons.Default.Edit,
+                                contentDescription = "Edit Pricing",
+                                modifier = Modifier.size(14.dp).padding(end = 6.dp, start = 2.dp),
+                                tint = MarketTextSecondary
+                            )
+                        }
+                    }
                 }
             }
 
@@ -413,7 +460,7 @@ fun ShrinkageLogDialog(
 
 @Composable
 fun AddPigmentDialog(
-    onConfirm: (String, String, String, Double, Double) -> Unit,
+    onConfirm: (String, String, String, Double, Double, Double, Double) -> Unit,
     onDismiss: () -> Unit
 ) {
     var name by remember { mutableStateOf("") }
@@ -421,6 +468,8 @@ fun AddPigmentDialog(
     var finishType by remember { mutableStateOf("Mica Pearl") }
     var initialGramsText by remember { mutableStateOf("100") }
     var initialCostText by remember { mutableStateOf("4.00") }
+    var retailPriceText by remember { mutableStateOf("2.50") }
+    var wholesalePriceText by remember { mutableStateOf("1.50") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -432,6 +481,8 @@ fun AddPigmentDialog(
                 OutlinedTextField(value = finishType, onValueChange = { finishType = it }, label = { Text("Finish Type (Mica, Metallic, etc.)") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = initialGramsText, onValueChange = { initialGramsText = it }, label = { Text("Initial Stock (Grams)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = initialCostText, onValueChange = { initialCostText = it }, label = { Text("Initial Cost ($)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = retailPriceText, onValueChange = { retailPriceText = it }, label = { Text("Retail Price per Gram ($)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = wholesalePriceText, onValueChange = { wholesalePriceText = it }, label = { Text("Wholesale Price per Gram ($)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
             }
         },
         confirmButton = {
@@ -439,12 +490,65 @@ fun AddPigmentDialog(
                 onClick = {
                     val g = initialGramsText.toDoubleOrNull() ?: 0.0
                     val c = initialCostText.toDoubleOrNull() ?: 0.0
+                    val rp = retailPriceText.toDoubleOrNull() ?: 2.50
+                    val wp = wholesalePriceText.toDoubleOrNull() ?: 1.50
                     if (name.isNotBlank()) {
-                        onConfirm(name, colorHex, finishType, g, c)
+                        onConfirm(name, colorHex, finishType, g, c, rp, wp)
                     }
                 }
             ) {
                 Text("Save Pigment")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+fun EditPriceDialog(
+    pigment: Pigment,
+    onConfirm: (Double, Double) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var retailPriceText by remember { mutableStateOf(String.format(Locale.US, "%.2f", pigment.retail_price_per_gram_cents / 100.0)) }
+    var wholesalePriceText by remember { mutableStateOf(String.format(Locale.US, "%.2f", pigment.wholesale_price_per_gram_cents / 100.0)) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Set Pricing: ${pigment.name}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Packaging cost of $${String.format(Locale.US, "%.2f", pigment.default_pkg_cents / 100.0)} is added on top of either price at checkout.")
+                OutlinedTextField(
+                    value = retailPriceText,
+                    onValueChange = { retailPriceText = it },
+                    label = { Text("Retail Price per Gram ($)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth().testTag("edit_retail_price_input")
+                )
+                OutlinedTextField(
+                    value = wholesalePriceText,
+                    onValueChange = { wholesalePriceText = it },
+                    label = { Text("Wholesale Price per Gram ($)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth().testTag("edit_wholesale_price_input")
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val rp = retailPriceText.toDoubleOrNull()
+                    val wp = wholesalePriceText.toDoubleOrNull()
+                    if (rp != null && rp >= 0 && wp != null && wp >= 0) {
+                        onConfirm(rp, wp)
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = MarketGreenPrimary)
+            ) {
+                Text("Save Pricing")
             }
         },
         dismissButton = {

@@ -4,6 +4,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -113,12 +115,41 @@ fun CheckoutScreen(
                 .padding(8.dp)
         ) {
             // Pigment Swatch Grid
-            Text(
-                text = "PIGMENT POWDERS (TAP TO SELECT)",
-                style = MaterialTheme.typography.labelSmall,
-                color = MarketTextSecondary,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "PIGMENT POWDERS (TAP TO SELECT)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MarketTextSecondary
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(0.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(1.dp, MarketBorder, RoundedCornerShape(10.dp))
+                ) {
+                    listOf("RETAIL", "WHOLESALE").forEach { mode ->
+                        val isSelected = uiState.pricingMode == mode
+                        Text(
+                            text = mode,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSelected) MarketSurface else MarketTextSecondary,
+                            modifier = Modifier
+                                .background(if (isSelected) MarketGreenPrimary else MarketSurface)
+                                .clickable { viewModel.setPricingMode(mode) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .testTag("pricing_mode_$mode")
+                        )
+                    }
+                }
+            }
 
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
@@ -151,15 +182,21 @@ fun CheckoutScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
                     .padding(vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 val presets = listOf(
+                    "1/4g" to 250L,
+                    "1/2g" to 500L,
+                    "3/4g" to 750L,
                     "1g" to 1000L,
-                    "5g" to 5000L,
-                    "10g" to 10000L,
-                    "1oz" to 28350L,
-                    "4oz" to 113398L
+                    "1.5g" to 1500L,
+                    "1.75g" to 1750L,
+                    "3.5g" to 3500L,
+                    "7g" to 7000L,
+                    "14g" to 14000L,
+                    "28g" to 28000L
                 )
 
                 presets.forEach { (label, weightMg) ->
@@ -171,9 +208,8 @@ fun CheckoutScreen(
                         ),
                         border = BorderStroke(1.dp, MarketBorder),
                         shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
                         modifier = Modifier
-                            .weight(1f)
                             .testTag("preset_weight_$label")
                     ) {
                         Text(text = label, fontWeight = FontWeight.Bold, fontSize = 14.sp)

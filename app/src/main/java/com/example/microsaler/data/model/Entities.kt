@@ -12,6 +12,8 @@ data class Pigment(
     val stock_mg: Long, // INTEGER, milligrams
     val total_cost_cents: Long, // INTEGER, cumulative cost cents of current stock
     val default_pkg_cents: Long = 35, // INTEGER, default packaging cost 35 cents
+    val retail_price_per_gram_cents: Long = 250, // INTEGER, retail sale price per gram in cents (default $2.50/g)
+    val wholesale_price_per_gram_cents: Long = 150, // INTEGER, wholesale/bulk sale price per gram in cents (default $1.50/g)
     val is_archived: Boolean = false
 ) {
     // Derived WAC (Weighted Average Cost) per mg in cents
