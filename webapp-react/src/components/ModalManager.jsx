@@ -222,19 +222,17 @@ export const ModalManager = () => {
     const pkgD = parseFloat(editPkg || '0');
 
     if (isNaN(retailD) || retailD <= 0 || isNaN(wholeD) || wholeD <= 0 || isNaN(pkgD) || pkgD < 0) {
-      showToast('Please enter valid prices and packaging fee', 'error');
+      showToast('Please enter valid retail/wholesale prices (> 0) and packaging fee', 'error');
       return;
     }
     try {
-      await repo.updatePigment({
-        pigment_id: modal.payload.pigment_id,
+      await repo.updatePigmentDetails(modal.payload.pigment_id, {
         name: editName.trim(),
         color_code: editColor,
         finish_type: editFinish,
         default_pkg_cents: Math.round(pkgD * 100),
         retail_price_per_gram_cents: Math.round(retailD * 100),
         wholesale_price_per_gram_cents: Math.round(wholeD * 100),
-        is_archived: editArchived,
       });
       await refreshAllData();
       handleClose();
@@ -243,6 +241,7 @@ export const ModalManager = () => {
       showToast(e.message, 'error');
     }
   };
+
 
 
   const handleAddCustomer = async () => {
