@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePos } from '../context/PosContext';
 import { formatCents, formatMgToGrams } from '../repository';
 import { CustomWeightModal } from './modals/CustomWeightModal';
@@ -57,6 +57,59 @@ export const ModalManager = () => {
   // Drawer state
   const [drawerTab, setDrawerTab] = useState('digital');
   const [digitalProvider, setDigitalProvider] = useState(null);
+
+  // Reset form states whenever modal opens or payload changes to fix state leaks
+  useEffect(() => {
+    setRestockWeight('');
+    setRestockCost('');
+    setRestockSupplier('');
+
+    setShrinkageWeight('');
+    setShrinkageReason('Spillage');
+
+    setPigmentName('');
+    setPigmentColor('#000000');
+    setPigmentFinish('Matte');
+    setPigmentStock('');
+    setPigmentCost('');
+    setPigmentRetail('');
+    setPigmentWholesale('');
+
+    setCustName('');
+    setCustPhone('');
+    setCustLimit('');
+    setCustStatus('GOOD_STANDING');
+
+    setVoidReason('');
+    setReturnReason('');
+    setReturnRestock(true);
+
+    setDrawerTab('digital');
+    setDigitalProvider(null);
+
+    // Pre-populate payload-dependent fields
+    if (modal.name === 'editPrice' && modal.payload) {
+      setEditRetail(modal.payload.retail_price_per_gram_cents ? (modal.payload.retail_price_per_gram_cents / 100).toFixed(2) : '');
+      setEditWholesale(modal.payload.wholesale_price_per_gram_cents ? (modal.payload.wholesale_price_per_gram_cents / 100).toFixed(2) : '');
+    } else {
+      setEditRetail('');
+      setEditWholesale('');
+    }
+
+    if (modal.name === 'settleTab' && modal.payload) {
+      setSettleAmt(modal.payload.current_balance_cents ? (modal.payload.current_balance_cents / 100).toFixed(2) : '');
+      setSettleType('CASH');
+      setSettleProvider('Square');
+    } else {
+      setSettleAmt('');
+    }
+
+    if (modal.name === 'returnItem' && modal.payload?.saleItem) {
+      setReturnWeight((modal.payload.saleItem.weight_mg / 1000).toFixed(1));
+    } else {
+      setReturnWeight('');
+    }
+  }, [modal.name, modal.payload]);
 
   if (!modal.name) return null;
 
@@ -507,11 +560,11 @@ export const ModalManager = () => {
               <p className="body-medium mb-md">Edit Pricing: <strong>{modal.payload?.name}</strong></p>
               <div className="form-group">
                 <label className="form-label">Retail Price/g ($)</label>
-                <input type="number" className="form-input" value={editRetail} onChange={e => setEditRetail(e.target.value)} placeholder={(modal.payload?.retail_price_per_gram_cents / 100).toFixed(2)} step="0.01" min="0" />
+                <input type="number" className="form-input" value={editRetail} onChange={e => setEditRetail(e.target.value)} placeholder={modal.payload?.retail_price_per_gram_cents ? (modal.payload.retail_price_per_gram_cents / 100).toFixed(2) : '0.00'} step="0.01" min="0" />
               </div>
               <div className="form-group">
                 <label className="form-label">Wholesale Price/g ($)</label>
-                <input type="number" className="form-input" value={editWholesale} onChange={e => setEditWholesale(e.target.value)} placeholder={(modal.payload?.wholesale_price_per_gram_cents / 100).toFixed(2)} step="0.01" min="0" />
+                <input type="number" className="form-input" value={editWholesale} onChange={e => setEditWholesale(e.target.value)} placeholder={modal.payload?.wholesale_price_per_gram_cents ? (modal.payload.wholesale_price_per_gram_cents / 100).toFixed(2) : '0.00'} step="0.01" min="0" />
               </div>
             </div>
             <div className="modal-footer">
