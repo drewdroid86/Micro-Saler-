@@ -157,6 +157,50 @@ export const PosProvider = ({ children }) => {
     setCart(prev => prev.filter((_, i) => i !== index));
   };
 
+  const updateCartItem = (index, weightMg, customPriceCents = null) => {
+    setCart(prev => prev.map((item, i) => {
+      if (i !== index) return item;
+      const validWeightMg = Math.max(0, weightMg);
+      const pigment = item.pigment;
+      const pricePerGramCents = pricingMode === 'RETAIL'
+        ? pigment.retail_price_per_gram_cents
+        : pigment.wholesale_price_per_gram_cents;
+
+      const priceChargedCents = customPriceCents !== null
+        ? customPriceCents
+        : Math.round((validWeightMg / 1000) * pricePerGramCents) + (pigment.default_pkg_cents || 0);
+
+      const unitCogsCents = pigment.stock_mg > 0
+        ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * validWeightMg)
+        : 0;
+
+      return {
+        ...item,
+        weight_mg: validWeightMg,
+        price_charged_cents: priceChargedCents,
+        unit_cogs_cents: unitCogsCents
+      };
+    }));
+  };
+
+  const editCartItem = (index, newWeightMg, newPriceCents) => {
+    setCart(prev => prev.map((item, i) => {
+      if (i !== index) return item;
+      const validWeightMg = Math.max(0, newWeightMg);
+      const pigment = item.pigment;
+      const unitCogsCents = (pigment && pigment.stock_mg > 0)
+        ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * validWeightMg)
+        : 0;
+
+      return {
+        ...item,
+        weight_mg: validWeightMg,
+        price_charged_cents: Math.max(0, newPriceCents),
+        unit_cogs_cents: unitCogsCents
+      };
+    }));
+  };
+
   const clearCart = () => {
     setCart([]);
   };
@@ -253,6 +297,8 @@ export const PosProvider = ({ children }) => {
       closeModal,
       addToCart,
       removeFromCart,
+      updateCartItem,
+      editCartItem,
       clearCart,
       quickCollectCash,
       exportBackup,

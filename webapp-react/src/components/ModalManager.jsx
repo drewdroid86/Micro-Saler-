@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { usePos } from '../context/PosContext';
 import { formatCents, formatMgToGrams } from '../repository';
 import { CustomWeightModal } from './modals/CustomWeightModal';
+import { EditCartItemModal } from './modals/EditCartItemModal';
 import { BackupRestoreModal } from './modals/BackupRestoreModal';
 
 export const ModalManager = () => {
@@ -146,6 +147,10 @@ export const ModalManager = () => {
     return <CustomWeightModal />;
   }
 
+  if (modal.name === 'editCartItem') {
+    return <EditCartItemModal />;
+  }
+
   const totalAmountCents = cart.reduce((sum, item) => sum + item.price_charged_cents, 0);
 
   // Handlers
@@ -233,6 +238,7 @@ export const ModalManager = () => {
         default_pkg_cents: Math.round(pkgD * 100),
         retail_price_per_gram_cents: Math.round(retailD * 100),
         wholesale_price_per_gram_cents: Math.round(wholeD * 100),
+        is_archived: editArchived,
       });
       await refreshAllData();
       handleClose();

@@ -251,12 +251,13 @@ export class PosRepository {
     const pigment = await this.db.getById('pigments', pId);
     if (!pigment) throw new Error(`Pigment ${pigmentId} not found`);
 
-    pigment.name = details.name;
-    pigment.color_code = details.color_code;
-    pigment.finish_type = details.finish_type;
-    pigment.default_pkg_cents = details.default_pkg_cents;
-    pigment.retail_price_per_gram_cents = details.retail_price_per_gram_cents;
-    pigment.wholesale_price_per_gram_cents = details.wholesale_price_per_gram_cents;
+    if (details.name !== undefined) pigment.name = details.name;
+    if (details.color_code !== undefined) pigment.color_code = details.color_code;
+    if (details.finish_type !== undefined) pigment.finish_type = details.finish_type;
+    if (details.default_pkg_cents !== undefined) pigment.default_pkg_cents = details.default_pkg_cents;
+    if (details.retail_price_per_gram_cents !== undefined) pigment.retail_price_per_gram_cents = details.retail_price_per_gram_cents;
+    if (details.wholesale_price_per_gram_cents !== undefined) pigment.wholesale_price_per_gram_cents = details.wholesale_price_per_gram_cents;
+    if (details.is_archived !== undefined) pigment.is_archived = Boolean(details.is_archived);
 
     await this.db.put('pigments', pigment);
 
@@ -272,6 +273,7 @@ export class PosRepository {
         default_pkg_cents: pigment.default_pkg_cents,
         retail_price_per_gram_cents: pigment.retail_price_per_gram_cents,
         wholesale_price_per_gram_cents: pigment.wholesale_price_per_gram_cents,
+        is_archived: pigment.is_archived,
       }),
       created_at: Date.now(),
     });

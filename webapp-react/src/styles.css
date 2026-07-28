@@ -746,6 +746,20 @@ body {
   font-size: 15px;
 }
 
+.cart-item-action-btn {
+  background: none;
+  border: none;
+  color: var(--market-text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px;
+  opacity: 0.7;
+  transition: opacity var(--transition-fast);
+}
+.cart-item-action-btn:hover {
+  opacity: 1;
+}
+
 .cart-item-remove {
   background: none;
   border: none;
@@ -758,6 +772,15 @@ body {
 }
 .cart-item-remove:hover {
   opacity: 1;
+}
+
+.cart-input-sm {
+  padding: 3px 6px;
+  font-size: 13px;
+  border: 1px solid var(--market-border);
+  border-radius: var(--radius-sm);
+  background: var(--market-surface);
+  color: var(--market-text);
 }
 
 .cart-total {

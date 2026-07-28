@@ -87,7 +87,7 @@ export const InventoryScreen = () => {
                   Restock
                 </button>
                 <button className="btn btn-ghost btn-sm flex-1" onClick={() => openModal('editPigment', p)}>
-                  Edit
+                  Edit Pigment
                 </button>
               </div>
             </div>

@@ -2,6 +2,30 @@ import React from 'react';
 import { usePos } from '../context/PosContext';
 import { formatCents, formatMgToGrams } from '../repository';
 
+const CartItem = ({ item, index, onRemove, openModal }) => {
+  return (
+    <div className="cart-item">
+      <div className="cart-item-details">
+        <span className="cart-item-title">{item.pigment.name}</span>
+        <span className="cart-item-meta">{formatMgToGrams(item.weight_mg)}</span>
+      </div>
+      <div className="flex-center gap-sm">
+        <span className="cart-item-price">{formatCents(item.price_charged_cents)}</span>
+        <button
+          className="cart-item-action-btn"
+          onClick={() => openModal('editCartItem', { item, index })}
+          title="Edit line item"
+        >
+          ✏️
+        </button>
+        <button className="cart-item-remove" onClick={onRemove} title="Remove line item">
+          &times;
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export const CheckoutScreen = () => {
   const {
     pigments,
@@ -129,16 +153,13 @@ export const CheckoutScreen = () => {
             <div className="cart-empty">Cart is empty</div>
           ) : (
             cart.map((item, index) => (
-              <div key={index} className="cart-item">
-                <div className="cart-item-details">
-                  <span className="cart-item-title">{item.pigment.name}</span>
-                  <span className="cart-item-meta">{formatMgToGrams(item.weight_mg)}</span>
-                </div>
-                <div className="flex-center gap-sm">
-                  <span className="cart-item-price">{formatCents(item.price_charged_cents)}</span>
-                  <button className="cart-item-remove" onClick={() => removeFromCart(index)}>&times;</button>
-                </div>
-              </div>
+              <CartItem
+                key={index}
+                item={item}
+                index={index}
+                onRemove={() => removeFromCart(index)}
+                openModal={openModal}
+              />
             ))
           )}
         </div>
