@@ -75,18 +75,23 @@ graph TD
 
 ## 💾 Data & Backup
 
-Micro Saler stores all data **locally on-device** — IndexedDB (`MicroSalerDB`, schema v4) for the Web PWA or SQLite (Room Database) for Android. There is no server and no cloud sync requirement.
+Micro Saler stores all data **locally on-device** — IndexedDB (`MicroSalerDB`, schema v4) for the web app or SQLite for Android. There is no server and no cloud sync. As of v1.1.0, you can back up and restore your ledger manually:
 
-### 📥 Export & 📤 Import Ledger
-
-You can back up and restore your entire POS ledger at any time:
-
-- **Export Ledger Backup**: Generates a single timestamped JSON backup file (`micro-saler-backup-YYYY-MM-DD-HHmm.json`) packaging all 10 IndexedDB object stores (`pigments`, `stock_receipts`, `customers`, `sales`, `sale_payments`, `sale_items`, `returns`, `tab_payments`, `shrinkage_logs`, and `audit_log`).
-- **Restore Ledger Backup**: Accepts a backup JSON file, validates schema version compatibility ($\le \text{v4}$), requires explicit confirmation before applying, and repopulates stores preserving original primary key identifiers (`put`).
-- **Backup Access**: Click **`💾 Backup / Restore`** in the top navigation header or on the **Audit Log** screen.
-- **Startup Data Integrity Check**: Runs automatically on app launch to verify payment totals against line item prices for all completed transactions (tolerating $\pm 1\text{\cent}$ split-payment variance).
+- **Export**: downloads a single timestamped JSON file (`micro-saler-backup-<date>.json`) containing every store — pigments, stock receipts, customers, sales, payments, sale items, returns, tab payments, shrinkage logs, and audit trail.
+- **Import**: restores from a previously exported file. **This overwrites all current data** — you'll be asked to confirm before applying.
+- **Recommendation**: export a backup at the end of each sales day/event and store it safely off-device (email to yourself, cloud drive, etc.).
+- **Integrity check**: on startup, the app verifies every completed sale's line item total matches its recorded payments (within a 1¢ tolerance). Any mismatch is logged to the browser console — worth checking periodically if you suspect data corruption.
 
 ---
+
+## ⚠️ Known Limitations
+
+- Split payments are UI-stubbed only ("coming soon") — not yet functional.
+- No multi-user or multi-device real-time sync.
+- The `webapp/` directory (original vanilla JS version) is kept for reference only and no longer maintained — all active development is in `webapp-react/`.
+
+---
+
 
 
 ## 🚀 Getting Started & Local Setup
