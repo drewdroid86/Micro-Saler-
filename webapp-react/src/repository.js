@@ -246,6 +246,43 @@ export class PosRepository {
     });
   }
 
+  async updatePigment(pigmentData) {
+    if (!pigmentData || !pigmentData.pigment_id) throw new Error('Pigment ID is required');
+    const existing = await this.db.getById('pigments', Number(pigmentData.pigment_id));
+    if (!existing) throw new Error(`Pigment ${pigmentData.pigment_id} not found`);
+
+    const updated = {
+      ...existing,
+      name: pigmentData.name || existing.name,
+      color_code: pigmentData.color_code || existing.color_code,
+      finish_type: pigmentData.finish_type || existing.finish_type,
+      default_pkg_cents: pigmentData.default_pkg_cents !== undefined ? pigmentData.default_pkg_cents : existing.default_pkg_cents,
+      retail_price_per_gram_cents: pigmentData.retail_price_per_gram_cents !== undefined ? pigmentData.retail_price_per_gram_cents : existing.retail_price_per_gram_cents,
+      wholesale_price_per_gram_cents: pigmentData.wholesale_price_per_gram_cents !== undefined ? pigmentData.wholesale_price_per_gram_cents : existing.wholesale_price_per_gram_cents,
+      is_archived: pigmentData.is_archived !== undefined ? Boolean(pigmentData.is_archived) : existing.is_archived,
+    };
+
+    await this.db.updatePigment(updated);
+
+    await this.db.add('audit_log', {
+      entity_type: 'Pigment',
+      entity_id: Number(pigmentData.pigment_id),
+      action: 'PIGMENT_UPDATE',
+      details_json: JSON.stringify({
+        pigment_id: pigmentData.pigment_id,
+        name: updated.name,
+        retail: updated.retail_price_per_gram_cents,
+        wholesale: updated.wholesale_price_per_gram_cents,
+        pkg: updated.default_pkg_cents,
+        is_archived: updated.is_archived
+      }),
+      created_at: Date.now(),
+    });
+
+    return updated;
+  }
+
+
   async createPigment(data) {
     return await this.db.add('pigments', {
       name: data.name,

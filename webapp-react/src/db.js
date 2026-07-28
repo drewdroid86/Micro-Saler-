@@ -185,6 +185,12 @@ export default class MicroSalerDB {
     await this.put('pigments', pigment);
   }
 
+  async updatePigment(pigment) {
+    if (!pigment || !pigment.pigment_id) throw new Error('Pigment ID required');
+    await this.put('pigments', pigment);
+  }
+
+
   async getAllCustomers() {
     const all = await this.getAll('customers');
     return all.sort((a, b) => a.name.localeCompare(b.name));

@@ -38,8 +38,13 @@ export const ModalManager = () => {
   const [pigmentRetail, setPigmentRetail] = useState('');
   const [pigmentWholesale, setPigmentWholesale] = useState('');
 
+  const [editName, setEditName] = useState('');
+  const [editColor, setEditColor] = useState('#000000');
+  const [editFinish, setEditFinish] = useState('Mica Pearl');
+  const [editPkg, setEditPkg] = useState('');
   const [editRetail, setEditRetail] = useState('');
   const [editWholesale, setEditWholesale] = useState('');
+  const [editArchived, setEditArchived] = useState(false);
 
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
@@ -76,8 +81,13 @@ export const ModalManager = () => {
     setPigmentRetail('');
     setPigmentWholesale('');
 
+    setEditName('');
+    setEditColor('#000000');
+    setEditFinish('Mica Pearl');
+    setEditPkg('');
     setEditRetail('');
     setEditWholesale('');
+    setEditArchived(false);
 
     setCustName('');
     setCustPhone('');
@@ -108,10 +118,16 @@ export const ModalManager = () => {
     resetAllFormStates();
 
     // Pre-populate payload-dependent fields
-    if (modal.name === 'editPrice' && modal.payload) {
+    if ((modal.name === 'editPigment' || modal.name === 'editPrice') && modal.payload) {
+      setEditName(modal.payload.name || '');
+      setEditColor(modal.payload.color_code || '#888888');
+      setEditFinish(modal.payload.finish_type || 'Mica Pearl');
+      setEditPkg(modal.payload.default_pkg_cents !== undefined ? (modal.payload.default_pkg_cents / 100).toFixed(2) : '0.35');
       setEditRetail(modal.payload.retail_price_per_gram_cents ? (modal.payload.retail_price_per_gram_cents / 100).toFixed(2) : '');
       setEditWholesale(modal.payload.wholesale_price_per_gram_cents ? (modal.payload.wholesale_price_per_gram_cents / 100).toFixed(2) : '');
+      setEditArchived(Boolean(modal.payload.is_archived));
     }
+
 
     if (modal.name === 'settleTab' && modal.payload) {
       setSettleAmt(modal.payload.current_balance_cents ? (modal.payload.current_balance_cents / 100).toFixed(2) : '');
@@ -196,22 +212,38 @@ export const ModalManager = () => {
     }
   };
 
-  const handleEditPrice = async () => {
+  const handleEditPigment = async () => {
+    if (!editName.trim()) {
+      showToast('Pigment name is required', 'error');
+      return;
+    }
     const retailD = parseFloat(editRetail);
     const wholeD = parseFloat(editWholesale);
-    if (isNaN(retailD) || retailD <= 0 || isNaN(wholeD) || wholeD <= 0) {
-      showToast('Invalid prices', 'error');
+    const pkgD = parseFloat(editPkg || '0');
+
+    if (isNaN(retailD) || retailD <= 0 || isNaN(wholeD) || wholeD <= 0 || isNaN(pkgD) || pkgD < 0) {
+      showToast('Please enter valid prices and packaging fee', 'error');
       return;
     }
     try {
-      await repo.updatePigmentPricing(modal.payload.pigment_id, Math.round(retailD * 100), Math.round(wholeD * 100));
+      await repo.updatePigment({
+        pigment_id: modal.payload.pigment_id,
+        name: editName.trim(),
+        color_code: editColor,
+        finish_type: editFinish,
+        default_pkg_cents: Math.round(pkgD * 100),
+        retail_price_per_gram_cents: Math.round(retailD * 100),
+        wholesale_price_per_gram_cents: Math.round(wholeD * 100),
+        is_archived: editArchived,
+      });
       await refreshAllData();
       handleClose();
-      showToast('Prices updated', 'success');
+      showToast('Pigment updated successfully', 'success');
     } catch (e) {
       showToast(e.message, 'error');
     }
   };
+
 
   const handleAddCustomer = async () => {
     const limitD = parseFloat(custLimit || 0);
@@ -564,30 +596,67 @@ export const ModalManager = () => {
           </div>
         )}
 
-        {/* Edit Price */}
-        {modal.name === 'editPrice' && (
+        {/* Edit Pigment */}
+        {(modal.name === 'editPigment' || modal.name === 'editPrice') && (
           <div>
             <div className="modal-header">
-              <h2>Edit Price</h2>
+              <h2>Edit Pigment</h2>
               <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
             <div className="modal-body">
-              <p className="body-medium mb-md">Edit Pricing: <strong>{modal.payload?.name}</strong></p>
-              <div className="form-group">
-                <label className="form-label">Retail Price/g ($)</label>
-                <input type="number" className="form-input" value={editRetail} onChange={e => setEditRetail(e.target.value)} placeholder={modal.payload?.retail_price_per_gram_cents ? (modal.payload.retail_price_per_gram_cents / 100).toFixed(2) : '0.00'} step="0.01" min="0" />
+              <div className="form-group mb-sm">
+                <label className="form-label">Pigment Name</label>
+                <input type="text" className="form-input" value={editName} onChange={e => setEditName(e.target.value)} required />
               </div>
-              <div className="form-group">
-                <label className="form-label">Wholesale Price/g ($)</label>
-                <input type="number" className="form-input" value={editWholesale} onChange={e => setEditWholesale(e.target.value)} placeholder={modal.payload?.wholesale_price_per_gram_cents ? (modal.payload.wholesale_price_per_gram_cents / 100).toFixed(2) : '0.00'} step="0.01" min="0" />
+
+              <div className="grid-2col mb-sm">
+                <div className="form-group">
+                  <label className="form-label">Color Code (Hex)</label>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <input type="color" value={editColor} onChange={e => setEditColor(e.target.value)} style={{ width: '40px', height: '38px', border: 'none', borderRadius: '4px', cursor: 'pointer' }} />
+                    <input type="text" className="form-input" value={editColor} onChange={e => setEditColor(e.target.value)} />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Finish Type</label>
+                  <select className="form-select" value={editFinish} onChange={e => setEditFinish(e.target.value)}>
+                    <option value="Mica Pearl">Mica Pearl</option>
+                    <option value="Chameleon">Chameleon</option>
+                    <option value="Metallic">Metallic</option>
+                    <option value="Matte Powder">Matte Powder</option>
+                    <option value="Satin">Satin</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid-2col mb-sm">
+                <div className="form-group">
+                  <label className="form-label">Retail Price/g ($)</label>
+                  <input type="number" className="form-input" value={editRetail} onChange={e => setEditRetail(e.target.value)} step="0.01" min="0" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Wholesale Price/g ($)</label>
+                  <input type="number" className="form-input" value={editWholesale} onChange={e => setEditWholesale(e.target.value)} step="0.01" min="0" />
+                </div>
+              </div>
+
+              <div className="form-group mb-sm">
+                <label className="form-label">Default Packaging Fee ($)</label>
+                <input type="number" className="form-input" value={editPkg} onChange={e => setEditPkg(e.target.value)} step="0.01" min="0" />
+              </div>
+
+              <div className="form-group flex-center gap-sm" style={{ justifyContent: 'flex-start', marginTop: '12px' }}>
+                <input type="checkbox" id="edit-archived" checked={editArchived} onChange={e => setEditArchived(e.target.checked)} style={{ width: '18px', height: '18px' }} />
+                <label htmlFor="edit-archived" style={{ cursor: 'pointer', fontSize: '0.9rem' }}>Archive pigment (hide from POS catalog)</label>
               </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
-              <button className="btn btn-primary" onClick={handleEditPrice}>Save Prices</button>
+              <button className="btn btn-primary" onClick={handleEditPigment}>Save Changes</button>
             </div>
           </div>
         )}
+
 
         {/* Add Customer */}
         {modal.name === 'addCustomer' && (
