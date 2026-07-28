@@ -209,7 +209,72 @@ export default class MicroSalerDB {
     return returns.reduce((sum, r) => sum + r.mg_returned, 0);
   }
 
+  clearStore(storeName) {
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(storeName, 'readwrite');
+      const store = tx.objectStore(storeName);
+      const req = store.clear();
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async exportAllStores() {
+    const storeNames = [
+      'pigments',
+      'stock_receipts',
+      'customers',
+      'sales',
+      'sale_payments',
+      'sale_items',
+      'returns',
+      'tab_payments',
+      'shrinkage_logs',
+      'audit_log'
+    ];
+    const storesData = {};
+    for (const name of storeNames) {
+      storesData[name] = await this.getAll(name);
+    }
+    return {
+      app: 'Micro Saler POS',
+      schema_version: 3,
+      exported_at: new Date().toISOString(),
+      stores: storesData
+    };
+  }
+
+  async importAllStores(backupData) {
+    if (!backupData || typeof backupData !== 'object' || !backupData.stores) {
+      throw new Error('Invalid backup file format: missing "stores" object.');
+    }
+    const storeNames = [
+      'pigments',
+      'stock_receipts',
+      'customers',
+      'sales',
+      'sale_payments',
+      'sale_items',
+      'returns',
+      'tab_payments',
+      'shrinkage_logs',
+      'audit_log'
+    ];
+
+    for (const name of storeNames) {
+      await this.clearStore(name);
+    }
+
+    for (const name of storeNames) {
+      const records = backupData.stores[name] || [];
+      for (const record of records) {
+        await this.put(name, record);
+      }
+    }
+  }
+
   async seedInitialData() {
     return;
   }
 }
+

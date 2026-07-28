@@ -273,4 +273,25 @@ export class PosRepository {
   async updateCustomer(data) {
     await this.db.put('customers', data);
   }
+
+  async exportData() {
+    return await this.db.exportAllStores();
+  }
+
+  async importData(backupData) {
+    await this.db.importAllStores(backupData);
+    await this.db.add('audit_log', {
+      entity_type: 'System',
+      entity_id: 0,
+      action: 'DATABASE_RESTORE',
+      details: JSON.stringify({
+        restored_at: new Date().toISOString(),
+        pigments_count: backupData.stores?.pigments?.length || 0,
+        sales_count: backupData.stores?.sales?.length || 0,
+        customers_count: backupData.stores?.customers?.length || 0
+      }),
+      timestamp: Date.now()
+    });
+  }
 }
+

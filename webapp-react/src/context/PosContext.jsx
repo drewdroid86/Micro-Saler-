@@ -147,6 +147,37 @@ export const PosProvider = ({ children }) => {
     }
   };
 
+  const exportBackup = async () => {
+    try {
+      const backupData = await repo.exportData();
+      const jsonStr = JSON.stringify(backupData, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const dateStr = new Date().toISOString().split('T')[0];
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `micro-saler-backup-${dateStr}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast('Ledger backup exported successfully!', 'success');
+    } catch (error) {
+      showToast('Export failed: ' + error.message, 'error');
+    }
+  };
+
+  const importBackup = async (jsonData) => {
+    try {
+      await repo.importData(jsonData);
+      await refreshAllData();
+      showToast('Ledger backup restored successfully!', 'success');
+    } catch (error) {
+      showToast('Import failed: ' + error.message, 'error');
+      throw error;
+    }
+  };
+
   return (
     <PosContext.Provider value={{
       db,
@@ -179,11 +210,14 @@ export const PosProvider = ({ children }) => {
       removeFromCart,
       clearCart,
       quickCollectCash,
+      exportBackup,
+      importBackup,
       refreshAllData
     }}>
       {children}
     </PosContext.Provider>
   );
+
 };
 
 export const usePos = () => {

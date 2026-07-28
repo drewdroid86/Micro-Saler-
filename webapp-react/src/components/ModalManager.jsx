@@ -2,8 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { usePos } from '../context/PosContext';
 import { formatCents, formatMgToGrams } from '../repository';
 import { CustomWeightModal } from './modals/CustomWeightModal';
+import { BackupRestoreModal } from './modals/BackupRestoreModal';
 
 export const ModalManager = () => {
+
   const {
     modal,
     closeModal,
@@ -707,7 +709,13 @@ export const ModalManager = () => {
           </div>
         )}
 
+        {/* Backup / Restore Modal */}
+        {modal.name === 'backupRestore' && (
+          <BackupRestoreModal />
+        )}
+
       </div>
     </div>
   );
 };
+
