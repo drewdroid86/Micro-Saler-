@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import MicroSalerDB from '../db.js';
-import { PosRepository } from '../repository.js';
+import { PosRepository, getEffectivePricePerGramCents } from '../repository.js';
 
 const PosContext = createContext(null);
 
@@ -129,13 +129,11 @@ export const PosProvider = ({ children }) => {
       return;
     }
 
-    const pricePerGramCents = pricingMode === 'RETAIL'
-      ? pigment.retail_price_per_gram_cents
-      : pigment.wholesale_price_per_gram_cents;
+    const pricePerGramCents = getEffectivePricePerGramCents(pigment, weightMg, pricingMode);
 
     const priceChargedCents = customPriceCents !== null
       ? customPriceCents
-      : Math.round((weightMg / 1000) * pricePerGramCents) + pigment.default_pkg_cents;
+      : Math.round((weightMg / 1000) * pricePerGramCents) + (pigment.default_pkg_cents || 0);
 
     const unitCogsCents = pigment.stock_mg > 0
       ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * weightMg)
@@ -162,9 +160,7 @@ export const PosProvider = ({ children }) => {
       if (i !== index) return item;
       const validWeightMg = Math.max(0, weightMg);
       const pigment = item.pigment;
-      const pricePerGramCents = pricingMode === 'RETAIL'
-        ? pigment.retail_price_per_gram_cents
-        : pigment.wholesale_price_per_gram_cents;
+      const pricePerGramCents = getEffectivePricePerGramCents(pigment, validWeightMg, pricingMode);
 
       const priceChargedCents = customPriceCents !== null
         ? customPriceCents

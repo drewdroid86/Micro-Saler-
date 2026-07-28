@@ -53,7 +53,24 @@ export const InventoryScreen = () => {
               <div className="inventory-card-header">
                 <div className="color-swatch" style={{ backgroundColor: p.color_code }} />
                 <div>
-                  <div className="title-medium">{p.name}</div>
+                  <div className="title-medium" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {p.name}
+                    {Boolean(p.tier_pricing_json) && (
+                      <span
+                        title="Per-pigment weight-tier pricing configured"
+                        style={{
+                          fontSize: '10px',
+                          background: 'var(--market-primary-light, rgba(59, 130, 246, 0.15))',
+                          color: 'var(--market-primary, #3b82f6)',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          fontWeight: '600'
+                        }}
+                      >
+                        🏷️ Tiers
+                      </span>
+                    )}
+                  </div>
                   <div className="body-medium text-muted">{p.finish_type}</div>
                 </div>
                 <div className="text-right" style={{ marginLeft: 'auto' }}>

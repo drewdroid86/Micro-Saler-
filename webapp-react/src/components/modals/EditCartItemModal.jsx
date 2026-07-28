@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { usePos } from '../../context/PosContext';
+import { getEffectivePricePerGramCents } from '../../repository';
 
 export const EditCartItemModal = () => {
   const { modal, closeModal, editCartItem, pricingMode, showToast } = usePos();
@@ -38,9 +39,7 @@ export const EditCartItemModal = () => {
     if (autoCalculate) {
       const wG = parseFloat(val);
       if (!isNaN(wG) && wG >= 0 && item.pigment) {
-        const rateCents = pricingMode === 'RETAIL'
-          ? item.pigment.retail_price_per_gram_cents
-          : item.pigment.wholesale_price_per_gram_cents;
+        const rateCents = getEffectivePricePerGramCents(item.pigment, Math.round(wG * 1000), pricingMode);
         const calcCents = Math.round(wG * rateCents) + (item.pigment.default_pkg_cents || 0);
         setPriceDollars((calcCents / 100).toFixed(2));
       }
@@ -53,9 +52,7 @@ export const EditCartItemModal = () => {
     if (checked) {
       const wG = parseFloat(weightGrams);
       if (!isNaN(wG) && wG >= 0 && item.pigment) {
-        const rateCents = pricingMode === 'RETAIL'
-          ? item.pigment.retail_price_per_gram_cents
-          : item.pigment.wholesale_price_per_gram_cents;
+        const rateCents = getEffectivePricePerGramCents(item.pigment, Math.round(wG * 1000), pricingMode);
         const calcCents = Math.round(wG * rateCents) + (item.pigment.default_pkg_cents || 0);
         setPriceDollars((calcCents / 100).toFixed(2));
       }

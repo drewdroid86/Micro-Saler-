@@ -14,6 +14,46 @@ export function formatMgToOz(mg) {
   return `${(mg / 28349.5).toFixed(2)} oz`;
 }
 
+export function getEffectivePricePerGramCents(pigment, weightMg, pricingMode = 'RETAIL') {
+  if (!pigment) return 0;
+
+  const baseRate = pricingMode === 'RETAIL'
+    ? (pigment.retail_price_per_gram_cents || 0)
+    : (pigment.wholesale_price_per_gram_cents || 0);
+
+  let tiers = [];
+  if (pigment.tier_pricing_json) {
+    try {
+      tiers = typeof pigment.tier_pricing_json === 'string'
+        ? JSON.parse(pigment.tier_pricing_json)
+        : pigment.tier_pricing_json;
+    } catch (e) {
+      tiers = [];
+    }
+  } else if (Array.isArray(pigment.price_tiers)) {
+    tiers = pigment.price_tiers;
+  }
+
+  if (!Array.isArray(tiers) || tiers.length === 0) {
+    return baseRate;
+  }
+
+  const sortedTiers = [...tiers].sort((a, b) => Number(b.min_weight_mg) - Number(a.min_weight_mg));
+  const matchedTier = sortedTiers.find(t => weightMg >= Number(t.min_weight_mg));
+
+  if (matchedTier) {
+    const tierRate = pricingMode === 'RETAIL'
+      ? matchedTier.retail_price_per_gram_cents
+      : matchedTier.wholesale_price_per_gram_cents;
+
+    if (tierRate !== undefined && tierRate !== null && !isNaN(tierRate) && Number(tierRate) > 0) {
+      return Number(tierRate);
+    }
+  }
+
+  return baseRate;
+}
+
 export class PosRepository {
   constructor(db) {
     this.db = db;
@@ -258,6 +298,7 @@ export class PosRepository {
     if (details.retail_price_per_gram_cents !== undefined) pigment.retail_price_per_gram_cents = details.retail_price_per_gram_cents;
     if (details.wholesale_price_per_gram_cents !== undefined) pigment.wholesale_price_per_gram_cents = details.wholesale_price_per_gram_cents;
     if (details.is_archived !== undefined) pigment.is_archived = Boolean(details.is_archived);
+    if (details.tier_pricing_json !== undefined) pigment.tier_pricing_json = details.tier_pricing_json;
 
     await this.db.put('pigments', pigment);
 
@@ -274,6 +315,7 @@ export class PosRepository {
         retail_price_per_gram_cents: pigment.retail_price_per_gram_cents,
         wholesale_price_per_gram_cents: pigment.wholesale_price_per_gram_cents,
         is_archived: pigment.is_archived,
+        tier_pricing_json: pigment.tier_pricing_json,
       }),
       created_at: Date.now(),
     });
@@ -286,8 +328,6 @@ export class PosRepository {
     return await this.updatePigmentDetails(pigmentData.pigment_id, pigmentData);
   }
 
-
-
   async createPigment(data) {
     return await this.db.add('pigments', {
       name: data.name,
@@ -299,6 +339,7 @@ export class PosRepository {
       retail_price_per_gram_cents: data.retail_price_per_gram_cents || 250,
       wholesale_price_per_gram_cents: data.wholesale_price_per_gram_cents || 150,
       is_archived: false,
+      tier_pricing_json: data.tier_pricing_json || null,
     });
   }
 

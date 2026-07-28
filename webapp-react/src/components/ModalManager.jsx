@@ -46,6 +46,7 @@ export const ModalManager = () => {
   const [editRetail, setEditRetail] = useState('');
   const [editWholesale, setEditWholesale] = useState('');
   const [editArchived, setEditArchived] = useState(false);
+  const [editTiers, setEditTiers] = useState([]);
 
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
@@ -89,6 +90,7 @@ export const ModalManager = () => {
     setEditRetail('');
     setEditWholesale('');
     setEditArchived(false);
+    setEditTiers([]);
 
     setCustName('');
     setCustPhone('');
@@ -127,6 +129,27 @@ export const ModalManager = () => {
       setEditRetail(modal.payload.retail_price_per_gram_cents ? (modal.payload.retail_price_per_gram_cents / 100).toFixed(2) : '');
       setEditWholesale(modal.payload.wholesale_price_per_gram_cents ? (modal.payload.wholesale_price_per_gram_cents / 100).toFixed(2) : '');
       setEditArchived(Boolean(modal.payload.is_archived));
+
+      if (modal.payload.tier_pricing_json) {
+        try {
+          const parsed = typeof modal.payload.tier_pricing_json === 'string'
+            ? JSON.parse(modal.payload.tier_pricing_json)
+            : modal.payload.tier_pricing_json;
+          if (Array.isArray(parsed)) {
+            setEditTiers(parsed.map(t => ({
+              min_weight_g: (t.min_weight_mg / 1000).toString(),
+              retail_price_g: (t.retail_price_per_gram_cents / 100).toFixed(2),
+              wholesale_price_g: (t.wholesale_price_per_gram_cents / 100).toFixed(2)
+            })));
+          } else {
+            setEditTiers([]);
+          }
+        } catch (e) {
+          setEditTiers([]);
+        }
+      } else {
+        setEditTiers([]);
+      }
     }
 
 
@@ -217,6 +240,21 @@ export const ModalManager = () => {
     }
   };
 
+  const addEditTier = () => {
+    setEditTiers(prev => [
+      ...prev,
+      { min_weight_g: '3.5', retail_price_g: editRetail || '4.00', wholesale_price_g: editWholesale || '3.00' }
+    ]);
+  };
+
+  const updateEditTier = (index, field, value) => {
+    setEditTiers(prev => prev.map((t, i) => i === index ? { ...t, [field]: value } : t));
+  };
+
+  const removeEditTier = (index) => {
+    setEditTiers(prev => prev.filter((_, i) => i !== index));
+  };
+
   const handleEditPigment = async () => {
     if (!editName.trim()) {
       showToast('Pigment name is required', 'error');
@@ -230,6 +268,19 @@ export const ModalManager = () => {
       showToast('Please enter valid retail/wholesale prices (> 0) and packaging fee', 'error');
       return;
     }
+
+    const formattedTiers = editTiers.map(t => {
+      const wG = parseFloat(t.min_weight_g);
+      const rD = parseFloat(t.retail_price_g);
+      const wD = parseFloat(t.wholesale_price_g);
+      if (isNaN(wG) || wG <= 0 || isNaN(rD) || rD <= 0 || isNaN(wD) || wD <= 0) return null;
+      return {
+        min_weight_mg: Math.round(wG * 1000),
+        retail_price_per_gram_cents: Math.round(rD * 100),
+        wholesale_price_per_gram_cents: Math.round(wD * 100)
+      };
+    }).filter(Boolean);
+
     try {
       await repo.updatePigmentDetails(modal.payload.pigment_id, {
         name: editName.trim(),
@@ -239,6 +290,7 @@ export const ModalManager = () => {
         retail_price_per_gram_cents: Math.round(retailD * 100),
         wholesale_price_per_gram_cents: Math.round(wholeD * 100),
         is_archived: editArchived,
+        tier_pricing_json: formattedTiers.length > 0 ? JSON.stringify(formattedTiers) : null,
       });
       await refreshAllData();
       handleClose();
@@ -648,6 +700,73 @@ export const ModalManager = () => {
               <div className="form-group mb-sm">
                 <label className="form-label">Default Packaging Fee ($)</label>
                 <input type="number" className="form-input" value={editPkg} onChange={e => setEditPkg(e.target.value)} step="0.01" min="0" />
+              </div>
+
+              {/* Weight-Tier Pricing Breaks */}
+              <div className="form-group mb-sm" style={{ borderTop: '1px dashed var(--market-border)', paddingTop: '12px', marginTop: '12px' }}>
+                <div className="flex-between mb-xs">
+                  <label className="form-label" style={{ marginBottom: 0 }}>🏷️ Weight-Tier Pricing ($/g breaks)</label>
+                  <button type="button" className="btn btn-secondary btn-xs" onClick={addEditTier}>+ Add Tier</button>
+                </div>
+                <p className="label-small text-muted mb-xs" style={{ fontSize: '11px' }}>
+                  Discounted $/g rate applied when customer weight meets or exceeds threshold.
+                </p>
+
+                {editTiers.length === 0 ? (
+                  <div className="label-small text-muted" style={{ fontStyle: 'italic', padding: '4px 0' }}>
+                    No weight tiers set (base price/g applies to all order sizes).
+                  </div>
+                ) : (
+                  editTiers.map((tier, idx) => (
+                    <div key={idx} className="flex-center gap-xs mb-xs" style={{ alignItems: 'flex-start', background: 'var(--market-surface-variant)', padding: '6px 8px', borderRadius: '4px' }}>
+                      <div style={{ flex: '1' }}>
+                        <label className="label-small text-muted" style={{ fontSize: '10px' }}>Min Weight (g)</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0.1"
+                          className="form-input"
+                          style={{ padding: '4px 6px', fontSize: '12px' }}
+                          value={tier.min_weight_g}
+                          onChange={e => updateEditTier(idx, 'min_weight_g', e.target.value)}
+                        />
+                      </div>
+                      <div style={{ flex: '1' }}>
+                        <label className="label-small text-muted" style={{ fontSize: '10px' }}>Retail $/g</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="form-input"
+                          style={{ padding: '4px 6px', fontSize: '12px' }}
+                          value={tier.retail_price_g}
+                          onChange={e => updateEditTier(idx, 'retail_price_g', e.target.value)}
+                        />
+                      </div>
+                      <div style={{ flex: '1' }}>
+                        <label className="label-small text-muted" style={{ fontSize: '10px' }}>Wholesale $/g</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="form-input"
+                          style={{ padding: '4px 6px', fontSize: '12px' }}
+                          value={tier.wholesale_price_g}
+                          onChange={e => updateEditTier(idx, 'wholesale_price_g', e.target.value)}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs text-error"
+                        onClick={() => removeEditTier(idx)}
+                        style={{ marginTop: '16px', padding: '4px 6px', fontSize: '14px' }}
+                        title="Remove Tier"
+                      >
+                        &times;
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
 
               <div className="form-group flex-center gap-sm" style={{ justifyContent: 'flex-start', marginTop: '12px' }}>
