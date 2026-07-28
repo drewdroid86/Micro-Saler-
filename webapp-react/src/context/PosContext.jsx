@@ -107,19 +107,25 @@ export const PosProvider = ({ children }) => {
     }
   };
 
+  const [loadingError, setLoadingError] = useState(null);
+  const [isDbBlocked, setIsDbBlocked] = useState(false);
+
   useEffect(() => {
     let isMounted = true;
     const fallbackTimer = setTimeout(() => {
-      if (isMounted) {
-        console.warn('Database initialization timed out, clearing loading screen.');
+      if (isMounted && loading) {
+        console.warn('Database initialization timed out (6s safety net).');
+        setLoadingError('Database initialization timed out. Please refresh or clear site data.');
         setLoading(false);
       }
-    }, 4000);
+    }, 6000);
 
     async function initDB() {
       try {
         const database = new MicroSalerDB();
-        await database.init();
+        await database.init(() => {
+          if (isMounted) setIsDbBlocked(true);
+        });
         const repository = new PosRepository(database);
 
         if (!isMounted) return;
@@ -137,7 +143,9 @@ export const PosProvider = ({ children }) => {
         }
       } catch (e) {
         console.error('Database initialization error:', e);
-        showToast('Database error: ' + e.message, 'error');
+        if (isMounted) {
+          setLoadingError(e.message);
+        }
       } finally {
         clearTimeout(fallbackTimer);
         if (isMounted) {
@@ -339,6 +347,8 @@ export const PosProvider = ({ children }) => {
       db,
       repo,
       loading,
+      loadingError,
+      isDbBlocked,
       currentTab,
       setCurrentTab,
       pigments,
