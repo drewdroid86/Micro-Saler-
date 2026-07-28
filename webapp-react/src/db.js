@@ -17,6 +17,11 @@ export default class MicroSalerDB {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
 
+      request.onblocked = () => {
+        console.warn('Database upgrade blocked by another open tab or Service Worker connection.');
+        reject(new Error('Database upgrade blocked by another open tab. Please close other tabs and reload.'));
+      };
+
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
         const oldVersion = event.oldVersion;
@@ -27,6 +32,12 @@ export default class MicroSalerDB {
 
       request.onsuccess = async (event) => {
         this.db = event.target.result;
+        this.db.onversionchange = () => {
+          if (this.db) {
+            this.db.close();
+            this.db = null;
+          }
+        };
         await this.seedInitialData();
         resolve(this);
       };

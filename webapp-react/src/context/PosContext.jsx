@@ -108,11 +108,21 @@ export const PosProvider = ({ children }) => {
   };
 
   useEffect(() => {
+    let isMounted = true;
+    const fallbackTimer = setTimeout(() => {
+      if (isMounted) {
+        console.warn('Database initialization timed out, clearing loading screen.');
+        setLoading(false);
+      }
+    }, 4000);
+
     async function initDB() {
       try {
         const database = new MicroSalerDB();
         await database.init();
         const repository = new PosRepository(database);
+
+        if (!isMounted) return;
 
         setDb(database);
         setRepo(repository);
@@ -122,16 +132,25 @@ export const PosProvider = ({ children }) => {
 
         // Pre-select first pigment if available
         const activeP = await database.getActivePigments();
-        if (activeP.length > 0) {
+        if (activeP.length > 0 && isMounted) {
           setSelectedPigment(activeP[0]);
         }
       } catch (e) {
         console.error('Database initialization error:', e);
+        showToast('Database error: ' + e.message, 'error');
       } finally {
-        setLoading(false);
+        clearTimeout(fallbackTimer);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     }
     initDB();
+
+    return () => {
+      isMounted = false;
+      clearTimeout(fallbackTimer);
+    };
   }, []);
 
   const addToCart = (pigment, weightMg, customPriceCents = null) => {
