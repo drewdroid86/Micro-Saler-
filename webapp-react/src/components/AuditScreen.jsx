@@ -13,13 +13,21 @@ function formatDate(timestamp) {
 }
 
 export const AuditScreen = () => {
-  const { auditLogs } = usePos();
+  const { auditLogs, openModal } = usePos();
 
   return (
     <div>
-      <div className="section-header">
+      <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2 className="section-title">🔒 AUDIT LOG & SECURITY OVERRIDES</h2>
+        <button 
+          className="btn btn-secondary" 
+          onClick={() => openModal('backupRestore')}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+        >
+          💾 Ledger Backup / Restore
+        </button>
       </div>
+
 
       <div>
         {auditLogs.map(log => {

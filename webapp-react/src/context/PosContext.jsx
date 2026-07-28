@@ -70,6 +70,40 @@ export const PosProvider = ({ children }) => {
     }
   };
 
+  const checkStartupIntegrity = async (activeDb) => {
+    try {
+      const allSales = await activeDb.getAllSales();
+      const completedSales = allSales.filter(s => s.status === 'COMPLETED');
+      const allItems = await activeDb.getAll('sale_items');
+      const allPayments = await activeDb.getAll('sale_payments');
+
+      let mismatchCount = 0;
+
+      for (const sale of completedSales) {
+        const saleId = sale.sale_id;
+        const itemsForSale = allItems.filter(i => Number(i.sale_id) === Number(saleId));
+        const paymentsForSale = allPayments.filter(p => Number(p.sale_id) === Number(saleId));
+
+        const itemsTotal = itemsForSale.reduce((sum, item) => sum + (item.price_charged_cents || 0), 0);
+        const paymentsTotal = paymentsForSale.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
+
+        if (Math.abs(itemsTotal - paymentsTotal) > 1) {
+          mismatchCount++;
+          console.warn(
+            `[Data Integrity Warning] Sale ID ${saleId}: Items Total = ${itemsTotal}¢, Payments Total = ${paymentsTotal}¢ (Diff: ${Math.abs(itemsTotal - paymentsTotal)}¢)`
+          );
+        }
+      }
+
+      if (mismatchCount > 0) {
+        console.warn(`Startup integrity check: Found ${mismatchCount} completed sale(s) with payment total mismatches.`);
+        showToast(`Data integrity warning: ${mismatchCount} completed sale(s) have payment total mismatches.`, 'warning');
+      }
+    } catch (err) {
+      console.error('Startup integrity check error:', err);
+    }
+  };
+
   useEffect(() => {
     async function initDB() {
       try {
@@ -79,6 +113,7 @@ export const PosProvider = ({ children }) => {
         setDb(dbInstance);
         setRepo(repoInstance);
         await refreshAllData(repoInstance, dbInstance);
+        await checkStartupIntegrity(dbInstance);
         setLoading(false);
       } catch (err) {
         console.error('DB Initialization error:', err);
@@ -153,10 +188,15 @@ export const PosProvider = ({ children }) => {
       const jsonStr = JSON.stringify(backupData, null, 2);
       const blob = new Blob([jsonStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
-      const dateStr = new Date().toISOString().split('T')[0];
+
+      const pad = (n) => String(n).padStart(2, '0');
+      const d = new Date();
+      const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+      const fileName = `micro-saler-backup-${dateStr}.json`;
+
       const link = document.createElement('a');
       link.href = url;
-      link.download = `micro-saler-backup-${dateStr}.json`;
+      link.download = fileName;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -168,15 +208,20 @@ export const PosProvider = ({ children }) => {
   };
 
   const importBackup = async (jsonData) => {
+    if (!window.confirm("This will overwrite all current data — continue?")) {
+      return false;
+    }
     try {
       await repo.importData(jsonData);
       await refreshAllData();
       showToast('Ledger backup restored successfully!', 'success');
+      return true;
     } catch (error) {
       showToast('Import failed: ' + error.message, 'error');
       throw error;
     }
   };
+
 
   return (
     <PosContext.Provider value={{

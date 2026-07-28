@@ -5,7 +5,7 @@
  */
 
 const DB_NAME = 'MicroSalerDB';
-const DB_VERSION = 3;
+export const DB_VERSION = 4;
 
 export default class MicroSalerDB {
   constructor() {
@@ -19,7 +19,11 @@ export default class MicroSalerDB {
 
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
-        this._createStores(db);
+        const oldVersion = event.oldVersion;
+        // Version 3 -> 4 migration: no-op check to ensure object stores exist
+        if (oldVersion < 4) {
+          this._createStores(db);
+        }
       };
 
       request.onsuccess = async (event) => {
@@ -33,6 +37,7 @@ export default class MicroSalerDB {
       };
     });
   }
+
 
   _createStores(db) {
     if (!db.objectStoreNames.contains('pigments')) {
@@ -237,9 +242,8 @@ export default class MicroSalerDB {
       storesData[name] = await this.getAll(name);
     }
     return {
-      app: 'Micro Saler POS',
-      schema_version: 3,
       exported_at: new Date().toISOString(),
+      db_version: DB_VERSION,
       stores: storesData
     };
   }
@@ -248,6 +252,11 @@ export default class MicroSalerDB {
     if (!backupData || typeof backupData !== 'object' || !backupData.stores) {
       throw new Error('Invalid backup file format: missing "stores" object.');
     }
+    const backupVersion = backupData.db_version || backupData.schema_version;
+    if (!backupVersion || backupVersion > DB_VERSION) {
+      throw new Error(`Backup database version (${backupVersion || 'unknown'}) is newer than current database version (${DB_VERSION}).`);
+    }
+
     const storeNames = [
       'pigments',
       'stock_receipts',
@@ -272,6 +281,7 @@ export default class MicroSalerDB {
       }
     }
   }
+
 
   async seedInitialData() {
     return;
