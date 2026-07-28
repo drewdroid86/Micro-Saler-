@@ -8,16 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.0] - 2026-07-27
 
 ### 🚀 Added
-- **Ledger Export & Import Infrastructure (`webapp-react/`)**:
-  - Manual backup export of all 10 IndexedDB object stores packaged into a single timestamped JSON file (`micro-saler-backup-<date>.json`).
-  - Ledger import/restore with schema version validation ($\le \text{v4}$), overwrite confirmation warning, and primary key preservation using `put`.
-  - Added `💾 Backup / Restore` UI controls in the top navigation header and Audit Log screen.
-  - Startup data integrity auditing checking completed sale line-item totals against recorded payment totals (within $\pm 1\text{\cent}$ tolerance).
+- **Data Export/Import**: full JSON backup of all 10 IndexedDB stores (pigments, stock_receipts, customers, sales, sale_payments, sale_items, returns, tab_payments, shrinkage_logs, audit_log), downloadable as a timestamped file. Import restores from a backup with an explicit confirm-before-overwrite step.
+- **Startup Integrity Check**: on startup, the app verifies every completed sale's line item total matches its recorded payments (within a 1¢ tolerance). Any mismatch is logged to the browser console.
 
 ### 🛠️ Changed
-- **IndexedDB Schema Version**: Bumped database version to `v4` (`DB_VERSION = 4`) with no-op upgrade handling establishing the pattern for future schema migrations.
+- **Database Version Migration**: bumped IndexedDB version from 3 to 4 with a no-op migration path, establishing the pattern for future schema changes.
+
+### 🐛 Fixed
+- Fixed stale form-field state in `ModalManager.jsx` and `CustomWeightModal.jsx` — modals now reset all local input state on open (keyed to the record being edited) and close, so values from a previously edited pigment/customer no longer leak into the next modal.
+
+### 📝 Notes
+This is the first version where the app is safe to trust with real sales data, because you can back up and recover if a device is lost or browser storage is wiped.
 
 ---
+
 
 ## [1.0.0] - 2026-07-27
 
