@@ -11,6 +11,7 @@ export const PosProvider = ({ children }) => {
 
   const [currentTab, setCurrentTab] = useState('checkout');
   const [pigments, setPigments] = useState([]);
+  const [priceTiers, setPriceTiers] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [sales, setSales] = useState([]);
   const [saleItems, setSaleItems] = useState([]);
@@ -53,6 +54,7 @@ export const PosProvider = ({ children }) => {
 
     try {
       const activeP = await activeDb.getActivePigments();
+      const allTiers = await activeDb.getAll('pigment_price_tiers');
       const allC = await activeDb.getAllCustomers();
       const allS = await activeDb.getAllSales();
       const allSI = await activeDb.getAll('sale_items');
@@ -60,6 +62,7 @@ export const PosProvider = ({ children }) => {
       const allShrink = await activeDb.getAll('shrinkage_logs');
 
       setPigments(activeP);
+      setPriceTiers(allTiers || []);
       setCustomers(allC);
       setSales(allS);
       setSaleItems(allSI);
@@ -107,16 +110,24 @@ export const PosProvider = ({ children }) => {
   useEffect(() => {
     async function initDB() {
       try {
-        const dbInstance = new MicroSalerDB();
-        await dbInstance.init();
-        const repoInstance = new PosRepository(dbInstance);
-        setDb(dbInstance);
-        setRepo(repoInstance);
-        await refreshAllData(repoInstance, dbInstance);
-        await checkStartupIntegrity(dbInstance);
-        setLoading(false);
-      } catch (err) {
-        console.error('DB Initialization error:', err);
+        const database = new MicroSalerDB();
+        await database.init();
+        const repository = new PosRepository(database);
+
+        setDb(database);
+        setRepo(repository);
+
+        await refreshAllData(repository, database);
+        await checkStartupIntegrity(database);
+
+        // Pre-select first pigment if available
+        const activeP = await database.getActivePigments();
+        if (activeP.length > 0) {
+          setSelectedPigment(activeP[0]);
+        }
+      } catch (e) {
+        console.error('Database initialization error:', e);
+      } finally {
         setLoading(false);
       }
     }
@@ -129,11 +140,32 @@ export const PosProvider = ({ children }) => {
       return;
     }
 
-    const pricePerGramCents = getEffectivePricePerGramCents(pigment, weightMg, pricingMode);
+    let priceChargedCents = null;
 
-    const priceChargedCents = customPriceCents !== null
-      ? customPriceCents
-      : Math.round((weightMg / 1000) * pricePerGramCents) + (pigment.default_pkg_cents || 0);
+    if (customPriceCents !== null) {
+      priceChargedCents = customPriceCents;
+    } else {
+      // Check if a fixed preset price tier exists for (pigment_id, weight_mg)
+      const matchingTier = priceTiers.find(
+        t => Number(t.pigment_id) === Number(pigment.pigment_id) && Number(t.weight_mg) === Number(weightMg)
+      );
+
+      if (matchingTier) {
+        const tierPrice = pricingMode === 'RETAIL'
+          ? matchingTier.retail_price_cents
+          : matchingTier.wholesale_price_cents;
+
+        if (tierPrice !== null && tierPrice !== undefined && !isNaN(tierPrice) && Number(tierPrice) > 0) {
+          priceChargedCents = Number(tierPrice);
+        }
+      }
+
+      // If no preset tier override, fall back to per-gram formula
+      if (priceChargedCents === null) {
+        const pricePerGramCents = getEffectivePricePerGramCents(pigment, weightMg, pricingMode);
+        priceChargedCents = Math.round((weightMg / 1000) * pricePerGramCents) + (pigment.default_pkg_cents || 0);
+      }
+    }
 
     const unitCogsCents = pigment.stock_mg > 0
       ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * weightMg)
@@ -160,11 +192,31 @@ export const PosProvider = ({ children }) => {
       if (i !== index) return item;
       const validWeightMg = Math.max(0, weightMg);
       const pigment = item.pigment;
-      const pricePerGramCents = getEffectivePricePerGramCents(pigment, validWeightMg, pricingMode);
 
-      const priceChargedCents = customPriceCents !== null
-        ? customPriceCents
-        : Math.round((validWeightMg / 1000) * pricePerGramCents) + (pigment.default_pkg_cents || 0);
+      let priceChargedCents = null;
+
+      if (customPriceCents !== null) {
+        priceChargedCents = customPriceCents;
+      } else {
+        const matchingTier = priceTiers.find(
+          t => Number(t.pigment_id) === Number(pigment.pigment_id) && Number(t.weight_mg) === Number(validWeightMg)
+        );
+
+        if (matchingTier) {
+          const tierPrice = pricingMode === 'RETAIL'
+            ? matchingTier.retail_price_cents
+            : matchingTier.wholesale_price_cents;
+
+          if (tierPrice !== null && tierPrice !== undefined && !isNaN(tierPrice) && Number(tierPrice) > 0) {
+            priceChargedCents = Number(tierPrice);
+          }
+        }
+
+        if (priceChargedCents === null) {
+          const pricePerGramCents = getEffectivePricePerGramCents(pigment, validWeightMg, pricingMode);
+          priceChargedCents = Math.round((validWeightMg / 1000) * pricePerGramCents) + (pigment.default_pkg_cents || 0);
+        }
+      }
 
       const unitCogsCents = pigment.stock_mg > 0
         ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * validWeightMg)
@@ -271,6 +323,7 @@ export const PosProvider = ({ children }) => {
       currentTab,
       setCurrentTab,
       pigments,
+      priceTiers,
       customers,
       sales,
       saleItems,

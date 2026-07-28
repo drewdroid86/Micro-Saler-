@@ -5,7 +5,7 @@
  */
 
 const DB_NAME = 'MicroSalerDB';
-export const DB_VERSION = 4;
+export const DB_VERSION = 5;
 
 export default class MicroSalerDB {
   constructor() {
@@ -20,8 +20,7 @@ export default class MicroSalerDB {
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
         const oldVersion = event.oldVersion;
-        // Version 3 -> 4 migration: no-op check to ensure object stores exist
-        if (oldVersion < 4) {
+        if (oldVersion < 5) {
           this._createStores(db);
         }
       };
@@ -44,6 +43,13 @@ export default class MicroSalerDB {
       const store = db.createObjectStore('pigments', { keyPath: 'pigment_id', autoIncrement: true });
       store.createIndex('name', 'name', { unique: true });
       store.createIndex('is_archived', 'is_archived', { unique: false });
+    }
+
+    if (!db.objectStoreNames.contains('pigment_price_tiers')) {
+      const store = db.createObjectStore('pigment_price_tiers', { keyPath: 'tier_id', autoIncrement: true });
+      store.createIndex('pigment_id', 'pigment_id', { unique: false });
+      store.createIndex('weight_mg', 'weight_mg', { unique: false });
+      store.createIndex('pigment_weight', ['pigment_id', 'weight_mg'], { unique: true });
     }
 
     if (!db.objectStoreNames.contains('stock_receipts')) {
@@ -191,6 +197,44 @@ export default class MicroSalerDB {
   }
 
 
+  async getPriceTiersForPigment(pigmentId) {
+    return await this.getAllByIndex('pigment_price_tiers', 'pigment_id', Number(pigmentId));
+  }
+
+  async upsertPriceTier(pigmentId, weightMg, retailCents, wholesaleCents) {
+    const pId = Number(pigmentId);
+    const wMg = Number(weightMg);
+    const tiers = await this.getPriceTiersForPigment(pId);
+    const existing = tiers.find(t => Number(t.weight_mg) === wMg);
+
+    const rC = retailCents !== null && retailCents !== undefined && !isNaN(retailCents) && Number(retailCents) > 0 ? Number(retailCents) : null;
+    const wC = wholesaleCents !== null && wholesaleCents !== undefined && !isNaN(wholesaleCents) && Number(wholesaleCents) > 0 ? Number(wholesaleCents) : null;
+
+    if (rC === null && wC === null) {
+      if (existing) {
+        await this.delete('pigment_price_tiers', existing.tier_id);
+      }
+      return null;
+    }
+
+    if (existing) {
+      existing.retail_price_cents = rC;
+      existing.wholesale_price_cents = wC;
+      await this.put('pigment_price_tiers', existing);
+      return existing;
+    } else {
+      const newRecord = {
+        pigment_id: pId,
+        weight_mg: wMg,
+        retail_price_cents: rC,
+        wholesale_price_cents: wC,
+      };
+      const tierId = await this.add('pigment_price_tiers', newRecord);
+      newRecord.tier_id = tierId;
+      return newRecord;
+    }
+  }
+
   async getAllCustomers() {
     const all = await this.getAll('customers');
     return all.sort((a, b) => a.name.localeCompare(b.name));
@@ -233,6 +277,7 @@ export default class MicroSalerDB {
   async exportAllStores() {
     const storeNames = [
       'pigments',
+      'pigment_price_tiers',
       'stock_receipts',
       'customers',
       'sales',
@@ -265,6 +310,7 @@ export default class MicroSalerDB {
 
     const storeNames = [
       'pigments',
+      'pigment_price_tiers',
       'stock_receipts',
       'customers',
       'sales',

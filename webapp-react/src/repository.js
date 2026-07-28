@@ -286,6 +286,14 @@ export class PosRepository {
     });
   }
 
+  async getPriceTiersForPigment(pigmentId) {
+    return await this.db.getPriceTiersForPigment(pigmentId);
+  }
+
+  async upsertPriceTier(pigmentId, weightMg, retailCents, wholesaleCents) {
+    return await this.db.upsertPriceTier(pigmentId, weightMg, retailCents, wholesaleCents);
+  }
+
   async updatePigmentDetails(pigmentId, details) {
     const pId = Number(pigmentId);
     const pigment = await this.db.getById('pigments', pId);

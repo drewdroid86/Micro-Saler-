@@ -5,6 +5,19 @@ import { CustomWeightModal } from './modals/CustomWeightModal';
 import { EditCartItemModal } from './modals/EditCartItemModal';
 import { BackupRestoreModal } from './modals/BackupRestoreModal';
 
+const PRESET_TIERS = [
+  { label: '¼g', weight_mg: 250 },
+  { label: '½g', weight_mg: 500 },
+  { label: '¾g', weight_mg: 750 },
+  { label: '1g', weight_mg: 1000 },
+  { label: '1.5g', weight_mg: 1500 },
+  { label: '1.75g', weight_mg: 1750 },
+  { label: '3.5g', weight_mg: 3500 },
+  { label: '7g', weight_mg: 7000 },
+  { label: '14g', weight_mg: 14000 },
+  { label: '28g', weight_mg: 28000 }
+];
+
 export const ModalManager = () => {
 
   const {
@@ -47,6 +60,7 @@ export const ModalManager = () => {
   const [editWholesale, setEditWholesale] = useState('');
   const [editArchived, setEditArchived] = useState(false);
   const [editTiers, setEditTiers] = useState([]);
+  const [presetTierInputs, setPresetTierInputs] = useState({});
 
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
@@ -91,6 +105,7 @@ export const ModalManager = () => {
     setEditWholesale('');
     setEditArchived(false);
     setEditTiers([]);
+    setPresetTierInputs({});
 
     setCustName('');
     setCustPhone('');
@@ -129,6 +144,19 @@ export const ModalManager = () => {
       setEditRetail(modal.payload.retail_price_per_gram_cents ? (modal.payload.retail_price_per_gram_cents / 100).toFixed(2) : '');
       setEditWholesale(modal.payload.wholesale_price_per_gram_cents ? (modal.payload.wholesale_price_per_gram_cents / 100).toFixed(2) : '');
       setEditArchived(Boolean(modal.payload.is_archived));
+
+      if (repo && modal.payload.pigment_id) {
+        repo.getPriceTiersForPigment(modal.payload.pigment_id).then(tiers => {
+          const initial = {};
+          (tiers || []).forEach(t => {
+            initial[t.weight_mg] = {
+              retail: t.retail_price_cents !== null && t.retail_price_cents !== undefined ? (t.retail_price_cents / 100).toFixed(2) : '',
+              wholesale: t.wholesale_price_cents !== null && t.wholesale_price_cents !== undefined ? (t.wholesale_price_cents / 100).toFixed(2) : ''
+            };
+          });
+          setPresetTierInputs(initial);
+        }).catch(console.error);
+      }
 
       if (modal.payload.tier_pricing_json) {
         try {
@@ -292,6 +320,17 @@ export const ModalManager = () => {
         is_archived: editArchived,
         tier_pricing_json: formattedTiers.length > 0 ? JSON.stringify(formattedTiers) : null,
       });
+
+      // Save fixed preset tier overrides
+      for (const preset of PRESET_TIERS) {
+        const input = presetTierInputs[preset.weight_mg] || {};
+        const rD = parseFloat(input.retail);
+        const wD = parseFloat(input.wholesale);
+        const retailCents = (!isNaN(rD) && rD > 0) ? Math.round(rD * 100) : null;
+        const wholesaleCents = (!isNaN(wD) && wD > 0) ? Math.round(wD * 100) : null;
+        await repo.upsertPriceTier(modal.payload.pigment_id, preset.weight_mg, retailCents, wholesaleCents);
+      }
+
       await refreshAllData();
       handleClose();
       showToast('Pigment updated successfully', 'success');
@@ -767,6 +806,61 @@ export const ModalManager = () => {
                     </div>
                   ))
                 )}
+              </div>
+
+              {/* Fixed Preset Weight Tier Prices */}
+              <div className="form-group mb-sm" style={{ borderTop: '1px dashed var(--market-border)', paddingTop: '12px', marginTop: '12px' }}>
+                <label className="form-label mb-xs">🏷️ Fixed Preset Tier Prices (Optional Overrides)</label>
+                <p className="label-small text-muted mb-sm" style={{ fontSize: '11px' }}>
+                  Set a specific total dollar amount for preset weight buttons. Leave blank to use standard per-gram pricing.
+                </p>
+
+                <div style={{ display: 'grid', gap: '6px' }}>
+                  {PRESET_TIERS.map(preset => {
+                    const inputVal = presetTierInputs[preset.weight_mg] || { retail: '', wholesale: '' };
+                    return (
+                      <div key={preset.weight_mg} className="flex-center gap-xs" style={{ alignItems: 'center', background: 'var(--market-surface-variant)', padding: '5px 8px', borderRadius: '4px' }}>
+                        <span className="body-small font-weight-bold" style={{ width: '65px', fontSize: '12px' }}>{preset.label}</span>
+                        <div style={{ flex: 1 }}>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="Retail $"
+                            className="form-input"
+                            style={{ padding: '3px 6px', fontSize: '12px' }}
+                            value={inputVal.retail || ''}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setPresetTierInputs(prev => ({
+                                ...prev,
+                                [preset.weight_mg]: { ...(prev[preset.weight_mg] || {}), retail: val }
+                              }));
+                            }}
+                          />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="Wholesale $"
+                            className="form-input"
+                            style={{ padding: '3px 6px', fontSize: '12px' }}
+                            value={inputVal.wholesale || ''}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setPresetTierInputs(prev => ({
+                                ...prev,
+                                [preset.weight_mg]: { ...(prev[preset.weight_mg] || {}), wholesale: val }
+                              }));
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="form-group flex-center gap-sm" style={{ justifyContent: 'flex-start', marginTop: '12px' }}>

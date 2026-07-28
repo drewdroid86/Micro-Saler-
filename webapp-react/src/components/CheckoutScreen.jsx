@@ -33,6 +33,7 @@ const CartItem = ({ item, index, onRemove, openModal }) => {
 export const CheckoutScreen = () => {
   const {
     pigments,
+    priceTiers,
     selectedCustomer,
     selectedPigment,
     setSelectedPigment,
@@ -59,6 +60,16 @@ export const CheckoutScreen = () => {
     { label: '14g', mg: 14000 },
     { label: '28g', mg: 28000 }
   ];
+
+  const hasTierOverride = (presetMg) => {
+    if (!selectedPigment) return false;
+    const tier = (priceTiers || []).find(
+      t => Number(t.pigment_id) === Number(selectedPigment.pigment_id) && Number(t.weight_mg) === Number(presetMg)
+    );
+    if (!tier) return false;
+    const val = pricingMode === 'RETAIL' ? tier.retail_price_cents : tier.wholesale_price_cents;
+    return val !== null && val !== undefined && !isNaN(val) && Number(val) > 0;
+  };
 
   const handlePresetClick = (mg) => {
     if (!selectedPigment) {
@@ -129,15 +140,34 @@ export const CheckoutScreen = () => {
       </div>
 
       <div className="weight-presets mb-md">
-        {presets.map(preset => (
-          <button
-            key={preset.label}
-            className="weight-preset-btn"
-            onClick={() => handlePresetClick(preset.mg)}
-          >
-            {preset.label}
-          </button>
-        ))}
+        {presets.map(preset => {
+          const isTierSet = hasTierOverride(preset.mg);
+          return (
+            <button
+              key={preset.label}
+              className={`weight-preset-btn ${isTierSet ? 'has-tier-override' : ''}`}
+              onClick={() => handlePresetClick(preset.mg)}
+              style={{ position: 'relative' }}
+            >
+              {preset.label}
+              {isTierSet && (
+                <span
+                  className="tier-badge-dot"
+                  title="Fixed preset tier price active"
+                  style={{
+                    position: 'absolute',
+                    top: '3px',
+                    right: '3px',
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    backgroundColor: 'var(--market-primary, #3b82f6)'
+                  }}
+                />
+              )}
+            </button>
+          );
+        })}
         <button className="weight-preset-btn active" onClick={handleCustomClick}>
           Custom
         </button>
