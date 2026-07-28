@@ -73,6 +73,22 @@ graph TD
 
 ---
 
+## 💾 Data & Backup
+
+Micro Saler stores all data **locally on-device** — IndexedDB (`MicroSalerDB`, schema v4) for the Web PWA or SQLite (Room Database) for Android. There is no server and no cloud sync requirement.
+
+### 📥 Export & 📤 Import Ledger
+
+You can back up and restore your entire POS ledger at any time:
+
+- **Export Ledger Backup**: Generates a single timestamped JSON backup file (`micro-saler-backup-YYYY-MM-DD-HHmm.json`) packaging all 10 IndexedDB object stores (`pigments`, `stock_receipts`, `customers`, `sales`, `sale_payments`, `sale_items`, `returns`, `tab_payments`, `shrinkage_logs`, and `audit_log`).
+- **Restore Ledger Backup**: Accepts a backup JSON file, validates schema version compatibility ($\le \text{v4}$), requires explicit confirmation before applying, and repopulates stores preserving original primary key identifiers (`put`).
+- **Backup Access**: Click **`💾 Backup / Restore`** in the top navigation header or on the **Audit Log** screen.
+- **Startup Data Integrity Check**: Runs automatically on app launch to verify payment totals against line item prices for all completed transactions (tolerating $\pm 1\text{\cent}$ split-payment variance).
+
+---
+
+
 ## 🚀 Getting Started & Local Setup
 
 ### Running the React Web Application (`webapp-react/`)
