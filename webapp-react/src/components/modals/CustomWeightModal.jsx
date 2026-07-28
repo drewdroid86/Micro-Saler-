@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePos } from '../../context/PosContext';
 
 export const CustomWeightModal = () => {
@@ -6,7 +6,19 @@ export const CustomWeightModal = () => {
   const [weightGrams, setWeightGrams] = useState('');
   const [customPriceDollars, setCustomPriceDollars] = useState('');
 
+  // Reset local state whenever modal opens or selected pigment changes
+  useEffect(() => {
+    setWeightGrams('');
+    setCustomPriceDollars('');
+  }, [modal.name, selectedPigment?.pigment_id]);
+
   if (modal.name !== 'customWeight') return null;
+
+  const handleCancel = () => {
+    setWeightGrams('');
+    setCustomPriceDollars('');
+    closeModal();
+  };
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -26,17 +38,17 @@ export const CustomWeightModal = () => {
 
     const weightMg = Math.round(w * 1000);
     addToCart(selectedPigment, weightMg, customPriceCents);
-    closeModal();
     setWeightGrams('');
     setCustomPriceDollars('');
+    closeModal();
   };
 
   return (
     <div className="modal-overlay active">
-      <div className="modal">
+      <div className="modal" key={selectedPigment?.pigment_id || 'custom-weight'}>
         <div className="modal-header">
           <h2>Custom Weight Entry</h2>
-          <button className="modal-close" onClick={closeModal}>&times;</button>
+          <button className="modal-close" onClick={handleCancel}>&times;</button>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
@@ -71,7 +83,7 @@ export const CustomWeightModal = () => {
             </div>
           </div>
           <div className="modal-footer">
-            <button type="button" className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+            <button type="button" className="btn btn-secondary" onClick={handleCancel}>Cancel</button>
             <button type="submit" className="btn btn-primary">Add to Cart</button>
           </div>
         </form>

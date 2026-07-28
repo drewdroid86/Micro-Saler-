@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { usePos } from '../context/PosContext';
 import { formatCents, formatMgToGrams } from '../repository';
 import { CustomWeightModal } from './modals/CustomWeightModal';
@@ -58,8 +58,7 @@ export const ModalManager = () => {
   const [drawerTab, setDrawerTab] = useState('digital');
   const [digitalProvider, setDigitalProvider] = useState(null);
 
-  // Reset form states whenever modal opens or payload changes to fix state leaks
-  useEffect(() => {
+  const resetAllFormStates = useCallback(() => {
     setRestockWeight('');
     setRestockCost('');
     setRestockSupplier('');
@@ -75,41 +74,53 @@ export const ModalManager = () => {
     setPigmentRetail('');
     setPigmentWholesale('');
 
+    setEditRetail('');
+    setEditWholesale('');
+
     setCustName('');
     setCustPhone('');
     setCustLimit('');
     setCustStatus('GOOD_STANDING');
 
+    setSettleAmt('');
+    setSettleType('CASH');
+    setSettleProvider('Square');
+
     setVoidReason('');
+
+    setReturnWeight('');
     setReturnReason('');
     setReturnRestock(true);
 
     setDrawerTab('digital');
     setDigitalProvider(null);
+  }, []);
+
+  const handleClose = useCallback(() => {
+    resetAllFormStates();
+    closeModal();
+  }, [resetAllFormStates, closeModal]);
+
+  // Reset form states whenever modal opens or payload changes to fix state leaks
+  useEffect(() => {
+    resetAllFormStates();
 
     // Pre-populate payload-dependent fields
     if (modal.name === 'editPrice' && modal.payload) {
       setEditRetail(modal.payload.retail_price_per_gram_cents ? (modal.payload.retail_price_per_gram_cents / 100).toFixed(2) : '');
       setEditWholesale(modal.payload.wholesale_price_per_gram_cents ? (modal.payload.wholesale_price_per_gram_cents / 100).toFixed(2) : '');
-    } else {
-      setEditRetail('');
-      setEditWholesale('');
     }
 
     if (modal.name === 'settleTab' && modal.payload) {
       setSettleAmt(modal.payload.current_balance_cents ? (modal.payload.current_balance_cents / 100).toFixed(2) : '');
       setSettleType('CASH');
       setSettleProvider('Square');
-    } else {
-      setSettleAmt('');
     }
 
     if (modal.name === 'returnItem' && modal.payload?.saleItem) {
       setReturnWeight((modal.payload.saleItem.weight_mg / 1000).toFixed(1));
-    } else {
-      setReturnWeight('');
     }
-  }, [modal.name, modal.payload]);
+  }, [modal.name, modal.payload, resetAllFormStates]);
 
   if (!modal.name) return null;
 
@@ -130,7 +141,7 @@ export const ModalManager = () => {
     try {
       await repo.restockPigment(modal.payload.pigment_id, Math.round(weightG * 1000), Math.round(costD * 100), restockSupplier);
       await refreshAllData();
-      closeModal();
+      handleClose();
       showToast('Restock successful', 'success');
     } catch (e) {
       showToast(e.message, 'error');
@@ -146,7 +157,7 @@ export const ModalManager = () => {
     try {
       await repo.logShrinkage(modal.payload.pigment_id, Math.round(weightG * 1000), shrinkageReason);
       await refreshAllData();
-      closeModal();
+      handleClose();
       showToast('Shrinkage logged', 'success');
     } catch (e) {
       showToast(e.message, 'error');
@@ -176,7 +187,7 @@ export const ModalManager = () => {
         default_pkg_cents: 0
       });
       await refreshAllData();
-      closeModal();
+      handleClose();
       showToast('Pigment created', 'success');
     } catch (e) {
       showToast(e.message, 'error');
@@ -193,7 +204,7 @@ export const ModalManager = () => {
     try {
       await repo.updatePigmentPricing(modal.payload.pigment_id, Math.round(retailD * 100), Math.round(wholeD * 100));
       await refreshAllData();
-      closeModal();
+      handleClose();
       showToast('Prices updated', 'success');
     } catch (e) {
       showToast(e.message, 'error');
@@ -214,7 +225,7 @@ export const ModalManager = () => {
         trust_status: custStatus
       });
       await refreshAllData();
-      closeModal();
+      handleClose();
       showToast('Customer created', 'success');
     } catch (e) {
       showToast(e.message, 'error');
@@ -230,7 +241,7 @@ export const ModalManager = () => {
     try {
       await repo.settleTabPayment(modal.payload.customer_id, Math.round(amtD * 100), settleType, settleType === 'DIGITAL' ? settleProvider : null);
       await refreshAllData();
-      closeModal();
+      handleClose();
       showToast('Payment applied successfully', 'success');
     } catch (e) {
       showToast(e.message, 'error');
@@ -245,7 +256,7 @@ export const ModalManager = () => {
     try {
       await repo.voidSale(modal.payload.sale_id, voidReason);
       await refreshAllData();
-      closeModal();
+      handleClose();
       showToast('Sale voided', 'success');
     } catch (e) {
       showToast(e.message, 'error');
@@ -261,7 +272,7 @@ export const ModalManager = () => {
     try {
       await repo.processReturn(modal.payload.saleItem.sale_item_id, Math.round(w * 1000), returnReason, returnRestock);
       await refreshAllData();
-      closeModal();
+      handleClose();
       showToast('Return processed', 'success');
     } catch (e) {
       showToast(e.message, 'error');
@@ -280,7 +291,7 @@ export const ModalManager = () => {
       setSelectedCustomer(null);
       setSelectedPigment(null);
       await refreshAllData();
-      closeModal();
+      handleClose();
       showToast('Digital sale completed!', 'success');
     } catch (error) {
       showToast('Checkout failed: ' + error.message, 'error');
@@ -298,22 +309,24 @@ export const ModalManager = () => {
       setSelectedCustomer(null);
       setSelectedPigment(null);
       await refreshAllData();
-      closeModal();
+      handleClose();
       showToast('Charged to house tab!', 'success');
     } catch (error) {
       showToast('Tab charge failed: ' + error.message, 'error');
     }
   };
 
+  const modalKey = `${modal.name}_${modal.payload?.pigment_id || modal.payload?.customer_id || modal.payload?.sale_id || modal.payload?.saleItem?.sale_item_id || 'default'}`;
+
   // Payment Drawer Modal
   if (modal.name === 'paymentDrawer') {
     const feeCents = digitalProvider ? Math.round((totalAmountCents * 0.029) + 30) : 0;
     return (
-      <div className="modal-overlay active" onClick={closeModal}>
-        <div className="payment-drawer active" onClick={e => e.stopPropagation()}>
+      <div className="modal-overlay active" onClick={handleClose}>
+        <div className="payment-drawer active" key={modalKey} onClick={e => e.stopPropagation()}>
           <div className="flex-between mb-md">
             <h2>Payment: {formatCents(totalAmountCents)}</h2>
-            <button className="modal-close" onClick={closeModal}>&times;</button>
+            <button className="modal-close" onClick={handleClose}>&times;</button>
           </div>
 
           <div className="payment-mode-tabs mb-md">
@@ -400,7 +413,7 @@ export const ModalManager = () => {
           {drawerTab === 'split' && (
             <div className="text-center p-md">
               <p className="body-medium mb-md">Split payments feature is currently simplified for this demo.</p>
-              <button className="btn btn-secondary" onClick={() => { closeModal(); showToast('Split payment coming soon!', 'success'); }}>
+              <button className="btn btn-secondary" onClick={() => { handleClose(); showToast('Split payment coming soon!', 'success'); }}>
                 Acknowledge
               </button>
             </div>
@@ -411,20 +424,20 @@ export const ModalManager = () => {
   }
 
   return (
-    <div className="modal-overlay active">
-      <div className="modal">
+    <div className="modal-overlay active" onClick={handleClose}>
+      <div className="modal" key={modalKey} onClick={e => e.stopPropagation()}>
         
         {/* Customer Picker */}
         {modal.name === 'customerPicker' && (
           <div>
             <div className="modal-header">
               <h2>Select Customer</h2>
-              <button className="modal-close" onClick={closeModal}>&times;</button>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
             <div className="modal-body flex-col gap-sm" style={{ maxHeight: '400px' }}>
               <button
                 className="btn btn-ghost btn-block text-left"
-                onClick={() => { setSelectedCustomer(null); closeModal(); }}
+                onClick={() => { setSelectedCustomer(null); handleClose(); }}
                 style={{ justifyContent: 'flex-start' }}
               >
                 <strong>👤 Walk-in Customer</strong>
@@ -433,7 +446,7 @@ export const ModalManager = () => {
                 <button
                   key={c.customer_id}
                   className="btn btn-ghost btn-block flex-between"
-                  onClick={() => { setSelectedCustomer(c); closeModal(); }}
+                  onClick={() => { setSelectedCustomer(c); handleClose(); }}
                 >
                   <div className="text-left">
                     <strong>{c.name}</strong><br />
@@ -451,7 +464,7 @@ export const ModalManager = () => {
           <div>
             <div className="modal-header">
               <h2>Restock Pigment</h2>
-              <button className="modal-close" onClick={closeModal}>&times;</button>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
             <div className="modal-body">
               <p className="body-medium mb-md">Restocking: <strong>{modal.payload?.name}</strong></p>
@@ -469,7 +482,7 @@ export const ModalManager = () => {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-primary" onClick={handleRestock}>Confirm Restock</button>
             </div>
           </div>
@@ -480,7 +493,7 @@ export const ModalManager = () => {
           <div>
             <div className="modal-header">
               <h2>Log Shrinkage</h2>
-              <button className="modal-close" onClick={closeModal}>&times;</button>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
             <div className="modal-body">
               <p className="body-medium mb-md">Log Shrinkage for: <strong>{modal.payload?.name}</strong></p>
@@ -499,7 +512,7 @@ export const ModalManager = () => {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-warning" onClick={handleShrinkage}>Log Shrinkage</button>
             </div>
           </div>
@@ -510,7 +523,7 @@ export const ModalManager = () => {
           <div>
             <div className="modal-header">
               <h2>Add New Pigment</h2>
-              <button className="modal-close" onClick={closeModal}>&times;</button>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
             <div className="modal-body">
               <div className="form-group">
@@ -543,7 +556,7 @@ export const ModalManager = () => {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-primary" onClick={handleAddPigment}>Add Pigment</button>
             </div>
           </div>
@@ -554,7 +567,7 @@ export const ModalManager = () => {
           <div>
             <div className="modal-header">
               <h2>Edit Price</h2>
-              <button className="modal-close" onClick={closeModal}>&times;</button>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
             <div className="modal-body">
               <p className="body-medium mb-md">Edit Pricing: <strong>{modal.payload?.name}</strong></p>
@@ -568,7 +581,7 @@ export const ModalManager = () => {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-primary" onClick={handleEditPrice}>Save Prices</button>
             </div>
           </div>
@@ -579,7 +592,7 @@ export const ModalManager = () => {
           <div>
             <div className="modal-header">
               <h2>Add New Customer</h2>
-              <button className="modal-close" onClick={closeModal}>&times;</button>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
             <div className="modal-body">
               <div className="form-group">
@@ -600,7 +613,7 @@ export const ModalManager = () => {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-primary" onClick={handleAddCustomer}>Add Customer</button>
             </div>
           </div>
@@ -611,7 +624,7 @@ export const ModalManager = () => {
           <div>
             <div className="modal-header">
               <h2>Settle Tab</h2>
-              <button className="modal-close" onClick={closeModal}>&times;</button>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
             <div className="modal-body">
               <p className="body-medium mb-md">Settle balance for <strong>{modal.payload?.name}</strong> (Owes: {formatCents(modal.payload?.current_balance_cents || 0)})</p>
@@ -638,7 +651,7 @@ export const ModalManager = () => {
               )}
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-success" onClick={handleSettleTab}>Apply Payment</button>
             </div>
           </div>
@@ -649,7 +662,7 @@ export const ModalManager = () => {
           <div>
             <div className="modal-header">
               <h2>Void Sale</h2>
-              <button className="modal-close" onClick={closeModal}>&times;</button>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
             <div className="modal-body">
               <p className="body-medium mb-md">Are you sure you want to void sale <strong>{String(modal.payload?.sale_id).substring(0, 8)}</strong>?</p>
@@ -658,7 +671,7 @@ export const ModalManager = () => {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-danger" onClick={handleVoidSale}>Confirm Void</button>
             </div>
           </div>
@@ -669,7 +682,7 @@ export const ModalManager = () => {
           <div>
             <div className="modal-header">
               <h2>Return Item</h2>
-              <button className="modal-close" onClick={closeModal}>&times;</button>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
             <div className="modal-body">
               <p className="body-medium mb-sm">Returning: <strong>{modal.payload?.pigment?.name || 'Pigment Item'}</strong></p>
@@ -688,7 +701,7 @@ export const ModalManager = () => {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-warning" onClick={handleReturnItem}>Process Return</button>
             </div>
           </div>
