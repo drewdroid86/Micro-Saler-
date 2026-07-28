@@ -18,9 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed stale form-field state in `ModalManager.jsx` and `CustomWeightModal.jsx` — modals now reset all local input state on open (keyed to the record being edited) and close, so values from a previously edited pigment/customer no longer leak into the next modal.
 
 ### 📝 Notes
-This is the first version where the app is safe to trust with real transaction data — back up regularly using the new export feature until cloud sync lands in a future release.
+This is the first version where the app is safe to trust with real transaction data — back up regularly using the new export feature until automatic/cloud sync (if ever) is added.
 
 ---
+
 
 
 
