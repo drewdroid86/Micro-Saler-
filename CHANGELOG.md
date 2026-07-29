@@ -5,6 +5,27 @@ All notable changes to the **Micro Saler POS** project will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-29
+
+### 🚀 Added
+- **Accounts Payable & Supplier Ledger (`SuppliersTab`)**: Track vendor liabilities, restock on supplier tab (`UNPAID_TAB`), manage vendor contacts, and record supplier payments (`paySupplier`) via Cash, Bank Transfer, Digital, or Check.
+- **Financial Reports & P&L Dashboard (`ReportsTab`)**: Dedicated reports dashboard with time-range filtering (Today, 7 Days, 30 Days, YTD, All Time), Net Operating Profit KPI, Gross Revenue, Who Owes Me (AR), What I Owe (AP), Profit & Loss Statement breakdown, and Inventory Financial Asset Valuation (Cost Basis WAC vs Retail Potential Revenue).
+- **Global Error Boundary**: Implemented top-level `<ErrorBoundary>` to gracefully catch unhandled React render exceptions.
+
+### 🛡️ Security & Integrity (Deep-Dive Audit Remediations)
+- **Atomic Multi-Store Transactions**: Generic `runTransaction` helper in `db.js` ensuring atomic multi-store writes for `completeSale`, `voidSale`, `processReturn`, and `importAllStores`.
+- **Safe Non-Destructive Backup Import**: Refactored `importAllStores` to execute inside a single transaction, preventing total database loss on interrupted restores.
+- **Storage Persistence**: Automatic registration of `navigator.storage.persist()` on database initialization.
+- **Double-Submission Guards**: Added `isSubmitting` locks on checkout actions to prevent double-charging and double inventory deductions.
+- **Audit Log Index Alignment**: Harmonized `audit_log` store index fields (`created_at` and `timestamp`).
+
+### ⚡ Performance & Stability
+- **Context Memoization**: Wrapped `PosContext` value object in `useMemo` to eliminate unneeded application-wide component re-renders.
+- **Key Prop Optimization**: Replaced `Math.random()` key anti-pattern in `AuditScreen` with deterministic composite keys.
+- **Null & NaN Safe Formatting**: Added strict numerical guards to `formatCents` and `formatMgToGrams`.
+
+---
+
 ## [1.1.0] - 2026-07-27
 
 ### 🚀 Added

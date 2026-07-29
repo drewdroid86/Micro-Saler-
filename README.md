@@ -2,7 +2,7 @@
 
 [![Deploy Web App](https://github.com/drewdroid86/Micro-Saler-/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/drewdroid86/Micro-Saler-/actions/workflows/deploy-pages.yml)
 [![Live Web App](https://img.shields.io/badge/live--demo-GitHub%20Pages-brightgreen.svg)](https://drewdroid86.github.io/Micro-Saler-/)
-[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)](https://github.com/drewdroid86/Micro-Saler-)
+[![Version](https://img.shields.io/badge/version-1.2.0-brightgreen.svg)](https://github.com/drewdroid86/Micro-Saler-)
 [![Offline First](https://img.shields.io/badge/pwa-100%25--offline--local-blue.svg)](https://github.com/drewdroid86/Micro-Saler-)
 
 **Micro Saler** is a high-performance, offline-first Point-of-Sale (POS) and Inventory Management system engineered specifically for market-stall, street vendor, and small-batch mica pigment sales by weight.
@@ -15,9 +15,12 @@
 
 - ⚖️ **Precision Weight Accounting**: Tracks pigment inventory in **milligrams (mg)** to prevent fractional gram drift and inventory discrepancy.
 - 💵 **Exact Cents Financial Math**: All pricing, payments, and balances are stored as integer cents to eliminate floating-point rounding errors.
+- 📈 **Profit & Loss (P&L) Dashboard**: Real-time financial reports with time-range filtering (Today, 7 Days, 30 Days, YTD, All Time), Gross Sales, COGS, Merchant Fees, Shrinkage Loss, and Net Profit Margin %.
+- 📤 **Accounts Payable & Supplier Ledger**: Manage supplier contacts, restock on supplier tab (`UNPAID_TAB`), track vendor debt liabilities ("What I Owe"), and record supplier payments.
+- 📥 **Accounts Receivable & Customer Tabs**: Manage customer tab debt ("Who Owes Me"), credit limits, and trust status badges (`GOOD_STANDING`, `VIP`, `PAUSED`).
 - 📦 **Weighted Average Cost (WAC) Restocking**: Dynamically recalculates Cost of Goods Sold (COGS) on incoming supplier shipments.
-- 👥 **Customer House Tabs & Credit Limits**: Manage customer balances, credit limits, and trust status badges (`GOOD_STANDING`, `VIP`, `PAUSED`).
 - 🤝 **Handshake Credit Override**: Authorize tab sales exceeding credit limits with mandatory security audit logging.
+- 🛡️ **Atomic Transaction Protection**: Multi-store IndexedDB atomic transaction wrapper for sales, voids, returns, and backup restores.
 - ♻️ **Cumulative Partial Returns & Restocking**: Process returns per sale item with automatic inventory restocking.
 - 📉 **Spillage & Shrinkage Logging**: Log lost, sampled, or spilled inventory with automatic COGS adjustment.
 - 🔒 **Audit Trail**: Immutable audit log for security overrides, voided sales, and pricing updates.
