@@ -24,6 +24,7 @@ export const ModalManager = () => {
     modal,
     closeModal,
     customers,
+    suppliers,
     selectedCustomer,
     setSelectedCustomer,
     cart,
@@ -40,6 +41,16 @@ export const ModalManager = () => {
   const [restockWeight, setRestockWeight] = useState('');
   const [restockCost, setRestockCost] = useState('');
   const [restockSupplier, setRestockSupplier] = useState('');
+  const [restockPaymentStatus, setRestockPaymentStatus] = useState('PAID');
+  const [restockSupplierId, setRestockSupplierId] = useState('');
+
+  const [supplierNameInput, setSupplierNameInput] = useState('');
+  const [supplierPhoneInput, setSupplierPhoneInput] = useState('');
+  const [supplierNotesInput, setSupplierNotesInput] = useState('');
+
+  const [paySupplierAmt, setPaySupplierAmt] = useState('');
+  const [paySupplierType, setPaySupplierType] = useState('CASH');
+  const [paySupplierNotes, setPaySupplierNotes] = useState('');
 
   const [shrinkageWeight, setShrinkageWeight] = useState('');
   const [shrinkageReason, setShrinkageReason] = useState('Spillage');
@@ -181,6 +192,12 @@ export const ModalManager = () => {
     }
 
 
+    if (modal.name === 'paySupplier' && modal.payload) {
+      setPaySupplierAmt(modal.payload.current_balance_cents ? (modal.payload.current_balance_cents / 100).toFixed(2) : '');
+      setPaySupplierType('CASH');
+      setPaySupplierNotes('');
+    }
+
     if (modal.name === 'settleTab' && modal.payload) {
       setSettleAmt(modal.payload.current_balance_cents ? (modal.payload.current_balance_cents / 100).toFixed(2) : '');
       setSettleType('CASH');
@@ -202,21 +219,69 @@ export const ModalManager = () => {
     return <EditCartItemModal />;
   }
 
-  const totalAmountCents = cart.reduce((sum, item) => sum + item.price_charged_cents, 0);
+  const safeCart = cart || [];
+  const totalAmountCents = safeCart.reduce((sum, item) => sum + (item.price_charged_cents || 0), 0);
 
   // Handlers
   const handleRestock = async () => {
     const weightG = parseFloat(restockWeight);
     const costD = parseFloat(restockCost);
     if (!weightG || weightG <= 0 || isNaN(costD) || costD < 0) {
-      showToast('Invalid input', 'error');
+      showToast('Invalid weight or cost input', 'error');
       return;
     }
     try {
-      await repo.restockPigment(modal.payload.pigment_id, Math.round(weightG * 1000), Math.round(costD * 100), restockSupplier);
+      await repo.restockPigment(
+        modal.payload.pigment_id,
+        Math.round(weightG * 1000),
+        Math.round(costD * 100),
+        restockSupplier,
+        restockPaymentStatus,
+        restockSupplierId ? Number(restockSupplierId) : null
+      );
       await refreshAllData();
       handleClose();
       showToast('Restock successful', 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const handleAddSupplier = async () => {
+    if (!supplierNameInput || !supplierNameInput.trim()) {
+      showToast('Supplier name is required', 'error');
+      return;
+    }
+    try {
+      await repo.createSupplier({
+        name: supplierNameInput.trim(),
+        phone_number: supplierPhoneInput.trim(),
+        notes: supplierNotesInput.trim()
+      });
+      await refreshAllData();
+      handleClose();
+      showToast('Supplier added successfully', 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const handlePaySupplier = async () => {
+    const amtD = parseFloat(paySupplierAmt);
+    if (isNaN(amtD) || amtD <= 0) {
+      showToast('Please enter a valid payment amount', 'error');
+      return;
+    }
+    const sId = modal.payload?.supplier_id;
+    if (!sId) {
+      showToast('No supplier selected', 'error');
+      return;
+    }
+    try {
+      await repo.paySupplier(sId, Math.round(amtD * 100), paySupplierType, paySupplierNotes);
+      await refreshAllData();
+      handleClose();
+      showToast('Supplier payment logged successfully', 'success');
     } catch (e) {
       showToast(e.message, 'error');
     }
@@ -600,20 +665,155 @@ export const ModalManager = () => {
               <p className="body-medium mb-md">Restocking: <strong>{modal.payload?.name}</strong></p>
               <div className="form-group">
                 <label className="form-label">Weight Added (grams)</label>
-                <input type="number" className="form-input" value={restockWeight} onChange={e => setRestockWeight(e.target.value)} step="0.1" min="0.1" />
+                <input type="number" className="form-input" value={restockWeight} onChange={e => setRestockWeight(e.target.value)} step="0.1" min="0.1" placeholder="e.g. 50" />
               </div>
               <div className="form-group">
                 <label className="form-label">Total Cost ($)</label>
-                <input type="number" className="form-input" value={restockCost} onChange={e => setRestockCost(e.target.value)} step="0.01" min="0" />
+                <input type="number" className="form-input" value={restockCost} onChange={e => setRestockCost(e.target.value)} step="0.01" min="0" placeholder="e.g. 45.00" />
               </div>
               <div className="form-group">
-                <label className="form-label">Supplier Notes</label>
-                <input type="text" className="form-input" value={restockSupplier} onChange={e => setRestockSupplier(e.target.value)} />
+                <label className="form-label">Select Supplier</label>
+                <select
+                  className="form-select mb-xs"
+                  value={restockSupplierId}
+                  onChange={e => {
+                    const id = e.target.value;
+                    setRestockSupplierId(id);
+                    const selected = suppliers.find(s => String(s.supplier_id) === String(id));
+                    if (selected) setRestockSupplier(selected.name);
+                  }}
+                >
+                  <option value="">-- Choose Existing Supplier --</option>
+                  {suppliers.map(s => (
+                    <option key={s.supplier_id} value={s.supplier_id}>{s.name} (Bal: {formatCents(s.current_balance_cents)})</option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Or enter new supplier name..."
+                  value={restockSupplier}
+                  onChange={e => setRestockSupplier(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Payment Option</label>
+                <select
+                  className="form-select"
+                  value={restockPaymentStatus}
+                  onChange={e => setRestockPaymentStatus(e.target.value)}
+                >
+                  <option value="PAID">💵 Paid Immediately (Cash / Digital / Transfer)</option>
+                  <option value="UNPAID_TAB">📑 Add to Supplier Tab (Pay Later / Accounts Payable)</option>
+                </select>
               </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-primary" onClick={handleRestock}>Confirm Restock</button>
+            </div>
+          </div>
+        )}
+
+        {/* Add Supplier Modal */}
+        {modal.name === 'addSupplier' && (
+          <div>
+            <div className="modal-header">
+              <h2>+ Add New Supplier</h2>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">Supplier / Vendor Name *</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Apex Pigments LLC"
+                  value={supplierNameInput}
+                  onChange={e => setSupplierNameInput(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Phone Number (Optional)</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. (555) 019-2831"
+                  value={supplierPhoneInput}
+                  onChange={e => setSupplierPhoneInput(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Notes / Terms (Optional)</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Net 30, bulk mica pearl supplier"
+                  value={supplierNotesInput}
+                  onChange={e => setSupplierNotesInput(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleAddSupplier}>Create Supplier</button>
+            </div>
+          </div>
+        )}
+
+        {/* Pay Supplier Modal */}
+        {modal.name === 'paySupplier' && (
+          <div>
+            <div className="modal-header">
+              <h2>💵 Pay Supplier Balance</h2>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
+            </div>
+            <div className="modal-body">
+              <p className="body-medium mb-xs">Supplier: <strong>{modal.payload?.name}</strong></p>
+              <p className="body-medium text-error mb-md">
+                Current Debt Owed: <strong>{formatCents(modal.payload?.current_balance_cents || 0)}</strong>
+              </p>
+              <div className="form-group">
+                <label className="form-label">Payment Amount ($)</label>
+                <input
+                  type="number"
+                  className="form-input"
+                  step="0.01"
+                  min="0.01"
+                  placeholder="0.00"
+                  value={paySupplierAmt}
+                  onChange={e => setPaySupplierAmt(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Payment Method</label>
+                <select
+                  className="form-select"
+                  value={paySupplierType}
+                  onChange={e => setPaySupplierType(e.target.value)}
+                >
+                  <option value="CASH">💵 Cash</option>
+                  <option value="BANK_TRANSFER">🏛️ Bank Transfer / ACH</option>
+                  <option value="DIGITAL">💳 Digital / Card</option>
+                  <option value="CHECK">📜 Check</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Memo / Check # (Optional)</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Inv #8921"
+                  value={paySupplierNotes}
+                  onChange={e => setPaySupplierNotes(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+              <button className="btn btn-warning" onClick={handlePaySupplier}>Record Payment</button>
             </div>
           </div>
         )}

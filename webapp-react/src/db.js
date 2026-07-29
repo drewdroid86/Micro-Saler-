@@ -5,7 +5,7 @@
  */
 
 const DB_NAME = 'MicroSalerDB';
-export const DB_VERSION = 5;
+export const DB_VERSION = 6;
 
 export default class MicroSalerDB {
   constructor() {
@@ -25,10 +25,7 @@ export default class MicroSalerDB {
 
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
-        const oldVersion = event.oldVersion;
-        if (oldVersion < 5) {
-          this._createStores(db);
-        }
+        this._createStores(db);
       };
 
       request.onsuccess = async (event) => {
@@ -39,6 +36,13 @@ export default class MicroSalerDB {
             this.db = null;
           }
         };
+        if (navigator.storage && navigator.storage.persist) {
+          try {
+            await navigator.storage.persist();
+          } catch (e) {
+            console.warn('Storage persistence request failed:', e);
+          }
+        }
         await this.seedInitialData();
         resolve(this);
       };
@@ -113,6 +117,17 @@ export default class MicroSalerDB {
       const store = db.createObjectStore('audit_log', { keyPath: 'audit_id', autoIncrement: true });
       store.createIndex('entity_type', 'entity_type', { unique: false });
       store.createIndex('timestamp', 'timestamp', { unique: false });
+    }
+
+    if (!db.objectStoreNames.contains('suppliers')) {
+      const store = db.createObjectStore('suppliers', { keyPath: 'supplier_id', autoIncrement: true });
+      store.createIndex('name', 'name', { unique: false });
+    }
+
+    if (!db.objectStoreNames.contains('supplier_payments')) {
+      const store = db.createObjectStore('supplier_payments', { keyPath: 'payment_id', autoIncrement: true });
+      store.createIndex('supplier_id', 'supplier_id', { unique: false });
+      store.createIndex('created_at', 'created_at', { unique: false });
     }
   }
 
@@ -259,6 +274,18 @@ export default class MicroSalerDB {
     await this.put('customers', customer);
   }
 
+  async getAllSuppliers() {
+    const all = await this.getAll('suppliers');
+    return all.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async updateSupplierBalance(supplierId, amountDeltaCents) {
+    const supplier = await this.getById('suppliers', supplierId);
+    if (!supplier) throw new Error(`Supplier ${supplierId} not found`);
+    supplier.current_balance_cents = (supplier.current_balance_cents || 0) + amountDeltaCents;
+    await this.put('suppliers', supplier);
+  }
+
   async getAllSales() {
     const all = await this.getAll('sales');
     return all.sort((a, b) => b.created_at - a.created_at);
@@ -291,6 +318,8 @@ export default class MicroSalerDB {
       'pigments',
       'pigment_price_tiers',
       'stock_receipts',
+      'suppliers',
+      'supplier_payments',
       'customers',
       'sales',
       'sale_payments',
@@ -309,6 +338,32 @@ export default class MicroSalerDB {
       db_version: DB_VERSION,
       stores: storesData
     };
+  }
+
+  runTransaction(storeNames, mode, callback) {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return reject(new Error('Database not initialized'));
+      const tx = this.db.transaction(storeNames, mode);
+      tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
+      tx.onerror = () => reject(tx.error);
+
+      let callbackResult;
+      try {
+        callbackResult = callback(tx);
+      } catch (err) {
+        tx.abort();
+        return reject(err);
+      }
+
+      Promise.resolve(callbackResult)
+        .then(res => {
+          tx.oncomplete = () => resolve(res);
+        })
+        .catch(err => {
+          try { tx.abort(); } catch (e) {}
+          reject(err);
+        });
+    });
   }
 
   async importAllStores(backupData) {
@@ -334,16 +389,16 @@ export default class MicroSalerDB {
       'audit_log'
     ];
 
-    for (const name of storeNames) {
-      await this.clearStore(name);
-    }
-
-    for (const name of storeNames) {
-      const records = backupData.stores[name] || [];
-      for (const record of records) {
-        await this.put(name, record);
+    return this.runTransaction(storeNames, 'readwrite', (tx) => {
+      for (const name of storeNames) {
+        const store = tx.objectStore(name);
+        store.clear();
+        const records = backupData.stores[name] || [];
+        for (const record of records) {
+          store.put(record);
+        }
       }
-    }
+    });
   }
 
 

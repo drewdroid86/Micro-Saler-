@@ -3,15 +3,18 @@
  */
 
 export function formatCents(cents) {
-  return `$${(cents / 100).toFixed(2)}`;
+  const c = (cents === null || cents === undefined || isNaN(cents)) ? 0 : Number(cents);
+  return `$${(c / 100).toFixed(2)}`;
 }
 
 export function formatMgToGrams(mg) {
-  return `${(mg / 1000).toFixed(1)}g`;
+  const m = (mg === null || mg === undefined || isNaN(mg)) ? 0 : Number(mg);
+  return `${(m / 1000).toFixed(1)}g`;
 }
 
 export function formatMgToOz(mg) {
-  return `${(mg / 28349.5).toFixed(2)} oz`;
+  const m = (mg === null || mg === undefined || isNaN(mg)) ? 0 : Number(mg);
+  return `${(m / 28349.5).toFixed(2)} oz`;
 }
 
 export function getEffectivePricePerGramCents(pigment, weightMg, pricingMode = 'RETAIL') {
@@ -59,7 +62,7 @@ export class PosRepository {
     this.db = db;
   }
 
-  async restockPigment(pigmentId, receivedMg, totalCostCents, supplierName) {
+  async restockPigment(pigmentId, receivedMg, totalCostCents, supplierName, paymentStatus = 'PAID', supplierId = null) {
     const pigment = await this.db.getById('pigments', Number(pigmentId));
     if (!pigment) throw new Error(`Pigment ${pigmentId} not found`);
 
@@ -68,13 +71,30 @@ export class PosRepository {
 
     await this.db.updateStockAndCost(Number(pigmentId), newStockMg, newTotalCostCents);
 
-    return await this.db.add('stock_receipts', {
+    let sId = supplierId ? Number(supplierId) : null;
+    if (!sId && supplierName && supplierName.trim()) {
+      const allSuppliers = await this.db.getAllSuppliers();
+      const existing = allSuppliers.find(s => s.name.toLowerCase() === supplierName.trim().toLowerCase());
+      if (existing) {
+        sId = existing.supplier_id;
+      }
+    }
+
+    if (paymentStatus === 'UNPAID_TAB' && sId) {
+      await this.db.updateSupplierBalance(sId, totalCostCents);
+    }
+
+    const receiptId = await this.db.add('stock_receipts', {
       pigment_id: Number(pigmentId),
       received_mg: receivedMg,
       total_cost_cents: totalCostCents,
-      supplier_name: supplierName,
+      supplier_name: supplierName || '',
+      supplier_id: sId,
+      payment_status: paymentStatus,
       received_at: Date.now(),
     });
+
+    return receiptId;
   }
 
   async logShrinkage(pigmentId, mgLost, reason) {
@@ -170,12 +190,14 @@ export class PosRepository {
     }
 
     if (isCreditOverride) {
+      const now = Date.now();
       await this.db.add('audit_log', {
         entity_type: 'Sale',
         entity_id: saleId,
         action: 'HANDSHAKE_CREDIT_OVERRIDE',
         details_json: JSON.stringify({ sale_id: saleId, customer_id: customerId }),
-        created_at: Date.now(),
+        created_at: now,
+        timestamp: now,
       });
     }
 
@@ -183,6 +205,9 @@ export class PosRepository {
   }
 
   async processReturn(saleItemId, mgReturned, reason, restockToInventory) {
+    if (!mgReturned || isNaN(mgReturned) || mgReturned <= 0) {
+      throw new Error('Return weight must be greater than zero');
+    }
     const saleItem = await this.db.getById('sale_items', Number(saleItemId));
     if (!saleItem) throw new Error(`SaleItem ${saleItemId} not found`);
 
@@ -363,6 +388,58 @@ export class PosRepository {
 
   async updateCustomer(data) {
     await this.db.put('customers', data);
+  }
+
+  async createSupplier(data) {
+    if (!data.name || !data.name.trim()) throw new Error('Supplier name is required');
+    return await this.db.add('suppliers', {
+      name: data.name.trim(),
+      phone_number: data.phone_number || data.phone || '',
+      current_balance_cents: 0,
+      notes: data.notes || '',
+      created_at: Date.now(),
+    });
+  }
+
+  async updateSupplier(data) {
+    await this.db.put('suppliers', data);
+  }
+
+  async paySupplier(supplierId, amountPaidCents, paymentType, notes = '') {
+    const sId = Number(supplierId);
+    if (isNaN(amountPaidCents) || amountPaidCents <= 0) {
+      throw new Error('Payment amount must be greater than zero');
+    }
+    const supplier = await this.db.getById('suppliers', sId);
+    if (!supplier) throw new Error(`Supplier ${supplierId} not found`);
+
+    const now = Date.now();
+    const paymentId = await this.db.add('supplier_payments', {
+      supplier_id: sId,
+      amount_paid_cents: amountPaidCents,
+      payment_type: paymentType,
+      notes,
+      created_at: now,
+    });
+
+    await this.db.updateSupplierBalance(sId, -amountPaidCents);
+
+    await this.db.add('audit_log', {
+      entity_type: 'Supplier',
+      entity_id: sId,
+      action: 'SUPPLIER_PAYMENT',
+      details_json: JSON.stringify({
+        supplier_id: sId,
+        supplier_name: supplier.name,
+        amount_paid_cents: amountPaidCents,
+        payment_type: paymentType,
+        notes
+      }),
+      created_at: now,
+      timestamp: now,
+    });
+
+    return paymentId;
   }
 
   async exportData() {

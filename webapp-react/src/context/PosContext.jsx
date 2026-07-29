@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import MicroSalerDB from '../db.js';
 import { PosRepository, getEffectivePricePerGramCents } from '../repository.js';
 
@@ -17,6 +17,9 @@ export const PosProvider = ({ children }) => {
   const [saleItems, setSaleItems] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [shrinkageLogs, setShrinkageLogs] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [supplierPayments, setSupplierPayments] = useState([]);
+  const [stockReceipts, setStockReceipts] = useState([]);
 
   // Checkout state
   const [cart, setCart] = useState([]);
@@ -56,6 +59,9 @@ export const PosProvider = ({ children }) => {
       const activeP = await activeDb.getActivePigments();
       const allTiers = await activeDb.getAll('pigment_price_tiers');
       const allC = await activeDb.getAllCustomers();
+      const allSup = await activeDb.getAllSuppliers();
+      const allSupPay = await activeDb.getAll('supplier_payments');
+      const allReceipts = await activeDb.getAll('stock_receipts');
       const allS = await activeDb.getAllSales();
       const allSI = await activeDb.getAll('sale_items');
       const allAudit = await activeDb.getAll('audit_log');
@@ -64,6 +70,9 @@ export const PosProvider = ({ children }) => {
       setPigments(activeP);
       setPriceTiers(allTiers || []);
       setCustomers(allC);
+      setSuppliers(allSup);
+      setSupplierPayments(allSupPay || []);
+      setStockReceipts(allReceipts || []);
       setSales(allS);
       setSaleItems(allSI);
       setAuditLogs(allAudit.sort((a, b) => (b.created_at || b.timestamp || 0) - (a.created_at || a.timestamp || 0)));
@@ -280,7 +289,10 @@ export const PosProvider = ({ children }) => {
     setCart([]);
   };
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const quickCollectCash = async () => {
+    if (isSubmitting) return;
     if (cart.length === 0) {
       showToast('Cart is empty', 'error');
       return;
@@ -289,6 +301,7 @@ export const PosProvider = ({ children }) => {
     const customerId = selectedCustomer?.customer_id || null;
     const payments = [{ payment_type: 'CASH', digital_provider: null, amount_cents: totalAmountCents, merchant_fee_cents: 0 }];
 
+    setIsSubmitting(true);
     try {
       await repo.completeSale(customerId, cart, payments, false);
       setCart([]);
@@ -298,6 +311,8 @@ export const PosProvider = ({ children }) => {
       showToast('Sale completed successfully!', 'success');
     } catch (error) {
       showToast('Checkout failed: ' + error.message, 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -342,47 +357,58 @@ export const PosProvider = ({ children }) => {
   };
 
 
+  const contextValue = useMemo(() => ({
+    db,
+    repo,
+    loading,
+    loadingError,
+    isDbBlocked,
+    currentTab,
+    setCurrentTab,
+    pigments,
+    priceTiers,
+    customers,
+    suppliers,
+    supplierPayments,
+    stockReceipts,
+    sales,
+    saleItems,
+    auditLogs,
+    shrinkageLogs,
+    cart,
+    setCart,
+    selectedCustomer,
+    setSelectedCustomer,
+    selectedPigment,
+    setSelectedPigment,
+    pricingMode,
+    setPricingMode,
+    isHandshakeOverride,
+    setIsHandshakeOverride,
+    isSubmitting,
+    toasts,
+    showToast,
+    modal,
+    openModal,
+    closeModal,
+    addToCart,
+    removeFromCart,
+    updateCartItem,
+    editCartItem,
+    clearCart,
+    quickCollectCash,
+    exportBackup,
+    importBackup,
+    refreshAllData
+  }), [
+    db, repo, loading, loadingError, isDbBlocked, currentTab, pigments, priceTiers,
+    customers, suppliers, supplierPayments, stockReceipts, sales, saleItems, auditLogs,
+    shrinkageLogs, cart, selectedCustomer, selectedPigment, pricingMode, isHandshakeOverride,
+    isSubmitting, toasts, modal
+  ]);
+
   return (
-    <PosContext.Provider value={{
-      db,
-      repo,
-      loading,
-      loadingError,
-      isDbBlocked,
-      currentTab,
-      setCurrentTab,
-      pigments,
-      priceTiers,
-      customers,
-      sales,
-      saleItems,
-      auditLogs,
-      shrinkageLogs,
-      cart,
-      setCart,
-      selectedCustomer,
-      setSelectedCustomer,
-      selectedPigment,
-      setSelectedPigment,
-      pricingMode,
-      setPricingMode,
-      isHandshakeOverride,
-      setIsHandshakeOverride,
-      toasts,
-      showToast,
-      modal,
-      openModal,
-      closeModal,
-      addToCart,
-      removeFromCart,
-      updateCartItem,
-      editCartItem,
-      clearCart,
-      quickCollectCash,
-      exportBackup,
-      importBackup,
-      refreshAllData
-    }}>
+    <PosContext.Provider value={contextValue}>
       {children}
     </PosContext.Provider>
   );

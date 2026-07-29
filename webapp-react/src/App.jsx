@@ -5,6 +5,8 @@ import { NavTabs } from './components/NavTabs';
 import { CheckoutScreen } from './components/CheckoutScreen';
 import { InventoryScreen } from './components/InventoryScreen';
 import { CustomerScreen } from './components/CustomerScreen';
+import { SupplierScreen } from './components/SupplierScreen';
+import { ReportsScreen } from './components/ReportsScreen';
 import { HistoryScreen } from './components/HistoryScreen';
 import { AuditScreen } from './components/AuditScreen';
 import { ModalManager } from './components/ModalManager';
@@ -58,6 +60,8 @@ export function App() {
         {currentTab === 'checkout' && <CheckoutScreen />}
         {currentTab === 'inventory' && <InventoryScreen />}
         {currentTab === 'customers' && <CustomerScreen />}
+        {currentTab === 'suppliers' && <SupplierScreen />}
+        {currentTab === 'reports' && <ReportsScreen />}
         {currentTab === 'history' && <HistoryScreen />}
         {currentTab === 'audit' && <AuditScreen />}
       </main>

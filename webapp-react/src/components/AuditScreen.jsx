@@ -30,10 +30,10 @@ export const AuditScreen = () => {
 
 
       <div>
-        {auditLogs.map(log => {
+        {auditLogs.map((log, idx) => {
           const isSecurity = log.action === 'HANDSHAKE_CREDIT_OVERRIDE';
           return (
-            <div key={log.audit_id || Math.random()} className={`audit-card ${isSecurity ? 'security-override' : ''}`}>
+            <div key={log.audit_id || `${log.created_at || log.timestamp || 0}_${idx}`} className={`audit-card ${isSecurity ? 'security-override' : ''}`}>
               <div className="audit-header">
                 <span className={`title-medium ${isSecurity ? 'text-error' : ''}`}>{log.action}</span>
                 <span className="audit-time">{formatDate(log.created_at || log.timestamp)}</span>

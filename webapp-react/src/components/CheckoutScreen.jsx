@@ -87,8 +87,10 @@ export const CheckoutScreen = () => {
     openModal('customWeight');
   };
 
-  const totalCharged = cart.reduce((sum, item) => sum + item.price_charged_cents, 0);
-  const totalCogs = cart.reduce((sum, item) => sum + item.unit_cogs_cents, 0);
+  const safeCart = cart || [];
+  const safePigments = pigments || [];
+  const totalCharged = safeCart.reduce((sum, item) => sum + (item.price_charged_cents || 0), 0);
+  const totalCogs = safeCart.reduce((sum, item) => sum + (item.unit_cogs_cents || 0), 0);
   const margin = totalCharged > 0 ? Math.round(((totalCharged - totalCogs) / totalCharged) * 100) : 0;
 
   return (
@@ -183,12 +185,12 @@ export const CheckoutScreen = () => {
           )}
         </div>
         <div className="card-body">
-          {cart.length === 0 ? (
+          {safeCart.length === 0 ? (
             <div className="cart-empty">Cart is empty</div>
           ) : (
-            cart.map((item, index) => (
+            safeCart.map((item, index) => (
               <CartItem
-                key={index}
+                key={item.cartItemId || index}
                 item={item}
                 index={index}
                 onRemove={() => removeFromCart(index)}
