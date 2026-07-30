@@ -5,7 +5,7 @@
  */
 
 const DB_NAME = 'MicroSalerDB';
-export const DB_VERSION = 7;
+export const DB_VERSION = 8;
 
 export default class MicroSalerDB {
   constructor() {
@@ -466,6 +466,8 @@ export default class MicroSalerDB {
       'pigments',
       'pigment_price_tiers',
       'stock_receipts',
+      'suppliers',
+      'supplier_payments',
       'customers',
       'customer_prepayments',
       'sales',
