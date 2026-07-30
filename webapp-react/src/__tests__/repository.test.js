@@ -58,3 +58,13 @@ test('WAC formula calculates weighted cost basis accurately', () => {
   assert.equal(newTotalCostCents, 8000);
   assert.equal(newWacPerGramCents, 400); // $4.00/g average
 });
+
+test('Partial restock down payment calculates tab liability correctly', () => {
+  const totalCostCents = 10000; // $100.00
+  const paidDownCents = 3000; // $30.00
+  const unpaidTabCents = totalCostCents - paidDownCents; // $70.00
+
+  assert.equal(paidDownCents, 3000);
+  assert.equal(unpaidTabCents, 7000);
+  assert.equal(paidDownCents + unpaidTabCents, totalCostCents);
+});

@@ -43,6 +43,7 @@ export const ModalManager = () => {
   const [restockSupplier, setRestockSupplier] = useState('');
   const [restockPaymentStatus, setRestockPaymentStatus] = useState('PAID');
   const [restockSupplierId, setRestockSupplierId] = useState('');
+  const [restockPaidDown, setRestockPaidDown] = useState('');
 
   const [supplierNameInput, setSupplierNameInput] = useState('');
   const [supplierPhoneInput, setSupplierPhoneInput] = useState('');
@@ -240,18 +241,28 @@ export const ModalManager = () => {
       showToast('Invalid weight or cost input', 'error');
       return;
     }
+    const paidDownD = parseFloat(restockPaidDown) || 0;
+    const totalCostCents = Math.round(costD * 100);
+    const paidDownCents = Math.round(paidDownD * 100);
+
+    if (restockPaymentStatus === 'PARTIAL' && (paidDownCents <= 0 || paidDownCents >= totalCostCents)) {
+      showToast('Partial down payment must be greater than $0 and less than total cost', 'error');
+      return;
+    }
+
     try {
       await repo.restockPigment(
         modal.payload.pigment_id,
         Math.round(weightG * 1000),
-        Math.round(costD * 100),
+        totalCostCents,
         restockSupplier,
         restockPaymentStatus,
-        restockSupplierId ? Number(restockSupplierId) : null
+        restockSupplierId ? Number(restockSupplierId) : null,
+        paidDownCents
       );
       await refreshAllData();
       handleClose();
-      showToast('Restock successful', 'success');
+      showToast('Restock recorded successfully!', 'success');
     } catch (e) {
       showToast(e.message, 'error');
     }
@@ -832,7 +843,7 @@ export const ModalManager = () => {
                   onChange={e => setRestockSupplier(e.target.value)}
                 />
               </div>
-              <div className="form-group">
+              <div className="form-group mb-sm">
                 <label className="form-label">Payment Option</label>
                 <select
                   className="form-select"
@@ -840,9 +851,37 @@ export const ModalManager = () => {
                   onChange={e => setRestockPaymentStatus(e.target.value)}
                 >
                   <option value="PAID">💵 Paid Immediately (Cash / Digital / Transfer)</option>
-                  <option value="UNPAID_TAB">📑 Add to Supplier Tab (Pay Later / Accounts Payable)</option>
+                  <option value="PARTIAL">💵 Partial Down Payment (Pay Down Now + Put Rest on Supplier Tab)</option>
+                  <option value="UNPAID_TAB">📑 Add Entire Amount to Supplier Tab (Pay Later)</option>
                 </select>
               </div>
+
+              {restockPaymentStatus === 'PARTIAL' && (
+                <div className="form-group mb-md">
+                  <label className="form-label">Amount Paid Down Now ($)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={restockPaidDown}
+                    onChange={e => setRestockPaidDown(e.target.value)}
+                    step="0.01"
+                    min="0.01"
+                    placeholder="e.g. 30.00"
+                  />
+                  <div className="card card-static p-sm mt-xs" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px' }}>
+                    <div className="flex-between body-small mb-xs">
+                      <span>Paid Down Now:</span>
+                      <strong className="text-success">${(parseFloat(restockPaidDown) || 0).toFixed(2)}</strong>
+                    </div>
+                    <div className="flex-between body-small font-weight-bold">
+                      <span>Added to Supplier Tab (Owed):</span>
+                      <strong className="text-error">
+                        ${Math.max(0, (parseFloat(restockCost) || 0) - (parseFloat(restockPaidDown) || 0)).toFixed(2)}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>

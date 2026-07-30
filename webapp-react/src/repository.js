@@ -62,7 +62,7 @@ export class PosRepository {
     this.db = db;
   }
 
-  async restockPigment(pigmentId, receivedMg, totalCostCents, supplierName, paymentStatus = 'PAID', supplierId = null) {
+  async restockPigment(pigmentId, receivedMg, totalCostCents, supplierName, paymentStatus = 'PAID', supplierId = null, paidDownCents = 0) {
     const pigment = await this.db.getById('pigments', Number(pigmentId));
     if (!pigment) throw new Error(`Pigment ${pigmentId} not found`);
 
@@ -80,19 +80,43 @@ export class PosRepository {
       }
     }
 
-    if (paymentStatus === 'UNPAID_TAB' && sId) {
-      await this.db.updateSupplierBalance(sId, totalCostCents);
+    const safePaidDown = paymentStatus === 'PAID'
+      ? totalCostCents
+      : Math.min(totalCostCents, Math.max(0, paidDownCents || 0));
+
+    const unpaidTabCents = paymentStatus === 'PAID' ? 0 : Math.max(0, totalCostCents - safePaidDown);
+
+    if (unpaidTabCents > 0 && sId) {
+      await this.db.updateSupplierBalance(sId, unpaidTabCents);
     }
+
+    const statusLabel = paymentStatus === 'PAID'
+      ? 'PAID'
+      : safePaidDown > 0
+        ? `PARTIAL ($${(safePaidDown / 100).toFixed(2)} Paid / $${(unpaidTabCents / 100).toFixed(2)} Owed)`
+        : 'UNPAID_TAB';
 
     const receiptId = await this.db.add('stock_receipts', {
       pigment_id: Number(pigmentId),
       received_mg: receivedMg,
       total_cost_cents: totalCostCents,
+      paid_down_cents: safePaidDown,
+      unpaid_tab_cents: unpaidTabCents,
       supplier_name: supplierName || '',
       supplier_id: sId,
-      payment_status: paymentStatus,
+      payment_status: statusLabel,
       received_at: Date.now(),
     });
+
+    if (safePaidDown > 0 && sId && paymentStatus !== 'PAID') {
+      await this.db.add('supplier_payments', {
+        supplier_id: sId,
+        amount_cents: safePaidDown,
+        payment_type: 'DOWN_PAYMENT',
+        notes: `Restock down payment for receipt #${receiptId}`,
+        created_at: Date.now(),
+      });
+    }
 
     return receiptId;
   }
