@@ -31,9 +31,13 @@ export default class MicroSalerDB {
       request.onsuccess = async (event) => {
         this.db = event.target.result;
         this.db.onversionchange = () => {
+          console.warn('Database version upgrade detected from another tab. Closing connection and reloading...');
           if (this.db) {
             this.db.close();
             this.db = null;
+          }
+          if (typeof window !== 'undefined' && window.location) {
+            window.location.reload();
           }
         };
         if (navigator.storage && navigator.storage.persist) {
