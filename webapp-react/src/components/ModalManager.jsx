@@ -78,6 +78,13 @@ export const ModalManager = () => {
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
   const [custLimit, setCustLimit] = useState('');
+
+  const [prepaymentCustomerId, setPrepaymentCustomerId] = useState('');
+  const [prepaymentPigmentId, setPrepaymentPigmentId] = useState('');
+  const [prepaymentWeightG, setPrepaymentWeightG] = useState('');
+  const [prepaymentAmountD, setPrepaymentAmountD] = useState('');
+  const [prepaymentStatus, setPrepaymentStatus] = useState('PENDING_DELIVERY');
+  const [prepaymentNotes, setPrepaymentNotes] = useState('');
   const [custStatus, setCustStatus] = useState('GOOD_STANDING');
 
   const [settleAmt, setSettleAmt] = useState('');
@@ -543,6 +550,39 @@ export const ModalManager = () => {
       }
       await refreshAllData();
       handleClose();
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const handleCreateCustomerPrepayment = async () => {
+    const wG = parseFloat(prepaymentWeightG || 0);
+    const amtD = parseFloat(prepaymentAmountD || 0);
+
+    if (!prepaymentCustomerId) {
+      showToast('Please select a customer', 'error');
+      return;
+    }
+    if (wG <= 0 && amtD <= 0) {
+      showToast('Please enter weight owed or dollar credit amount', 'error');
+      return;
+    }
+
+    const selPigment = pigments.find(p => String(p.pigment_id) === String(prepaymentPigmentId));
+
+    try {
+      await repo.createCustomerPrepayment({
+        customer_id: Number(prepaymentCustomerId),
+        pigment_id: prepaymentPigmentId ? Number(prepaymentPigmentId) : null,
+        pigment_name: selPigment ? selPigment.name : '',
+        weight_mg: Math.round(wG * 1000),
+        amount_cents: Math.round(amtD * 100),
+        status: prepaymentStatus,
+        notes: prepaymentNotes
+      });
+      await refreshAllData();
+      handleClose();
+      showToast('Customer prepayment / backorder recorded successfully!', 'success');
     } catch (e) {
       showToast(e.message, 'error');
     }
@@ -1585,6 +1625,100 @@ export const ModalManager = () => {
               <button className={`btn ${clearInventoryMode === 'WIPE_ALL' ? 'btn-danger' : 'btn-warning'}`} onClick={handleClearInventory}>
                 Confirm Clear Inventory
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Record Customer Prepayment / Backorder Modal */}
+        {modal.name === 'addCustomerPrepayment' && (
+          <div>
+            <div className="modal-header">
+              <h2>📦 Record Customer Prepayment / Backorder</h2>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group mb-sm">
+                <label className="form-label">Customer *</label>
+                <select
+                  className="form-select"
+                  value={prepaymentCustomerId}
+                  onChange={e => setPrepaymentCustomerId(e.target.value)}
+                >
+                  <option value="">-- Select Customer --</option>
+                  {customers.map(c => (
+                    <option key={c.customer_id} value={c.customer_id}>{c.name} ({c.phone_number || 'No phone'})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group mb-sm">
+                <label className="form-label">Pigment Owed / Backordered (Optional)</label>
+                <select
+                  className="form-select"
+                  value={prepaymentPigmentId}
+                  onChange={e => setPrepaymentPigmentId(e.target.value)}
+                >
+                  <option value="">-- Store Credit / General Delivery --</option>
+                  {pigments.map(p => (
+                    <option key={p.pigment_id} value={p.pigment_id}>{p.name} ({p.finish_type})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid-2col mb-sm">
+                <div className="form-group">
+                  <label className="form-label">Weight Owed to Customer (g)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    placeholder="e.g. 25.0"
+                    value={prepaymentWeightG}
+                    onChange={e => setPrepaymentWeightG(e.target.value)}
+                    step="0.1"
+                    min="0"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Dollar Credit / Paid ($)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    placeholder="e.g. 100.00"
+                    value={prepaymentAmountD}
+                    onChange={e => setPrepaymentAmountD(e.target.value)}
+                    step="0.01"
+                    min="0"
+                  />
+                </div>
+              </div>
+
+              <div className="form-group mb-sm">
+                <label className="form-label">Fulfillment Status</label>
+                <select
+                  className="form-select"
+                  value={prepaymentStatus}
+                  onChange={e => setPrepaymentStatus(e.target.value)}
+                >
+                  <option value="PENDING_DELIVERY">🚚 Pending Delivery / Prepaid</option>
+                  <option value="AWAITING_STOCK">⏳ Awaiting Backordered Stock</option>
+                  <option value="STORE_CREDIT">💵 Customer Store Credit</option>
+                </select>
+              </div>
+
+              <div className="form-group mb-sm">
+                <label className="form-label">Notes / Instructions (Optional)</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Prepaid $100 cash, awaiting 25g Gold Pearl shipment"
+                  value={prepaymentNotes}
+                  onChange={e => setPrepaymentNotes(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleCreateCustomerPrepayment}>Record Prepayment</button>
             </div>
           </div>
         )}

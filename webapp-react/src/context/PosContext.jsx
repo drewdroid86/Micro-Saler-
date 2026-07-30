@@ -20,6 +20,7 @@ export const PosProvider = ({ children }) => {
   const [suppliers, setSuppliers] = useState([]);
   const [supplierPayments, setSupplierPayments] = useState([]);
   const [stockReceipts, setStockReceipts] = useState([]);
+  const [customerPrepayments, setCustomerPrepayments] = useState([]);
 
   // Checkout state
   const [cart, setCart] = useState([]);
@@ -62,6 +63,7 @@ export const PosProvider = ({ children }) => {
       const allSup = await activeDb.getAllSuppliers();
       const allSupPay = await activeDb.getAll('supplier_payments');
       const allReceipts = await activeDb.getAll('stock_receipts');
+      const allPrep = await activeDb.getAll('customer_prepayments');
       const allS = await activeDb.getAllSales();
       const allSI = await activeDb.getAll('sale_items');
       const allAudit = await activeDb.getAll('audit_log');
@@ -73,6 +75,7 @@ export const PosProvider = ({ children }) => {
       setSuppliers(allSup);
       setSupplierPayments(allSupPay || []);
       setStockReceipts(allReceipts || []);
+      setCustomerPrepayments(allPrep || []);
       setSales(allS);
       setSaleItems(allSI);
       setAuditLogs(allAudit.sort((a, b) => (b.created_at || b.timestamp || 0) - (a.created_at || a.timestamp || 0)));
@@ -371,6 +374,7 @@ export const PosProvider = ({ children }) => {
     suppliers,
     supplierPayments,
     stockReceipts,
+    customerPrepayments,
     sales,
     saleItems,
     auditLogs,
@@ -402,7 +406,7 @@ export const PosProvider = ({ children }) => {
     refreshAllData
   }), [
     db, repo, loading, loadingError, isDbBlocked, currentTab, pigments, priceTiers,
-    customers, suppliers, supplierPayments, stockReceipts, sales, saleItems, auditLogs,
+    customers, suppliers, supplierPayments, stockReceipts, customerPrepayments, sales, saleItems, auditLogs,
     shrinkageLogs, cart, selectedCustomer, selectedPigment, pricingMode, isHandshakeOverride,
     isSubmitting, toasts, modal
   ]);

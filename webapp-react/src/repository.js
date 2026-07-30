@@ -596,6 +596,59 @@ export class PosRepository {
     await this.db.put('customers', data);
   }
 
+  async createCustomerPrepayment(data) {
+    if (!data.customer_id) throw new Error('Customer is required');
+    const now = Date.now();
+    const record = {
+      customer_id: Number(data.customer_id),
+      pigment_id: data.pigment_id ? Number(data.pigment_id) : null,
+      pigment_name: data.pigment_name || '',
+      weight_mg: data.weight_mg || 0,
+      amount_cents: data.amount_cents || 0,
+      status: data.status || 'PENDING_DELIVERY',
+      notes: data.notes || '',
+      created_at: now,
+    };
+    const prepaymentId = await this.db.add('customer_prepayments', record);
+
+    await this.db.add('audit_log', {
+      entity_type: 'CustomerPrepayment',
+      entity_id: Number(prepaymentId),
+      action: 'CREATE_PREPAYMENT',
+      details_json: JSON.stringify({ customer_id: data.customer_id, weight_mg: data.weight_mg, amount_cents: data.amount_cents }),
+      created_at: now,
+      timestamp: now,
+    });
+
+    return prepaymentId;
+  }
+
+  async fulfillCustomerPrepayment(prepaymentId, notes = '') {
+    const item = await this.db.getById('customer_prepayments', Number(prepaymentId));
+    if (!item) throw new Error(`Prepayment #${prepaymentId} not found`);
+    item.status = 'FULFILLED';
+    item.fulfilled_at = Date.now();
+    if (notes) item.fulfillment_notes = notes;
+    await this.db.put('customer_prepayments', item);
+
+    const now = Date.now();
+    await this.db.add('audit_log', {
+      entity_type: 'CustomerPrepayment',
+      entity_id: Number(prepaymentId),
+      action: 'FULFILL_PREPAYMENT',
+      details_json: JSON.stringify({ prepayment_id: Number(prepaymentId) }),
+      created_at: now,
+      timestamp: now,
+    });
+
+    return item;
+  }
+
+  async getAllCustomerPrepayments() {
+    const all = await this.db.getAll('customer_prepayments');
+    return all.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  }
+
   async createSupplier(data) {
     if (!data.name || !data.name.trim()) throw new Error('Supplier name is required');
     return await this.db.add('suppliers', {

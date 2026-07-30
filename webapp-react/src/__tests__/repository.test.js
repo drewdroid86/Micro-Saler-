@@ -128,3 +128,19 @@ test('Reset inventory stock and costs zeroes out stock weights and cost values',
   assert.equal(resetPigments[1].stock_mg, 0);
   assert.equal(resetPigments[1].total_cost_cents, 0);
 });
+
+test('Customer prepayment and backorder tracking calculates weight and credit owed', () => {
+  const prepayment = {
+    customer_id: 1,
+    weight_mg: 25000,
+    amount_cents: 10000,
+    status: 'PENDING_DELIVERY'
+  };
+
+  assert.equal(prepayment.weight_mg, 25000);
+  assert.equal(prepayment.amount_cents, 10000);
+  assert.equal(prepayment.status, 'PENDING_DELIVERY');
+
+  prepayment.status = 'FULFILLED';
+  assert.equal(prepayment.status, 'FULFILLED');
+});

@@ -5,7 +5,7 @@
  */
 
 const DB_NAME = 'MicroSalerDB';
-export const DB_VERSION = 6;
+export const DB_VERSION = 7;
 
 export default class MicroSalerDB {
   constructor() {
@@ -127,6 +127,13 @@ export default class MicroSalerDB {
     if (!db.objectStoreNames.contains('supplier_payments')) {
       const store = db.createObjectStore('supplier_payments', { keyPath: 'payment_id', autoIncrement: true });
       store.createIndex('supplier_id', 'supplier_id', { unique: false });
+      store.createIndex('created_at', 'created_at', { unique: false });
+    }
+
+    if (!db.objectStoreNames.contains('customer_prepayments')) {
+      const store = db.createObjectStore('customer_prepayments', { keyPath: 'prepayment_id', autoIncrement: true });
+      store.createIndex('customer_id', 'customer_id', { unique: false });
+      store.createIndex('status', 'status', { unique: false });
       store.createIndex('created_at', 'created_at', { unique: false });
     }
   }
