@@ -1,7 +1,7 @@
 /**
  * @fileoverview IndexedDB database layer for Micro Saler POS (React Version).
  * Replaces Android Room database with a Promise-based IndexedDB wrapper.
- * Database version: 3, 10 object stores.
+ * Database version: 7, 14 object stores.
  */
 
 const DB_NAME = 'MicroSalerDB';
@@ -16,48 +16,71 @@ export default class MicroSalerDB {
   async init(onBlockedCallback = null) {
     return new Promise((resolve, reject) => {
       let resolved = false;
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-      request.onblocked = () => {
-        console.warn('Database upgrade blocked by another open tab or Service Worker connection.');
-        if (onBlockedCallback) onBlockedCallback();
-        setTimeout(() => {
-          if (!resolved) {
-            reject(new Error('Database upgrade blocked by another open tab. Please close other tabs and click Reload.'));
-          }
-        }, 2000);
-      };
-
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        this._createStores(db);
-      };
-
-      request.onsuccess = (event) => {
-        resolved = true;
-        this.db = event.target.result;
-        this.db.onversionchange = () => {
-          console.warn('Database version upgrade detected from another tab. Closing connection and reloading...');
-          if (this.db) {
-            this.db.close();
-            this.db = null;
-          }
-          if (typeof window !== 'undefined' && window.location) {
-            window.location.reload();
-          }
-        };
-        if (navigator.storage && navigator.storage.persist) {
-          navigator.storage.persist().catch(e => console.warn('Storage persistence request failed:', e));
+      const timeoutTimer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          console.warn('indexedDB.open timed out after 4s safety net.');
+          reject(new Error('Database open timed out. Click Auto-Fix to reconnect.'));
         }
-        resolve(this);
-      };
+      }, 4000);
 
-      request.onerror = (event) => {
-        reject(new Error(`Failed to open database: ${event.target.error}`));
-      };
+      try {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+        request.onblocked = () => {
+          console.warn('Database upgrade blocked by another open tab or connection.');
+          if (onBlockedCallback) onBlockedCallback();
+          setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              clearTimeout(timeoutTimer);
+              reject(new Error('Database upgrade blocked. Please close other open tabs and click Reload.'));
+            }
+          }, 1500);
+        };
+
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          this._createStores(db);
+        };
+
+        request.onsuccess = (event) => {
+          if (resolved) return;
+          resolved = true;
+          clearTimeout(timeoutTimer);
+
+          this.db = event.target.result;
+          this.db.onversionchange = () => {
+            console.warn('Database version upgrade detected from another tab. Closing connection and reloading...');
+            if (this.db) {
+              try { this.db.close(); } catch (e) {}
+              this.db = null;
+            }
+            if (typeof window !== 'undefined' && window.location) {
+              window.location.reload();
+            }
+          };
+          if (navigator.storage && navigator.storage.persist) {
+            navigator.storage.persist().catch(e => console.warn('Storage persistence request failed:', e));
+          }
+          resolve(this);
+        };
+
+        request.onerror = (event) => {
+          if (resolved) return;
+          resolved = true;
+          clearTimeout(timeoutTimer);
+          reject(new Error(`Failed to open database: ${event.target.error}`));
+        };
+      } catch (err) {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeoutTimer);
+        reject(err);
+      }
     });
   }
-
 
   _createStores(db) {
     if (!db.objectStoreNames.contains('pigments')) {
@@ -145,73 +168,118 @@ export default class MicroSalerDB {
 
   getAll(storeName) {
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(storeName, 'readonly');
-      const store = tx.objectStore(storeName);
-      const req = store.getAll();
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      try {
+        if (!this.db || !this.db.objectStoreNames.contains(storeName)) {
+          return resolve([]);
+        }
+        const tx = this.db.transaction(storeName, 'readonly');
+        const store = tx.objectStore(storeName);
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      } catch (err) {
+        console.warn(`Error reading store ${storeName}:`, err);
+        resolve([]);
+      }
     });
   }
 
   getById(storeName, id) {
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(storeName, 'readonly');
-      const store = tx.objectStore(storeName);
-      const req = store.get(id);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      try {
+        if (!this.db || !this.db.objectStoreNames.contains(storeName)) {
+          return resolve(null);
+        }
+        const tx = this.db.transaction(storeName, 'readonly');
+        const store = tx.objectStore(storeName);
+        const req = store.get(id);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      } catch (err) {
+        console.warn(`Error reading item by ID in store ${storeName}:`, err);
+        resolve(null);
+      }
     });
   }
 
   getAllByIndex(storeName, indexName, value) {
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(storeName, 'readonly');
-      const store = tx.objectStore(storeName);
-      const index = store.index(indexName);
-      const req = index.getAll(value);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      try {
+        if (!this.db || !this.db.objectStoreNames.contains(storeName)) {
+          return resolve([]);
+        }
+        const tx = this.db.transaction(storeName, 'readonly');
+        const store = tx.objectStore(storeName);
+        const index = store.index(indexName);
+        const req = index.getAll(value);
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      } catch (err) {
+        console.warn(`Error reading by index in store ${storeName}:`, err);
+        resolve([]);
+      }
     });
   }
 
   put(storeName, record) {
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(storeName, 'readwrite');
-      const store = tx.objectStore(storeName);
-      const req = store.put(record);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      try {
+        if (!this.db || !this.db.objectStoreNames.contains(storeName)) {
+          return reject(new Error(`Object store ${storeName} does not exist`));
+        }
+        const tx = this.db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        const req = store.put(record);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      } catch (err) {
+        reject(err);
+      }
     });
   }
 
   add(storeName, record) {
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(storeName, 'readwrite');
-      const store = tx.objectStore(storeName);
-      const req = store.add(record);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      try {
+        if (!this.db || !this.db.objectStoreNames.contains(storeName)) {
+          return reject(new Error(`Object store ${storeName} does not exist`));
+        }
+        const tx = this.db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        const req = store.add(record);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      } catch (err) {
+        reject(err);
+      }
     });
   }
 
   delete(storeName, id) {
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(storeName, 'readwrite');
-      const store = tx.objectStore(storeName);
-      const req = store.delete(id);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
+      try {
+        if (!this.db || !this.db.objectStoreNames.contains(storeName)) {
+          return resolve();
+        }
+        const tx = this.db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        const req = store.delete(id);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      } catch (err) {
+        resolve();
+      }
     });
   }
 
   async getActivePigments() {
     const all = await this.getAll('pigments');
-    return all.filter(p => !p.is_archived).sort((a, b) => a.name.localeCompare(b.name));
+    return all.filter(p => !p.is_archived).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }
 
   async getAllPigmentsIncludingArchived() {
     const all = await this.getAll('pigments');
-    return all.sort((a, b) => a.name.localeCompare(b.name));
+    return all.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }
 
   async updateStockAndCost(pigmentId, newStockMg, newTotalCostCents) {
@@ -234,7 +302,6 @@ export default class MicroSalerDB {
     if (!pigment || !pigment.pigment_id) throw new Error('Pigment ID required');
     await this.put('pigments', pigment);
   }
-
 
   async getPriceTiersForPigment(pigmentId) {
     return await this.getAllByIndex('pigment_price_tiers', 'pigment_id', Number(pigmentId));
@@ -276,7 +343,7 @@ export default class MicroSalerDB {
 
   async getAllCustomers() {
     const all = await this.getAll('customers');
-    return all.sort((a, b) => a.name.localeCompare(b.name));
+    return all.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }
 
   async updateCustomerBalance(customerId, amountDeltaCents) {
@@ -288,7 +355,7 @@ export default class MicroSalerDB {
 
   async getAllSuppliers() {
     const all = await this.getAll('suppliers');
-    return all.sort((a, b) => a.name.localeCompare(b.name));
+    return all.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }
 
   async updateSupplierBalance(supplierId, amountDeltaCents) {
@@ -300,7 +367,7 @@ export default class MicroSalerDB {
 
   async getAllSales() {
     const all = await this.getAll('sales');
-    return all.sort((a, b) => b.created_at - a.created_at);
+    return all.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
   }
 
   async updateSaleStatus(saleId, status) {
@@ -317,11 +384,18 @@ export default class MicroSalerDB {
 
   clearStore(storeName) {
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(storeName, 'readwrite');
-      const store = tx.objectStore(storeName);
-      const req = store.clear();
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
+      try {
+        if (!this.db || !this.db.objectStoreNames.contains(storeName)) {
+          return resolve();
+        }
+        const tx = this.db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        const req = store.clear();
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      } catch (err) {
+        resolve();
+      }
     });
   }
 
@@ -333,6 +407,7 @@ export default class MicroSalerDB {
       'suppliers',
       'supplier_payments',
       'customers',
+      'customer_prepayments',
       'sales',
       'sale_payments',
       'sale_items',
@@ -392,6 +467,7 @@ export default class MicroSalerDB {
       'pigment_price_tiers',
       'stock_receipts',
       'customers',
+      'customer_prepayments',
       'sales',
       'sale_payments',
       'sale_items',
@@ -413,9 +489,7 @@ export default class MicroSalerDB {
     });
   }
 
-
   async seedInitialData() {
     return;
   }
 }
-

@@ -126,11 +126,11 @@ export const PosProvider = ({ children }) => {
     let isMounted = true;
     const fallbackTimer = setTimeout(() => {
       if (isMounted && loading) {
-        console.warn('Database initialization timed out (15s safety net).');
-        setLoadingError('Database initialization timed out. Please click Reload below.');
+        console.warn('Database initialization timed out (4s fail-fast safety net).');
+        setLoadingError('Database loading took longer than expected. Please click Auto-Fix below.');
         setLoading(false);
       }
-    }, 15000);
+    }, 4000);
 
     async function initDB() {
       try {
