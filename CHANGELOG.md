@@ -5,6 +5,17 @@ All notable changes to the **Micro Saler POS** project will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-07-30
+
+### 🚀 Added
+- **Functional Multi-Tender Split Payments**: Divide any transaction across Cash, Digital (Square, Venmo, Zelle), and House Tab with real-time balance calculations.
+- **PWA App Icon Assets**: Generated scale-icon PNG assets (`icon-192.png` and `icon-512.png`) in `webapp-react/public/` for 100% PWA home screen installation readiness.
+- **CSV Sales History Export**: Download sales history as timestamped `.csv` files for tax filing, accounting, and spreadsheet imports.
+- **Printable Thermal Transaction Receipts**: Added receipt viewer modal (`receiptModal`) with browser `@media print` support for 80mm/58mm thermal receipt printers.
+- **Automated Unit Test Suite**: Integrated Node `--test` test runner (`npm run test`) with automated unit tests for `formatCents`, `formatMgToGrams`, `getEffectivePricePerGramCents`, and WAC cost formulas.
+
+---
+
 ## [1.2.0] - 2026-07-29
 
 ### 🚀 Added

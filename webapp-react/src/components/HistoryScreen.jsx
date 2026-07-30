@@ -14,12 +14,65 @@ function formatDate(timestamp) {
 }
 
 export const HistoryScreen = () => {
-  const { sales, saleItems, pigments, customers, openModal } = usePos();
+  const { sales, saleItems, pigments, customers, db, openModal } = usePos();
+
+  const safeSales = sales || [];
+  const safeItems = saleItems || [];
+
+  const handleExportCsv = () => {
+    if (safeSales.length === 0) return;
+
+    const headers = ['Sale ID', 'Date', 'Customer', 'Status', 'Total Amount ($)', 'COGS ($)', 'Gross Profit ($)'];
+    const rows = safeSales.map(s => {
+      const cust = (customers || []).find(c => Number(c.customer_id) === Number(s.customer_id));
+      const custName = cust ? cust.name : 'Walk-in';
+      const totalD = ((s.total_amount_cents || 0) / 100).toFixed(2);
+      const cogsD = ((s.total_cogs_cents || 0) / 100).toFixed(2);
+      const profitD = (((s.total_amount_cents || 0) - (s.total_cogs_cents || 0)) / 100).toFixed(2);
+      const dateStr = s.created_at ? new Date(s.created_at).toISOString() : '';
+
+      return [
+        s.sale_id,
+        `"${dateStr}"`,
+        `"${custName}"`,
+        s.status,
+        totalD,
+        cogsD,
+        profitD
+      ].join(',');
+    });
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `micro-saler-sales-${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleViewReceipt = async (sale, items, cust) => {
+    if (!db) return;
+    try {
+      const allPayments = await db.getAll('sale_payments');
+      const payments = allPayments.filter(p => Number(p.sale_id) === Number(sale.sale_id));
+      openModal('receiptModal', { sale, items, customer: cust, payments });
+    } catch (e) {
+      openModal('receiptModal', { sale, items, customer: cust, payments: [] });
+    }
+  };
 
   return (
     <div>
       <div className="section-header">
-        <h2 className="section-title">📋 SALES HISTORY</h2>
+        <div>
+          <h2 className="section-title">📋 SALES HISTORY</h2>
+          <p className="body-small text-muted">View past transactions, process returns, void sales, and print customer receipts.</p>
+        </div>
+        <button className="btn btn-secondary btn-sm" onClick={handleExportCsv} disabled={safeSales.length === 0}>
+          📥 Export Sales CSV
+        </button>
       </div>
 
       <div>
@@ -71,11 +124,16 @@ export const HistoryScreen = () => {
 
                 <div className="flex-between">
                   <span className="title-medium">Total: {formatCents(s.total_amount_cents)}</span>
-                  {s.status === 'COMPLETED' && (
-                    <button className="btn btn-danger btn-sm" onClick={() => openModal('voidSale', s)}>
-                      Void Sale
+                  <div className="flex-center gap-xs">
+                    <button className="btn btn-ghost btn-sm text-primary" onClick={() => handleViewReceipt(s, items, cust)}>
+                      🖨️ Receipt
                     </button>
-                  )}
+                    {s.status === 'COMPLETED' && (
+                      <button className="btn btn-danger btn-sm" onClick={() => openModal('voidSale', s)}>
+                        Void Sale
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

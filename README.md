@@ -2,7 +2,7 @@
 
 [![Deploy Web App](https://github.com/drewdroid86/Micro-Saler-/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/drewdroid86/Micro-Saler-/actions/workflows/deploy-pages.yml)
 [![Live Web App](https://img.shields.io/badge/live--demo-GitHub%20Pages-brightgreen.svg)](https://drewdroid86.github.io/Micro-Saler-/)
-[![Version](https://img.shields.io/badge/version-1.2.0-brightgreen.svg)](https://github.com/drewdroid86/Micro-Saler-)
+[![Version](https://img.shields.io/badge/version-1.3.0-brightgreen.svg)](https://github.com/drewdroid86/Micro-Saler-)
 [![Offline First](https://img.shields.io/badge/pwa-100%25--offline--local-blue.svg)](https://github.com/drewdroid86/Micro-Saler-)
 
 **Micro Saler** is a high-performance, offline-first Point-of-Sale (POS) and Inventory Management system engineered specifically for market-stall, street vendor, and small-batch mica pigment sales by weight.

@@ -92,7 +92,17 @@ export const ModalManager = () => {
   const [drawerTab, setDrawerTab] = useState('digital');
   const [digitalProvider, setDigitalProvider] = useState(null);
 
+  // Split payment state
+  const [splitCashInput, setSplitCashInput] = useState('');
+  const [splitDigitalInput, setSplitDigitalInput] = useState('');
+  const [splitTabInput, setSplitTabInput] = useState('');
+  const [splitDigitalProvider, setSplitDigitalProvider] = useState('Square');
+
   const resetAllFormStates = useCallback(() => {
+    setSplitCashInput('');
+    setSplitDigitalInput('');
+    setSplitTabInput('');
+    setSplitDigitalProvider('Square');
     setRestockWeight('');
     setRestockCost('');
     setRestockSupplier('');
@@ -511,6 +521,54 @@ export const ModalManager = () => {
     }
   };
 
+  const handleSplitPayment = async () => {
+    const cashD = parseFloat(splitCashInput) || 0;
+    const digitalD = parseFloat(splitDigitalInput) || 0;
+    const tabD = parseFloat(splitTabInput) || 0;
+
+    const cashCents = Math.round(cashD * 100);
+    const digitalCents = Math.round(digitalD * 100);
+    const tabCents = Math.round(tabD * 100);
+
+    const totalTenderedCents = cashCents + digitalCents + tabCents;
+
+    if (totalTenderedCents !== totalAmountCents) {
+      showToast(`Split total (${formatCents(totalTenderedCents)}) must equal sale total (${formatCents(totalAmountCents)})`, 'error');
+      return;
+    }
+
+    if (tabCents > 0 && !selectedCustomer) {
+      showToast('Please select a customer first for the house tab split portion', 'error');
+      return;
+    }
+
+    const payments = [];
+    if (cashCents > 0) {
+      payments.push({ payment_type: 'CASH', digital_provider: null, amount_cents: cashCents, merchant_fee_cents: 0 });
+    }
+    if (digitalCents > 0) {
+      const feeCents = Math.round((digitalCents * 0.029) + 30);
+      payments.push({ payment_type: 'DIGITAL', digital_provider: splitDigitalProvider, amount_cents: digitalCents, merchant_fee_cents: feeCents });
+    }
+    if (tabCents > 0) {
+      payments.push({ payment_type: 'HOUSE_TAB', digital_provider: null, amount_cents: tabCents, merchant_fee_cents: 0 });
+    }
+
+    const customerId = selectedCustomer?.customer_id || null;
+
+    try {
+      await repo.completeSale(customerId, cart, payments, isHandshakeOverride);
+      setCart([]);
+      setSelectedCustomer(null);
+      setSelectedPigment(null);
+      await refreshAllData();
+      handleClose();
+      showToast('Split payment sale completed successfully!', 'success');
+    } catch (error) {
+      showToast('Split payment failed: ' + error.message, 'error');
+    }
+  };
+
   const modalKey = `${modal.name}_${modal.payload?.pigment_id || modal.payload?.customer_id || modal.payload?.sale_id || modal.payload?.saleItem?.sale_item_id || 'default'}`;
 
   // Payment Drawer Modal
@@ -605,14 +663,92 @@ export const ModalManager = () => {
             </div>
           )}
 
-          {drawerTab === 'split' && (
-            <div className="text-center p-md">
-              <p className="body-medium mb-md">Split payments feature is currently simplified for this demo.</p>
-              <button className="btn btn-secondary" onClick={() => { handleClose(); showToast('Split payment coming soon!', 'success'); }}>
-                Acknowledge
-              </button>
-            </div>
-          )}
+          {drawerTab === 'split' && (() => {
+            const cashC = Math.round((parseFloat(splitCashInput) || 0) * 100);
+            const digitalC = Math.round((parseFloat(splitDigitalInput) || 0) * 100);
+            const tabC = Math.round((parseFloat(splitTabInput) || 0) * 100);
+            const tenderedTotal = cashC + digitalC + tabC;
+            const diffC = totalAmountCents - tenderedTotal;
+
+            return (
+              <div>
+                <p className="body-small text-muted mb-md">Divide the total amount across multiple tender types:</p>
+
+                <div className="form-group mb-sm">
+                  <label className="form-label">💵 Cash Portion ($)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="form-input"
+                    placeholder="0.00"
+                    value={splitCashInput}
+                    onChange={e => setSplitCashInput(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group mb-sm">
+                  <label className="form-label">💳 Digital Portion ($)</label>
+                  <div className="flex-center gap-xs mb-xs">
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="form-input"
+                      placeholder="0.00"
+                      value={splitDigitalInput}
+                      onChange={e => setSplitDigitalInput(e.target.value)}
+                    />
+                    <select
+                      className="form-select"
+                      value={splitDigitalProvider}
+                      onChange={e => setSplitDigitalProvider(e.target.value)}
+                      style={{ width: '130px' }}
+                    >
+                      <option value="Square">Square</option>
+                      <option value="Venmo">Venmo</option>
+                      <option value="Zelle">Zelle</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="form-group mb-md">
+                  <label className="form-label">📑 House Tab Portion ($)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="form-input"
+                    placeholder="0.00"
+                    value={splitTabInput}
+                    onChange={e => setSplitTabInput(e.target.value)}
+                    disabled={!selectedCustomer}
+                  />
+                  {!selectedCustomer && (
+                    <div className="body-small text-muted mt-xs">Select a customer on checkout to split onto house tab.</div>
+                  )}
+                </div>
+
+                <div className="card card-static p-sm mb-md" style={{ background: 'var(--market-surface-variant)' }}>
+                  <div className="flex-between body-small mb-xs">
+                    <span>Tendered Split Total:</span>
+                    <strong>{formatCents(tenderedTotal)}</strong>
+                  </div>
+                  <div className="flex-between body-small font-weight-bold">
+                    <span>Balance Remaining:</span>
+                    <span className={diffC === 0 ? 'text-success' : 'text-error'}>
+                      {diffC === 0 ? '✓ Balanced' : formatCents(diffC)}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  className="btn btn-primary btn-block"
+                  onClick={handleSplitPayment}
+                  disabled={diffC !== 0}
+                >
+                  Complete Split Sale ({formatCents(totalAmountCents)})
+                </button>
+              </div>
+            );
+          })()}
         </div>
       </div>
     );
@@ -1200,6 +1336,74 @@ export const ModalManager = () => {
         {modal.name === 'backupRestore' && (
           <BackupRestoreModal />
         )}
+
+        {/* Printable Receipt Modal */}
+        {modal.name === 'receiptModal' && modal.payload && (() => {
+          const sale = modal.payload.sale || {};
+          const items = modal.payload.items || [];
+          const payments = modal.payload.payments || [];
+          const customer = modal.payload.customer;
+
+          return (
+            <div>
+              <div className="modal-header text-center" style={{ display: 'block' }}>
+                <h2 style={{ fontSize: '1.4rem', margin: '0 0 4px 0' }}>⚖️ MICRO SALER POS</h2>
+                <div className="body-small text-muted">Official Transaction Receipt</div>
+                <div className="body-small text-muted">{new Date(sale.created_at || sale.timestamp || Date.now()).toLocaleString()}</div>
+                <div className="body-small text-muted">Receipt ID: {sale.sale_id}</div>
+              </div>
+
+              <div className="modal-body" style={{ maxHeight: '350px', overflowY: 'auto' }}>
+                {customer && (
+                  <div className="p-xs mb-sm body-small" style={{ background: 'var(--market-surface-variant)', borderRadius: '4px' }}>
+                    <strong>Customer:</strong> {customer.name} {customer.phone_number ? `(${customer.phone_number})` : ''}
+                  </div>
+                )}
+
+                <table style={{ width: '100%', fontSize: '0.85rem', marginBottom: '12px', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px dashed var(--market-border)', textAlign: 'left' }}>
+                      <th style={{ paddingBottom: '6px' }}>Item</th>
+                      <th style={{ textAlign: 'right', paddingBottom: '6px' }}>Weight</th>
+                      <th style={{ textAlign: 'right', paddingBottom: '6px' }}>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((item, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid var(--market-surface-variant)' }}>
+                        <td style={{ padding: '6px 0' }}>{item.pigment_name || `Pigment #${item.pigment_id}`}</td>
+                        <td style={{ textAlign: 'right' }}>{formatMgToGrams(item.weight_mg)}</td>
+                        <td style={{ textAlign: 'right' }}>{formatCents(item.price_charged_cents)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div className="p-sm" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px' }}>
+                  <div className="flex-between font-weight-bold title-medium mb-xs">
+                    <span>Total Paid:</span>
+                    <span className="text-success">{formatCents(sale.total_amount_cents)}</span>
+                  </div>
+                  {payments.map((p, i) => (
+                    <div key={i} className="flex-between body-small text-muted">
+                      <span>{p.payment_type} {p.digital_provider ? `(${p.digital_provider})` : ''}</span>
+                      <span>{formatCents(p.amount_cents)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="modal-footer flex-between">
+                <button className="btn btn-secondary" onClick={() => window.print()}>
+                  🖨️ Print Receipt
+                </button>
+                <button className="btn btn-primary" onClick={handleClose}>
+                  Done
+                </button>
+              </div>
+            </div>
+          );
+        })()}
 
       </div>
     </div>
