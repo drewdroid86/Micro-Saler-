@@ -159,6 +159,61 @@ export class PosRepository {
     return true;
   }
 
+  async updateRestockTerms(receiptId, paymentStatus, paidDownCents) {
+    const receipt = await this.db.getById('stock_receipts', Number(receiptId));
+    if (!receipt) throw new Error(`Stock receipt #${receiptId} not found`);
+    if (receipt.payment_status === 'VOIDED') throw new Error(`Cannot edit terms for a voided receipt`);
+
+    const totalCostCents = receipt.total_cost_cents || 0;
+    const safePaidDown = paymentStatus === 'PAID'
+      ? totalCostCents
+      : Math.min(totalCostCents, Math.max(0, paidDownCents || 0));
+
+    const newUnpaidTabCents = paymentStatus === 'PAID' ? 0 : Math.max(0, totalCostCents - safePaidDown);
+    const oldUnpaidTabCents = receipt.unpaid_tab_cents !== undefined
+      ? receipt.unpaid_tab_cents
+      : (receipt.payment_status === 'UNPAID_TAB' ? totalCostCents : 0);
+
+    const tabDiffCents = newUnpaidTabCents - oldUnpaidTabCents;
+
+    if (tabDiffCents !== 0 && receipt.supplier_id) {
+      const supplier = await this.db.getById('suppliers', Number(receipt.supplier_id));
+      if (supplier) {
+        await this.db.updateSupplierBalance(Number(receipt.supplier_id), tabDiffCents);
+      }
+    }
+
+    const statusLabel = paymentStatus === 'PAID'
+      ? 'PAID'
+      : safePaidDown > 0
+        ? `PARTIAL ($${(safePaidDown / 100).toFixed(2)} Paid / $${(newUnpaidTabCents / 100).toFixed(2)} Owed)`
+        : 'UNPAID_TAB';
+
+    receipt.paid_down_cents = safePaidDown;
+    receipt.unpaid_tab_cents = newUnpaidTabCents;
+    receipt.payment_status = statusLabel;
+    receipt.updated_at = Date.now();
+
+    await this.db.update('stock_receipts', receipt);
+
+    const now = Date.now();
+    await this.db.add('audit_log', {
+      entity_type: 'StockReceipt',
+      entity_id: Number(receiptId),
+      action: 'EDIT_RESTOCK_PURCHASE_TERMS',
+      details_json: JSON.stringify({
+        receipt_id: Number(receiptId),
+        old_unpaid_cents: oldUnpaidTabCents,
+        new_unpaid_cents: newUnpaidTabCents,
+        tab_diff_cents: tabDiffCents
+      }),
+      created_at: now,
+      timestamp: now,
+    });
+
+    return receipt;
+  }
+
   async logShrinkage(pigmentId, mgLost, reason) {
     const pigment = await this.db.getById('pigments', Number(pigmentId));
     if (!pigment) throw new Error(`Pigment ${pigmentId} not found`);

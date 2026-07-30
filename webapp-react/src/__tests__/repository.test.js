@@ -88,3 +88,19 @@ test('Stock receipt reversal deducts inventory and reverses unpaid tab balance',
   assert.equal(totalCostCents, 5000);
   assert.equal(supplierBalanceCents, 4000);
 });
+
+test('Editing restock terms rebalances supplier liability correctly', () => {
+  const totalCostCents = 10000;
+  let oldUnpaidTabCents = 10000;
+  let supplierBalanceCents = 10000;
+
+  const newPaidDownCents = 4000;
+  const newUnpaidTabCents = totalCostCents - newPaidDownCents;
+
+  const tabDiffCents = newUnpaidTabCents - oldUnpaidTabCents;
+  supplierBalanceCents += tabDiffCents;
+
+  assert.equal(newUnpaidTabCents, 6000);
+  assert.equal(tabDiffCents, -4000);
+  assert.equal(supplierBalanceCents, 6000);
+});

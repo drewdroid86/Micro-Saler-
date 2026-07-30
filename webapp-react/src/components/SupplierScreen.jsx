@@ -105,9 +105,14 @@ export const SupplierScreen = () => {
                       </span>
                     </div>
                     {!isVoided && (
-                      <button className="btn btn-danger btn-sm" onClick={() => openModal('voidStockReceipt', r)}>
-                        🗑️ Void
-                      </button>
+                      <div className="flex-center gap-xs">
+                        <button className="btn btn-secondary btn-sm" onClick={() => openModal('editRestockTerms', r)}>
+                          ✏️ Terms
+                        </button>
+                        <button className="btn btn-danger btn-sm" onClick={() => openModal('voidStockReceipt', r)}>
+                          🗑️ Void
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>

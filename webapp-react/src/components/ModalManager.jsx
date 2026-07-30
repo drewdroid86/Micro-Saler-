@@ -494,6 +494,30 @@ export const ModalManager = () => {
     }
   };
 
+  const handleUpdateRestockTerms = async () => {
+    const paidDownD = parseFloat(restockPaidDown) || 0;
+    const paidDownCents = Math.round(paidDownD * 100);
+    const totalCostCents = modal.payload?.total_cost_cents || 0;
+
+    if (restockPaymentStatus === 'PARTIAL' && (paidDownCents <= 0 || paidDownCents >= totalCostCents)) {
+      showToast('Partial down payment must be greater than $0 and less than total cost', 'error');
+      return;
+    }
+
+    try {
+      await repo.updateRestockTerms(
+        modal.payload.stock_receipt_id || modal.payload.receipt_id,
+        restockPaymentStatus,
+        paidDownCents
+      );
+      await refreshAllData();
+      handleClose();
+      showToast('Purchase terms updated & supplier tab rebalanced!', 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
   const handleReturnItem = async () => {
     const w = parseFloat(returnWeight);
     if (!w || w <= 0 || !returnReason) {
@@ -1421,6 +1445,85 @@ export const ModalManager = () => {
             </div>
           </div>
         )}
+
+        {/* Edit Restock Terms Modal */}
+        {modal.name === 'editRestockTerms' && modal.payload && (() => {
+          const totalCostCents = modal.payload.total_cost_cents || 0;
+          const paidDownD = parseFloat(restockPaidDown) || 0;
+          const paidDownCents = Math.round(paidDownD * 100);
+          const newUnpaidTabCents = restockPaymentStatus === 'PAID'
+            ? 0
+            : Math.max(0, totalCostCents - paidDownCents);
+
+          const oldUnpaidTabCents = modal.payload.unpaid_tab_cents !== undefined
+            ? modal.payload.unpaid_tab_cents
+            : (modal.payload.payment_status === 'UNPAID_TAB' ? totalCostCents : 0);
+
+          const diffCents = newUnpaidTabCents - oldUnpaidTabCents;
+
+          return (
+            <div>
+              <div className="modal-header">
+                <h2>✏️ Edit Purchase Terms</h2>
+                <button className="modal-close" onClick={handleClose}>&times;</button>
+              </div>
+              <div className="modal-body">
+                <p className="body-medium mb-sm">Editing Receipt <strong>#{modal.payload.stock_receipt_id || modal.payload.receipt_id}</strong></p>
+                <div className="card card-static p-sm mb-md text-muted body-small" style={{ background: 'var(--market-surface-variant)' }}>
+                  <div>Supplier: <strong>{modal.payload.supplier_name || 'Direct Restock'}</strong></div>
+                  <div>Total Cost: <strong>{formatCents(totalCostCents)}</strong></div>
+                </div>
+
+                <div className="form-group mb-sm">
+                  <label className="form-label">Payment Terms</label>
+                  <select
+                    className="form-select"
+                    value={restockPaymentStatus}
+                    onChange={e => setRestockPaymentStatus(e.target.value)}
+                  >
+                    <option value="PAID">💵 Paid Immediately (Paid in Full)</option>
+                    <option value="PARTIAL">💵 Partial Down Payment (Pay Down Now + Tab Rest)</option>
+                    <option value="UNPAID_TAB">📑 Add Entire Amount to Supplier Tab (Pay Later)</option>
+                  </select>
+                </div>
+
+                {restockPaymentStatus === 'PARTIAL' && (
+                  <div className="form-group mb-md">
+                    <label className="form-label">Amount Paid Down ($)</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      value={restockPaidDown}
+                      onChange={e => setRestockPaidDown(e.target.value)}
+                      step="0.01"
+                      min="0.01"
+                      placeholder="e.g. 30.00"
+                    />
+                  </div>
+                )}
+
+                <div className="card card-static p-sm mb-md" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px' }}>
+                  <div className="flex-between body-small mb-xs">
+                    <span>New Tab Owed:</span>
+                    <strong className={newUnpaidTabCents > 0 ? 'text-error' : 'text-success'}>
+                      {formatCents(newUnpaidTabCents)}
+                    </strong>
+                  </div>
+                  <div className="flex-between body-small font-weight-bold">
+                    <span>Supplier Balance Impact:</span>
+                    <span className={diffCents > 0 ? 'text-error' : diffCents < 0 ? 'text-success' : 'text-muted'}>
+                      {diffCents > 0 ? `+${formatCents(diffCents)} (Owe More)` : diffCents < 0 ? `-${formatCents(Math.abs(diffCents))} (Owe Less)` : 'No Change'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+                <button className="btn btn-primary" onClick={handleUpdateRestockTerms}>Update Terms</button>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Backup / Restore Modal */}
         {modal.name === 'backupRestore' && (
