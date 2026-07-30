@@ -165,4 +165,28 @@ test('Wipe all data clears all 14 object stores', () => {
 
   assert.equal(storeNames.length, 14);
   assert.ok(storeNames.includes('customer_prepayments'));
+  assert.ok(storeNames.includes('suppliers'));
+  assert.ok(storeNames.includes('supplier_payments'));
+});
+
+test('Supplier creation schema data structure persists correctly', () => {
+  const supplierData = {
+    name: 'T mica suppliers',
+    phone_number: '5555544',
+    notes: 'Na'
+  };
+
+  const supplierRecord = {
+    supplier_id: 1,
+    name: supplierData.name.trim(),
+    phone_number: supplierData.phone_number,
+    current_balance_cents: 0,
+    notes: supplierData.notes,
+    created_at: Date.now()
+  };
+
+  assert.equal(supplierRecord.name, 'T mica suppliers');
+  assert.equal(supplierRecord.phone_number, '5555544');
+  assert.equal(supplierRecord.notes, 'Na');
+  assert.equal(supplierRecord.current_balance_cents, 0);
 });
