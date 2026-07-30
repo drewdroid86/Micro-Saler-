@@ -1,9 +1,9 @@
 import React from 'react';
 import { usePos } from '../context/PosContext';
-import { formatCents } from '../repository';
+import { formatCents, formatMgToGrams } from '../repository';
 
 export const SupplierScreen = () => {
-  const { suppliers, stockReceipts, openModal } = usePos();
+  const { suppliers, pigments, stockReceipts, openModal } = usePos();
   const safeSuppliers = suppliers || [];
   const safeReceipts = stockReceipts || [];
 
@@ -12,7 +12,7 @@ export const SupplierScreen = () => {
       <div className="section-header">
         <div>
           <h2 className="section-title">🏭 SUPPLIER MANAGEMENT & ACCOUNTS PAYABLE</h2>
-          <p className="body-small text-muted">Manage pigment vendors, track restock balances, and settle supplier payables.</p>
+          <p className="body-small text-muted">Manage pigment vendors, track restock balances, settle supplier payables, and void accidental restock entries.</p>
         </div>
         <button className="btn btn-primary btn-sm" onClick={() => openModal('addSupplier')}>
           + New Supplier
@@ -70,6 +70,50 @@ export const SupplierScreen = () => {
               </div>
             );
           })
+        )}
+      </div>
+
+      {/* Restock Purchase Receipts Ledger */}
+      <div className="card mt-lg">
+        <div className="card-header border-bottom pb-sm mb-md">
+          <h3 className="title-medium">📦 Recent Supplier Restock Receipts</h3>
+        </div>
+
+        {safeReceipts.length === 0 ? (
+          <div className="text-center p-md text-muted">No restock receipts recorded yet.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {safeReceipts.map(r => {
+              const pigment = (pigments || []).find(p => Number(p.pigment_id) === Number(r.pigment_id));
+              const isVoided = r.payment_status === 'VOIDED';
+
+              return (
+                <div key={r.stock_receipt_id || r.receipt_id} className="flex-between p-sm" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px', opacity: isVoided ? 0.6 : 1 }}>
+                  <div>
+                    <div className="body-medium font-weight-bold">
+                      {pigment ? pigment.name : `Pigment #${r.pigment_id}`} — {formatMgToGrams(r.received_mg || 0)}
+                    </div>
+                    <div className="body-small text-muted">
+                      Supplier: {r.supplier_name || 'Direct Restock'} • {new Date(r.received_at || Date.now()).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <div className="flex-center gap-sm">
+                    <div className="text-right">
+                      <div className="body-medium font-weight-bold">{formatCents(r.total_cost_cents)}</div>
+                      <span className={`badge ${isVoided ? 'badge-voided' : 'badge-completed'}`} style={{ fontSize: '10px' }}>
+                        {r.payment_status || 'PAID'}
+                      </span>
+                    </div>
+                    {!isVoided && (
+                      <button className="btn btn-danger btn-sm" onClick={() => openModal('voidStockReceipt', r)}>
+                        🗑️ Void
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>

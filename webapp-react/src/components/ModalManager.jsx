@@ -479,6 +479,21 @@ export const ModalManager = () => {
     }
   };
 
+  const handleVoidStockReceipt = async () => {
+    if (!voidReason) {
+      showToast('Reason required', 'error');
+      return;
+    }
+    try {
+      await repo.voidStockReceipt(modal.payload.receipt_id, voidReason);
+      await refreshAllData();
+      handleClose();
+      showToast('Stock receipt voided & inventory/balances reversed', 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
   const handleReturnItem = async () => {
     const w = parseFloat(returnWeight);
     if (!w || w <= 0 || !returnReason) {
@@ -1367,6 +1382,42 @@ export const ModalManager = () => {
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-warning" onClick={handleReturnItem}>Process Return</button>
+            </div>
+          </div>
+        )}
+
+        {/* Void Stock Receipt Modal */}
+        {modal.name === 'voidStockReceipt' && (
+          <div>
+            <div className="modal-header">
+              <h2>Void Restock Receipt</h2>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
+            </div>
+            <div className="modal-body">
+              <p className="body-medium mb-sm">
+                Voiding Restock Receipt <strong>#{modal.payload?.receipt_id}</strong>
+              </p>
+              <div className="card card-static p-sm mb-md text-muted body-small" style={{ background: 'var(--market-surface-variant)' }}>
+                <div>Weight Restocked: <strong>{formatMgToGrams(modal.payload?.received_mg || 0)}</strong></div>
+                <div>Total Cost: <strong>{formatCents(modal.payload?.total_cost_cents || 0)}</strong></div>
+                <div>Supplier: <strong>{modal.payload?.supplier_name || 'Direct Restock'}</strong></div>
+              </div>
+              <p className="body-small text-muted mb-sm">
+                ⚠️ Voiding this receipt will deduct {formatMgToGrams(modal.payload?.received_mg || 0)} from inventory, adjust cost basis, and reverse any unpaid supplier tab balance.
+              </p>
+              <div className="form-group">
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Reason for voiding (e.g. Entry Error, Wrong Weight)"
+                  value={voidReason}
+                  onChange={e => setVoidReason(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+              <button className="btn btn-danger" onClick={handleVoidStockReceipt}>Confirm Void & Reverse</button>
             </div>
           </div>
         )}

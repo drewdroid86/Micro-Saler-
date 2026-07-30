@@ -121,6 +121,44 @@ export class PosRepository {
     return receiptId;
   }
 
+  async voidStockReceipt(receiptId, reason = 'Entry Error') {
+    const receipt = await this.db.getById('stock_receipts', Number(receiptId));
+    if (!receipt) throw new Error(`Stock receipt #${receiptId} not found`);
+    if (receipt.payment_status === 'VOIDED') throw new Error(`Receipt #${receiptId} is already voided`);
+
+    const pigment = await this.db.getById('pigments', Number(receipt.pigment_id));
+    if (pigment) {
+      const newStockMg = Math.max(0, pigment.stock_mg - (receipt.received_mg || 0));
+      const newTotalCostCents = Math.max(0, pigment.total_cost_cents - (receipt.total_cost_cents || 0));
+      await this.db.updateStockAndCost(Number(receipt.pigment_id), newStockMg, newTotalCostCents);
+    }
+
+    const unpaidTabCents = receipt.unpaid_tab_cents || (receipt.payment_status === 'UNPAID_TAB' ? receipt.total_cost_cents : 0);
+    if (unpaidTabCents > 0 && receipt.supplier_id) {
+      const supplier = await this.db.getById('suppliers', Number(receipt.supplier_id));
+      if (supplier) {
+        await this.db.updateSupplierBalance(Number(receipt.supplier_id), -unpaidTabCents);
+      }
+    }
+
+    receipt.payment_status = 'VOIDED';
+    receipt.void_reason = reason;
+    receipt.voided_at = Date.now();
+    await this.db.update('stock_receipts', receipt);
+
+    const now = Date.now();
+    await this.db.add('audit_log', {
+      entity_type: 'StockReceipt',
+      entity_id: Number(receiptId),
+      action: 'VOID_STOCK_RECEIPT',
+      details_json: JSON.stringify({ receipt_id: Number(receiptId), reason, pigment_id: receipt.pigment_id }),
+      created_at: now,
+      timestamp: now,
+    });
+
+    return true;
+  }
+
   async logShrinkage(pigmentId, mgLost, reason) {
     const pigment = await this.db.getById('pigments', Number(pigmentId));
     if (!pigment) throw new Error(`Pigment ${pigmentId} not found`);

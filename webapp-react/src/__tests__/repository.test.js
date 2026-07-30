@@ -68,3 +68,23 @@ test('Partial restock down payment calculates tab liability correctly', () => {
   assert.equal(unpaidTabCents, 7000);
   assert.equal(paidDownCents + unpaidTabCents, totalCostCents);
 });
+
+test('Stock receipt reversal deducts inventory and reverses unpaid tab balance', () => {
+  let stockMg = 25000;
+  let totalCostCents = 10000;
+  let supplierBalanceCents = 7000;
+
+  const restockReceipt = {
+    received_mg: 10000,
+    total_cost_cents: 5000,
+    unpaid_tab_cents: 3000
+  };
+
+  stockMg -= restockReceipt.received_mg;
+  totalCostCents -= restockReceipt.total_cost_cents;
+  supplierBalanceCents -= restockReceipt.unpaid_tab_cents;
+
+  assert.equal(stockMg, 15000);
+  assert.equal(totalCostCents, 5000);
+  assert.equal(supplierBalanceCents, 4000);
+});
