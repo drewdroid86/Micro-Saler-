@@ -895,8 +895,8 @@ export const ModalManager = () => {
                       ? Math.round((parseFloat(tabPuttingOnTabInput) || 0) * 100)
                       : Math.max(0, totalAmountCents - paidNowCents);
 
-                    const newBalanceCents = (selectedCustomer.current_balance_cents || 0) + tabAmountCents;
-                    const isOverLimit = newBalanceCents > (selectedCustomer.credit_limit_cents || 0);
+                    const newBalanceCents = ((selectedCustomer && selectedCustomer.current_balance_cents) || 0) + tabAmountCents;
+                    const isOverLimit = selectedCustomer ? newBalanceCents > (selectedCustomer.credit_limit_cents || 0) : false;
 
                     const handlePaidNowChange = (val) => {
                       setTabPaidNowInput(val);
@@ -1033,8 +1033,8 @@ export const ModalManager = () => {
 
                   {tabPayMode === 'FULL' && (() => {
                     const tabAmountCents = totalAmountCents;
-                    const newBalanceCents = (selectedCustomer.current_balance_cents || 0) + tabAmountCents;
-                    const isOverLimit = newBalanceCents > (selectedCustomer.credit_limit_cents || 0);
+                    const newBalanceCents = ((selectedCustomer && selectedCustomer.current_balance_cents) || 0) + tabAmountCents;
+                    const isOverLimit = selectedCustomer ? newBalanceCents > (selectedCustomer.credit_limit_cents || 0) : false;
 
                     return (
                       <div className="card card-static p-sm mb-md" style={{ background: 'var(--market-surface-variant)' }}>
