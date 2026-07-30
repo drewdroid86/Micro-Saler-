@@ -48,6 +48,7 @@ export const ModalManager = () => {
   const [supplierNameInput, setSupplierNameInput] = useState('');
   const [supplierPhoneInput, setSupplierPhoneInput] = useState('');
   const [supplierNotesInput, setSupplierNotesInput] = useState('');
+  const [clearInventoryMode, setClearInventoryMode] = useState('ZERO_STOCK');
 
   const [paySupplierAmt, setPaySupplierAmt] = useState('');
   const [paySupplierType, setPaySupplierType] = useState('CASH');
@@ -526,6 +527,22 @@ export const ModalManager = () => {
       await refreshAllData();
       handleClose();
       showToast('Purchase terms updated & supplier tab rebalanced!', 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const handleClearInventory = async () => {
+    try {
+      if (clearInventoryMode === 'ZERO_STOCK') {
+        await repo.resetAllInventoryStockAndCosts();
+        showToast('All inventory stock weights & costs reset to 0', 'success');
+      } else {
+        await repo.clearAllInventoryCatalog();
+        showToast('All pigment items & restock receipts cleared', 'success');
+      }
+      await refreshAllData();
+      handleClose();
     } catch (e) {
       showToast(e.message, 'error');
     }
@@ -1522,6 +1539,52 @@ export const ModalManager = () => {
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-danger" onClick={handleVoidStockReceipt}>Confirm Void & Reverse</button>
+            </div>
+          </div>
+        )}
+
+        {/* Clear Inventory Modal */}
+        {modal.name === 'clearInventory' && (
+          <div>
+            <div className="modal-header">
+              <h2>🧹 Clear Current Inventory</h2>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
+            </div>
+            <div className="modal-body">
+              <p className="body-medium mb-sm">
+                Choose how you want to clear your inventory:
+              </p>
+              <div className="form-group mb-md" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <label className="card card-static p-sm flex-between cursor-pointer" style={{ background: clearInventoryMode === 'ZERO_STOCK' ? 'var(--market-primary-light, rgba(59,130,246,0.15))' : 'var(--market-surface-variant)', border: clearInventoryMode === 'ZERO_STOCK' ? '1px solid var(--market-primary)' : '1px solid transparent', borderRadius: '6px' }}>
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <input type="radio" name="clear-mode" value="ZERO_STOCK" checked={clearInventoryMode === 'ZERO_STOCK'} onChange={() => setClearInventoryMode('ZERO_STOCK')} />
+                    <div>
+                      <div className="body-medium font-weight-bold">Reset Stock Levels & Costs to 0</div>
+                      <div className="body-small text-muted">Keeps pigment catalog names & pricing tiers intact, but resets all stock weights to 0.0g and total costs to $0.00.</div>
+                    </div>
+                  </div>
+                </label>
+
+                <label className="card card-static p-sm flex-between cursor-pointer" style={{ background: clearInventoryMode === 'WIPE_ALL' ? 'rgba(239, 68, 68, 0.15)' : 'var(--market-surface-variant)', border: clearInventoryMode === 'WIPE_ALL' ? '1px solid var(--market-error)' : '1px solid transparent', borderRadius: '6px' }}>
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <input type="radio" name="clear-mode" value="WIPE_ALL" checked={clearInventoryMode === 'WIPE_ALL'} onChange={() => setClearInventoryMode('WIPE_ALL')} />
+                    <div>
+                      <div className="body-medium font-weight-bold text-error">Wipe All Pigment Items & History</div>
+                      <div className="body-small text-muted">Completely deletes all pigments and stock receipt records from the database.</div>
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              <div className="card p-sm body-small text-muted" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px' }}>
+                ⚠️ Warning: Clearing inventory is immediate. You can export a database JSON backup from Settings first if needed.
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+              <button className={`btn ${clearInventoryMode === 'WIPE_ALL' ? 'btn-danger' : 'btn-warning'}`} onClick={handleClearInventory}>
+                Confirm Clear Inventory
+              </button>
             </div>
           </div>
         )}

@@ -214,6 +214,40 @@ export class PosRepository {
     return receipt;
   }
 
+  async resetAllInventoryStockAndCosts() {
+    const pigments = await this.db.getAll('pigments');
+    for (const p of pigments) {
+      p.stock_mg = 0;
+      p.total_cost_cents = 0;
+      await this.db.put('pigments', p);
+    }
+    const now = Date.now();
+    await this.db.add('audit_log', {
+      entity_type: 'Inventory',
+      entity_id: 0,
+      action: 'RESET_INVENTORY_STOCK',
+      details_json: JSON.stringify({ count: pigments.length }),
+      created_at: now,
+      timestamp: now,
+    });
+    return true;
+  }
+
+  async clearAllInventoryCatalog() {
+    await this.db.clearStore('pigments');
+    await this.db.clearStore('stock_receipts');
+    const now = Date.now();
+    await this.db.add('audit_log', {
+      entity_type: 'Inventory',
+      entity_id: 0,
+      action: 'CLEAR_INVENTORY_CATALOG',
+      details_json: JSON.stringify({ action: 'cleared_all_pigments_and_receipts' }),
+      created_at: now,
+      timestamp: now,
+    });
+    return true;
+  }
+
   async logShrinkage(pigmentId, mgLost, reason) {
     const pigment = await this.db.getById('pigments', Number(pigmentId));
     if (!pigment) throw new Error(`Pigment ${pigmentId} not found`);

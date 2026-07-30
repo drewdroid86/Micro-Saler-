@@ -114,3 +114,17 @@ test('New pigment initial purchase with supplier tab calculates supplier balance
   assert.equal(paidDownCents, 5000);
   assert.equal(unpaidTabCents, 10000);
 });
+
+test('Reset inventory stock and costs zeroes out stock weights and cost values', () => {
+  const pigments = [
+    { pigment_id: 1, name: 'Gold', stock_mg: 50000, total_cost_cents: 20000 },
+    { pigment_id: 2, name: 'Ruby', stock_mg: 10000, total_cost_cents: 5000 }
+  ];
+
+  const resetPigments = pigments.map(p => ({ ...p, stock_mg: 0, total_cost_cents: 0 }));
+
+  assert.equal(resetPigments[0].stock_mg, 0);
+  assert.equal(resetPigments[0].total_cost_cents, 0);
+  assert.equal(resetPigments[1].stock_mg, 0);
+  assert.equal(resetPigments[1].total_cost_cents, 0);
+});

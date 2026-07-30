@@ -9,9 +9,14 @@ export const InventoryScreen = () => {
     <div>
       <div className="section-header">
         <h2 className="section-title">📦 INVENTORY MANAGEMENT</h2>
-        <button className="btn btn-primary btn-sm" onClick={() => openModal('addPigment')}>
-          + New Pigment
-        </button>
+        <div className="flex-center gap-xs">
+          <button className="btn btn-secondary btn-sm" onClick={() => openModal('clearInventory')}>
+            🧹 Clear Inventory
+          </button>
+          <button className="btn btn-primary btn-sm" onClick={() => openModal('addPigment')}>
+            + New Pigment
+          </button>
+        </div>
       </div>
 
       <div className="chart-container">
