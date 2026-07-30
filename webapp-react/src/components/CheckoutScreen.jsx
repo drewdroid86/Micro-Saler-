@@ -43,6 +43,7 @@ export const CheckoutScreen = () => {
     addToCart,
     removeFromCart,
     clearCart,
+    resetCartPrices,
     quickCollectCash,
     openModal,
     showToast
@@ -205,9 +206,33 @@ export const CheckoutScreen = () => {
           <span>Est. Margin: <strong className="margin-value">{margin}%</strong></span>
         </div>
 
-        <div className="cart-total">
-          <span>Total</span>
-          <span>{formatCents(totalCharged)}</span>
+        <div className="cart-total flex-between" style={{ alignItems: 'center' }}>
+          <div className="flex-center gap-xs">
+            <span>Total Transaction Price</span>
+            {safeCart.length > 0 && (
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => openModal('editCartTotal')}
+                title="Set/override total transaction price"
+                style={{ padding: '2px 8px', fontSize: '0.8rem', background: 'var(--market-surface-variant)', border: '1px solid var(--market-border)' }}
+              >
+                ✏️ Edit Total
+              </button>
+            )}
+            {safeCart.length > 0 && (
+              <button
+                className="btn btn-ghost btn-sm text-muted"
+                onClick={resetCartPrices}
+                title="Reset line item prices to standard rates"
+                style={{ padding: '2px 6px', fontSize: '0.75rem' }}
+              >
+                🔄 Reset
+              </button>
+            )}
+          </div>
+          <span style={{ fontSize: '1.4rem', fontWeight: '900', color: 'var(--market-green-primary)' }}>
+            {formatCents(totalCharged)}
+          </span>
         </div>
       </div>
 

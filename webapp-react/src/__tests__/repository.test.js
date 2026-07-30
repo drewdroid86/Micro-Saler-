@@ -190,3 +190,47 @@ test('Supplier creation schema data structure persists correctly', () => {
   assert.equal(supplierRecord.notes, 'Na');
   assert.equal(supplierRecord.current_balance_cents, 0);
 });
+
+test('Overriding total transaction price scales cart line items proportionally to match target total', () => {
+  const cart = [
+    { pigment_id: 1, price_charged_cents: 3000 },
+    { pigment_id: 2, price_charged_cents: 2000 }
+  ];
+  const targetTotalCents = 4500; // $45.00 total override
+  const currentTotalCents = cart.reduce((sum, i) => sum + i.price_charged_cents, 0); // 5000
+
+  let assignedCents = 0;
+  const updatedCart = cart.map((item, index) => {
+    if (index === cart.length - 1) {
+      return { ...item, price_charged_cents: targetTotalCents - assignedCents };
+    } else {
+      const share = Math.round((item.price_charged_cents / currentTotalCents) * targetTotalCents);
+      assignedCents += share;
+      return { ...item, price_charged_cents: share };
+    }
+  });
+
+  assert.equal(updatedCart[0].price_charged_cents, 2700); // $27.00
+  assert.equal(updatedCart[1].price_charged_cents, 1800); // $18.00
+  const finalSum = updatedCart.reduce((sum, i) => sum + i.price_charged_cents, 0);
+  assert.equal(finalSum, 4500);
+});
+
+test('Partial cash and tab payment breakdown correctly allocates paid now vs tab balance', () => {
+  const totalSaleAmountCents = 6000; // $60.00
+  const paidNowCents = 2500; // $25.00 cash
+  const tabAmountCents = Math.max(0, totalSaleAmountCents - paidNowCents); // $35.00 tab
+
+  const payments = [
+    { payment_type: 'CASH', amount_cents: paidNowCents },
+    { payment_type: 'HOUSE_TAB', amount_cents: tabAmountCents }
+  ];
+
+  const totalPaymentsCents = payments.reduce((sum, p) => sum + p.amount_cents, 0);
+  assert.equal(totalPaymentsCents, totalSaleAmountCents);
+  assert.equal(tabAmountCents, 3500);
+
+  const initialCustomerBalance = 1000; // $10.00
+  const newCustomerBalance = initialCustomerBalance + tabAmountCents;
+  assert.equal(newCustomerBalance, 4500); // $45.00
+});

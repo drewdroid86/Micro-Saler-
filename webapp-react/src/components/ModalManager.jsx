@@ -4,6 +4,7 @@ import { formatCents, formatMgToGrams } from '../repository';
 import { CustomWeightModal } from './modals/CustomWeightModal';
 import { EditCartItemModal } from './modals/EditCartItemModal';
 import { BackupRestoreModal } from './modals/BackupRestoreModal';
+import { EditCartTotalModal } from './modals/EditCartTotalModal';
 
 const PRESET_TIERS = [
   { label: '¼g', weight_mg: 250 },
@@ -22,6 +23,7 @@ export const ModalManager = () => {
 
   const {
     modal,
+    openModal,
     closeModal,
     customers,
     suppliers,
@@ -32,6 +34,7 @@ export const ModalManager = () => {
     setSelectedPigment,
     isHandshakeOverride,
     setIsHandshakeOverride,
+    overrideCartTotal,
     repo,
     refreshAllData,
     showToast
@@ -101,6 +104,13 @@ export const ModalManager = () => {
   const [drawerTab, setDrawerTab] = useState('digital');
   const [digitalProvider, setDigitalProvider] = useState(null);
 
+  // Tab payment breakdown state
+  const [tabPayMode, setTabPayMode] = useState('FULL');
+  const [tabPaidNowInput, setTabPaidNowInput] = useState('');
+  const [tabPuttingOnTabInput, setTabPuttingOnTabInput] = useState('');
+  const [tabPaidType, setTabPaidType] = useState('CASH');
+  const [tabDigitalProvider, setTabDigitalProvider] = useState('Square');
+
   // Split payment state
   const [splitCashInput, setSplitCashInput] = useState('');
   const [splitDigitalInput, setSplitDigitalInput] = useState('');
@@ -108,6 +118,11 @@ export const ModalManager = () => {
   const [splitDigitalProvider, setSplitDigitalProvider] = useState('Square');
 
   const resetAllFormStates = useCallback(() => {
+    setTabPayMode('FULL');
+    setTabPaidNowInput('');
+    setTabPuttingOnTabInput('');
+    setTabPaidType('CASH');
+    setTabDigitalProvider('Square');
     setSplitCashInput('');
     setSplitDigitalInput('');
     setSplitTabInput('');
@@ -236,6 +251,10 @@ export const ModalManager = () => {
 
   if (modal.name === 'editCartItem') {
     return <EditCartItemModal />;
+  }
+
+  if (modal.name === 'editCartTotal') {
+    return <EditCartTotalModal />;
   }
 
   const safeCart = cart || [];
@@ -624,9 +643,61 @@ export const ModalManager = () => {
   };
 
   const handleTabPayment = async () => {
-    if (!selectedCustomer) return;
+    if (!selectedCustomer) {
+      showToast('Please select a customer for house tab payment', 'error');
+      return;
+    }
     const customerId = selectedCustomer.customer_id;
-    const payments = [{ payment_type: 'HOUSE_TAB', digital_provider: null, amount_cents: totalAmountCents, merchant_fee_cents: 0 }];
+    const payments = [];
+
+    if (tabPayMode === 'FULL') {
+      payments.push({
+        payment_type: 'HOUSE_TAB',
+        digital_provider: null,
+        amount_cents: totalAmountCents,
+        merchant_fee_cents: 0
+      });
+    } else {
+      const paidNowCents = Math.round((parseFloat(tabPaidNowInput) || 0) * 100);
+      if (paidNowCents < 0 || paidNowCents > totalAmountCents) {
+        showToast('Paid now amount must be between $0.00 and transaction total', 'error');
+        return;
+      }
+      const tabAmountCents = Math.max(0, totalAmountCents - paidNowCents);
+
+      if (paidNowCents > 0) {
+        if (tabPaidType === 'DIGITAL') {
+          const feeCents = Math.round((paidNowCents * 0.029) + 30);
+          payments.push({
+            payment_type: 'DIGITAL',
+            digital_provider: tabDigitalProvider,
+            amount_cents: paidNowCents,
+            merchant_fee_cents: feeCents
+          });
+        } else {
+          payments.push({
+            payment_type: 'CASH',
+            digital_provider: null,
+            amount_cents: paidNowCents,
+            merchant_fee_cents: 0
+          });
+        }
+      }
+
+      if (tabAmountCents > 0) {
+        payments.push({
+          payment_type: 'HOUSE_TAB',
+          digital_provider: null,
+          amount_cents: tabAmountCents,
+          merchant_fee_cents: 0
+        });
+      }
+    }
+
+    if (payments.length === 0) {
+      showToast('No payment specified', 'error');
+      return;
+    }
 
     try {
       await repo.completeSale(customerId, cart, payments, isHandshakeOverride);
@@ -635,7 +706,7 @@ export const ModalManager = () => {
       setSelectedPigment(null);
       await refreshAllData();
       handleClose();
-      showToast('Charged to house tab!', 'success');
+      showToast('Sale completed & tab updated!', 'success');
     } catch (error) {
       showToast('Tab charge failed: ' + error.message, 'error');
     }
@@ -698,7 +769,18 @@ export const ModalManager = () => {
       <div className="modal-overlay active" onClick={handleClose}>
         <div className="payment-drawer active" key={modalKey} onClick={e => e.stopPropagation()}>
           <div className="flex-between mb-md">
-            <h2>Payment: {formatCents(totalAmountCents)}</h2>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold' }}>
+                Payment Total: {formatCents(totalAmountCents)}
+              </h2>
+              <button
+                className="btn btn-ghost btn-sm text-primary"
+                style={{ padding: '2px 6px', fontSize: '0.8rem', marginTop: '2px' }}
+                onClick={() => { handleClose(); openModal('editCartTotal'); }}
+              >
+                ✏️ Edit Transaction Total
+              </button>
+            </div>
             <button className="modal-close" onClick={handleClose}>&times;</button>
           </div>
 
@@ -709,7 +791,7 @@ export const ModalManager = () => {
                 className={`payment-mode-tab ${drawerTab === t ? 'active' : ''}`}
                 onClick={() => setDrawerTab(t)}
               >
-                {t === 'tab' ? 'HOUSE TAB' : t.toUpperCase()}
+                {t === 'tab' ? 'HOUSE TAB & PARTIAL' : t.toUpperCase()}
               </button>
             ))}
           </div>
@@ -747,21 +829,226 @@ export const ModalManager = () => {
           {drawerTab === 'tab' && (
             <div>
               {!selectedCustomer ? (
-                <div className="text-center text-error p-md">Please select a customer first.</div>
+                <div className="card card-static p-md mb-md" style={{ border: '1px dashed var(--market-border)' }}>
+                  <label className="form-label mb-xs">Select Customer for House Tab:</label>
+                  <select
+                    className="form-select"
+                    value=""
+                    onChange={e => {
+                      const c = customers.find(cust => String(cust.customer_id) === String(e.target.value));
+                      if (c) setSelectedCustomer(c);
+                    }}
+                  >
+                    <option value="">-- Choose Customer --</option>
+                    {customers.map(c => (
+                      <option key={c.customer_id} value={c.customer_id}>
+                        👤 {c.name} (Bal: {formatCents(c.current_balance_cents)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               ) : (
                 <div>
                   <div className="card card-static p-md mb-md">
-                    <h3 className="title-medium mb-sm">{selectedCustomer.name}</h3>
-                    <div className="flex-between body-medium mb-xs">
-                      <span>Current Balance:</span> <strong>{formatCents(selectedCustomer.current_balance_cents)}</strong>
+                    <div className="flex-between mb-xs">
+                      <h3 className="title-medium" style={{ margin: 0 }}>👤 {selectedCustomer.name}</h3>
+                      <button
+                        className="btn btn-ghost btn-sm text-muted"
+                        onClick={() => setSelectedCustomer(null)}
+                        style={{ fontSize: '0.75rem', padding: '2px 6px' }}
+                      >
+                        Change Customer
+                      </button>
                     </div>
-                    <div className="flex-between body-medium mb-xs">
+                    <div className="flex-between body-small mb-xs">
+                      <span>Current Tab Balance:</span> <strong>{formatCents(selectedCustomer.current_balance_cents)}</strong>
+                    </div>
+                    <div className="flex-between body-small mb-xs">
                       <span>Credit Limit:</span> <strong>{formatCents(selectedCustomer.credit_limit_cents)}</strong>
                     </div>
-                    <div className={`flex-between body-medium ${selectedCustomer.current_balance_cents + totalAmountCents > selectedCustomer.credit_limit_cents ? 'text-error' : 'text-success'}`}>
-                      <span>New Balance:</span> <strong>{formatCents(selectedCustomer.current_balance_cents + totalAmountCents)}</strong>
-                    </div>
                   </div>
+
+                  <div className="payment-mode-tabs mb-md" style={{ borderBottom: '1px solid var(--market-border)' }}>
+                    <button
+                      type="button"
+                      className={`payment-mode-tab ${tabPayMode === 'FULL' ? 'active' : ''}`}
+                      onClick={() => setTabPayMode('FULL')}
+                    >
+                      Put 100% on Tab
+                    </button>
+                    <button
+                      type="button"
+                      className={`payment-mode-tab ${tabPayMode === 'PARTIAL' ? 'active' : ''}`}
+                      onClick={() => setTabPayMode('PARTIAL')}
+                    >
+                      Pay Part Now + Rest on Tab
+                    </button>
+                  </div>
+
+                  {tabPayMode === 'PARTIAL' && (() => {
+                    const totalD = totalAmountCents / 100;
+                    const paidNowCents = tabPaidNowInput !== ''
+                      ? Math.round((parseFloat(tabPaidNowInput) || 0) * 100)
+                      : Math.max(0, totalAmountCents - Math.round((parseFloat(tabPuttingOnTabInput) || 0) * 100));
+
+                    const tabAmountCents = tabPuttingOnTabInput !== ''
+                      ? Math.round((parseFloat(tabPuttingOnTabInput) || 0) * 100)
+                      : Math.max(0, totalAmountCents - paidNowCents);
+
+                    const newBalanceCents = (selectedCustomer.current_balance_cents || 0) + tabAmountCents;
+                    const isOverLimit = newBalanceCents > (selectedCustomer.credit_limit_cents || 0);
+
+                    const handlePaidNowChange = (val) => {
+                      setTabPaidNowInput(val);
+                      const pD = parseFloat(val);
+                      if (!isNaN(pD) && pD >= 0) {
+                        const remainingTab = Math.max(0, totalD - pD);
+                        setTabPuttingOnTabInput(remainingTab.toFixed(2));
+                      }
+                    };
+
+                    const handlePuttingOnTabChange = (val) => {
+                      setTabPuttingOnTabInput(val);
+                      const tD = parseFloat(val);
+                      if (!isNaN(tD) && tD >= 0) {
+                        const remainingPaid = Math.max(0, totalD - tD);
+                        setTabPaidNowInput(remainingPaid.toFixed(2));
+                      }
+                    };
+
+                    return (
+                      <div className="mb-md">
+                        <div className="form-group mb-sm">
+                          <label className="form-label">🏷️ 1. Total Price of Transaction ($)</label>
+                          <div className="flex-center gap-xs">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              className="form-input"
+                              value={(totalAmountCents / 100).toFixed(2)}
+                              onChange={e => {
+                                const newTot = parseFloat(e.target.value);
+                                if (!isNaN(newTot) && newTot >= 0) {
+                                  overrideCartTotal(Math.round(newTot * 100));
+                                }
+                              }}
+                              style={{ fontWeight: 'bold', fontSize: '1.05rem' }}
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => openModal('editCartTotal')}
+                              style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                            >
+                              ✏️ Quick Round
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="form-group mb-sm">
+                          <label className="form-label">💵 / 💳 2. What They Are Paying Now ($)</label>
+                          <div className="flex-center gap-xs">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              max={(totalAmountCents / 100).toFixed(2)}
+                              className="form-input"
+                              placeholder="0.00"
+                              value={tabPaidNowInput}
+                              onChange={e => handlePaidNowChange(e.target.value)}
+                              style={{ fontWeight: 'bold' }}
+                            />
+                            <div className="flex-center gap-xs">
+                              <button
+                                type="button"
+                                className={`btn btn-sm ${tabPaidType === 'CASH' ? 'btn-primary' : 'btn-ghost'}`}
+                                onClick={() => setTabPaidType('CASH')}
+                              >
+                                💵 Cash
+                              </button>
+                              <button
+                                type="button"
+                                className={`btn btn-sm ${tabPaidType === 'DIGITAL' ? 'btn-primary' : 'btn-ghost'}`}
+                                onClick={() => setTabPaidType('DIGITAL')}
+                              >
+                                💳 Digital
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {tabPaidType === 'DIGITAL' && (
+                          <div className="form-group mb-sm">
+                            <label className="form-label">Digital Provider</label>
+                            <select
+                              className="form-select"
+                              value={tabDigitalProvider}
+                              onChange={e => setTabDigitalProvider(e.target.value)}
+                            >
+                              <option value="Square">Square</option>
+                              <option value="Venmo">Venmo</option>
+                              <option value="Zelle">Zelle</option>
+                            </select>
+                          </div>
+                        )}
+
+                        <div className="form-group mb-sm">
+                          <label className="form-label">📑 3. What They Are Putting on House Tab ($)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max={(totalAmountCents / 100).toFixed(2)}
+                            className="form-input"
+                            placeholder="0.00"
+                            value={tabPuttingOnTabInput}
+                            onChange={e => handlePuttingOnTabChange(e.target.value)}
+                            style={{ fontWeight: 'bold', color: 'var(--market-warning)' }}
+                          />
+                        </div>
+
+                        <div className="card card-static p-sm mb-sm" style={{ background: 'var(--market-surface-variant)' }}>
+                          <div className="flex-between body-small mb-xs">
+                            <span>Transaction Total:</span>
+                            <strong>{formatCents(totalAmountCents)}</strong>
+                          </div>
+                          <div className="flex-between body-small mb-xs text-success">
+                            <span>Paying Now ({tabPaidType}):</span>
+                            <strong>-{formatCents(paidNowCents)}</strong>
+                          </div>
+                          <div className="flex-between body-small mb-xs text-warning">
+                            <span>Putting on House Tab:</span>
+                            <strong>+{formatCents(tabAmountCents)}</strong>
+                          </div>
+                          <div className={`flex-between body-small font-weight-bold ${isOverLimit ? 'text-error' : 'text-success'}`}>
+                            <span>Customer New Tab Balance:</span>
+                            <span>{formatCents(newBalanceCents)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {tabPayMode === 'FULL' && (() => {
+                    const tabAmountCents = totalAmountCents;
+                    const newBalanceCents = (selectedCustomer.current_balance_cents || 0) + tabAmountCents;
+                    const isOverLimit = newBalanceCents > (selectedCustomer.credit_limit_cents || 0);
+
+                    return (
+                      <div className="card card-static p-sm mb-md" style={{ background: 'var(--market-surface-variant)' }}>
+                        <div className="flex-between body-small mb-xs text-warning">
+                          <span>Putting 100% on House Tab:</span>
+                          <strong>+{formatCents(tabAmountCents)}</strong>
+                        </div>
+                        <div className={`flex-between body-small font-weight-bold ${isOverLimit ? 'text-error' : 'text-success'}`}>
+                          <span>Customer New Tab Balance:</span>
+                          <span>{formatCents(newBalanceCents)}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <div className="form-group mb-md">
                     <label className="flex-center gap-sm" style={{ justifyContent: 'flex-start', cursor: 'pointer' }}>
@@ -776,7 +1063,9 @@ export const ModalManager = () => {
                   </div>
 
                   <button className="btn btn-warning btn-block" onClick={handleTabPayment}>
-                    Charge to Tab
+                    {tabPayMode === 'FULL'
+                      ? `Charge ${formatCents(totalAmountCents)} to Tab`
+                      : `Complete Sale (Pay ${formatCents(Math.round((parseFloat(tabPaidNowInput) || 0) * 100))} + Charge ${formatCents(Math.max(0, totalAmountCents - Math.round((parseFloat(tabPaidNowInput) || 0) * 100)))} to Tab)`}
                   </button>
                 </div>
               )}

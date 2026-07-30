@@ -322,8 +322,62 @@ export const PosProvider = ({ children }) => {
     }));
   };
 
-  const clearCart = () => {
-    setCart([]);
+  const overrideCartTotal = (newTotalCents) => {
+    setCart(prevCart => {
+      if (!prevCart || prevCart.length === 0) return prevCart;
+      const currentTotalCents = prevCart.reduce((sum, item) => sum + (item.price_charged_cents || 0), 0);
+      if (currentTotalCents <= 0) return prevCart;
+
+      const targetTotal = Math.max(0, Math.round(newTotalCents));
+      let assignedCents = 0;
+
+      return prevCart.map((item, index) => {
+        if (index === prevCart.length - 1) {
+          const finalItemPrice = Math.max(0, targetTotal - assignedCents);
+          return { ...item, price_charged_cents: finalItemPrice };
+        } else {
+          const itemShare = Math.max(0, Math.round((item.price_charged_cents / currentTotalCents) * targetTotal));
+          assignedCents += itemShare;
+          return { ...item, price_charged_cents: itemShare };
+        }
+      });
+    });
+  };
+
+  const resetCartPrices = () => {
+    setCart(prevCart => {
+      if (!prevCart) return [];
+      return prevCart.map(item => {
+        const pigment = item.pigment;
+        const validWeightMg = item.weight_mg;
+        if (!pigment) return item;
+
+        let priceChargedCents = null;
+        const matchingTier = priceTiers.find(
+          t => Number(t.pigment_id) === Number(pigment.pigment_id) && Number(t.weight_mg) === Number(validWeightMg)
+        );
+
+        if (matchingTier) {
+          const tierPrice = pricingMode === 'RETAIL'
+            ? matchingTier.retail_price_cents
+            : matchingTier.wholesale_price_cents;
+
+          if (tierPrice !== null && tierPrice !== undefined && !isNaN(tierPrice) && Number(tierPrice) > 0) {
+            priceChargedCents = Number(tierPrice);
+          }
+        }
+
+        if (priceChargedCents === null) {
+          const pricePerGramCents = getEffectivePricePerGramCents(pigment, validWeightMg, pricingMode);
+          priceChargedCents = Math.round((validWeightMg / 1000) * pricePerGramCents) + (pigment.default_pkg_cents || 0);
+        }
+
+        return {
+          ...item,
+          price_charged_cents: priceChargedCents
+        };
+      });
+    });
   };
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -433,6 +487,8 @@ export const PosProvider = ({ children }) => {
     removeFromCart,
     updateCartItem,
     editCartItem,
+    overrideCartTotal,
+    resetCartPrices,
     clearCart,
     quickCollectCash,
     exportBackup,
