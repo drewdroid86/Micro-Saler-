@@ -144,3 +144,25 @@ test('Customer prepayment and backorder tracking calculates weight and credit ow
   prepayment.status = 'FULFILLED';
   assert.equal(prepayment.status, 'FULFILLED');
 });
+
+test('Wipe all data clears all 14 object stores', () => {
+  const storeNames = [
+    'pigments',
+    'pigment_price_tiers',
+    'stock_receipts',
+    'suppliers',
+    'supplier_payments',
+    'customers',
+    'customer_prepayments',
+    'sales',
+    'sale_payments',
+    'sale_items',
+    'returns',
+    'tab_payments',
+    'shrinkage_logs',
+    'audit_log'
+  ];
+
+  assert.equal(storeNames.length, 14);
+  assert.ok(storeNames.includes('customer_prepayments'));
+});

@@ -248,6 +248,29 @@ export class PosRepository {
     return true;
   }
 
+  async wipeAllData() {
+    const storeNames = [
+      'pigments',
+      'pigment_price_tiers',
+      'stock_receipts',
+      'suppliers',
+      'supplier_payments',
+      'customers',
+      'customer_prepayments',
+      'sales',
+      'sale_payments',
+      'sale_items',
+      'returns',
+      'tab_payments',
+      'shrinkage_logs',
+      'audit_log'
+    ];
+    for (const name of storeNames) {
+      await this.db.clearStore(name);
+    }
+    return true;
+  }
+
   async logShrinkage(pigmentId, mgLost, reason) {
     const pigment = await this.db.getById('pigments', Number(pigmentId));
     if (!pigment) throw new Error(`Pigment ${pigmentId} not found`);

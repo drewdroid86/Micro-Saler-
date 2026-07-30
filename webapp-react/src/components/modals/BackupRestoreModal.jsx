@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { usePos } from '../../context/PosContext';
 
 export const BackupRestoreModal = () => {
-  const { closeModal, exportBackup, importBackup, showToast } = usePos();
+  const { closeModal, exportBackup, importBackup, showToast, repo, refreshAllData } = usePos();
 
   const [selectedFile, setSelectedFile] = useState(null);
   const [parsedBackup, setParsedBackup] = useState(null);
@@ -119,6 +119,32 @@ export const BackupRestoreModal = () => {
             style={{ width: '100%', display: 'inline-flex', justifyContent: 'center', alignItems: 'center', gap: '8px' }}
           >
             <span>{isImporting ? '⏳ Restoring...' : '📤 Overwrite & Restore Ledger'}</span>
+          </button>
+        </div>
+
+        {/* Wipe Data Section */}
+        <div style={{ background: 'rgba(239, 68, 68, 0.08)', padding: '16px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+          <h3 style={{ margin: '0 0 8px 0', fontSize: '1.1rem', color: 'var(--market-error)' }}>🗑️ Clear All Current Data</h3>
+          <p className="body-medium text-muted" style={{ margin: '0 0 12px 0' }}>
+            Completely wipe all inventory items, sales records, customer house tabs, supplier liabilities, and audit logs to start with a fresh database.
+          </p>
+          <button
+            className="btn btn-danger"
+            onClick={async () => {
+              if (window.confirm('⚠️ ARE YOU SURE? This will permanently delete all current data (pigments, sales, customers, suppliers) from local storage!')) {
+                try {
+                  await repo.wipeAllData();
+                  await refreshAllData();
+                  closeModal();
+                  showToast('All app data wiped successfully! App is now clean.', 'success');
+                } catch (err) {
+                  showToast('Wipe failed: ' + err.message, 'error');
+                }
+              }
+            }}
+            style={{ width: '100%', display: 'inline-flex', justifyContent: 'center', alignItems: 'center', gap: '8px' }}
+          >
+            <span>🗑️ Wipe All App Data & Start Fresh</span>
           </button>
         </div>
 
