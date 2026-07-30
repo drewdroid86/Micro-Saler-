@@ -33,7 +33,8 @@ export default class MicroSalerDB {
         this._createStores(db);
       };
 
-      request.onsuccess = async (event) => {
+      request.onsuccess = (event) => {
+        resolved = true;
         this.db = event.target.result;
         this.db.onversionchange = () => {
           console.warn('Database version upgrade detected from another tab. Closing connection and reloading...');
@@ -46,13 +47,8 @@ export default class MicroSalerDB {
           }
         };
         if (navigator.storage && navigator.storage.persist) {
-          try {
-            await navigator.storage.persist();
-          } catch (e) {
-            console.warn('Storage persistence request failed:', e);
-          }
+          navigator.storage.persist().catch(e => console.warn('Storage persistence request failed:', e));
         }
-        await this.seedInitialData();
         resolve(this);
       };
 
