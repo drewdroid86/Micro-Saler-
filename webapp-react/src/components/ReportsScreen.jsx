@@ -9,6 +9,7 @@ export const ReportsScreen = () => {
     customers,
     suppliers,
     shrinkageLogs,
+    customerPrepayments,
     pigments,
     openModal
   } = usePos();
@@ -19,20 +20,16 @@ export const ReportsScreen = () => {
   const filterTimestamp = useMemo(() => {
     const now = new Date();
     if (timeRange === 'TODAY') {
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-      return startOfDay;
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     }
     if (timeRange === 'WEEK') {
-      const sevenDaysAgo = now.getTime() - (7 * 24 * 60 * 60 * 1000);
-      return sevenDaysAgo;
+      return now.getTime() - (7 * 24 * 60 * 60 * 1000);
     }
     if (timeRange === 'MONTH') {
-      const thirtyDaysAgo = now.getTime() - (30 * 24 * 60 * 60 * 1000);
-      return thirtyDaysAgo;
+      return now.getTime() - (30 * 24 * 60 * 60 * 1000);
     }
     if (timeRange === 'YTD') {
-      const startOfYear = new Date(now.getFullYear(), 0, 1).getTime();
-      return startOfYear;
+      return new Date(now.getFullYear(), 0, 1).getTime();
     }
     return 0; // ALL
   }, [timeRange]);
@@ -44,9 +41,14 @@ export const ReportsScreen = () => {
     const safeCustomers = customers || [];
     const safeSuppliers = suppliers || [];
     const safePigments = pigments || [];
+    const safePrepayments = customerPrepayments || [];
 
-    const filteredSales = safeSales.filter(s => (s.created_at || 0) >= filterTimestamp);
-    const completedSales = filteredSales.filter(s => s.status === 'COMPLETED');
+    const filteredSales = safeSales.filter(s => {
+      const ts = s.created_at || s.timestamp || s.date || 0;
+      return filterTimestamp === 0 || ts >= filterTimestamp;
+    });
+
+    const completedSales = filteredSales.filter(s => s.status === 'COMPLETED' || !s.status || s.status === 'PAID');
     const voidedSales = filteredSales.filter(s => s.status === 'VOIDED');
 
     // Gross Revenue
@@ -60,16 +62,18 @@ export const ReportsScreen = () => {
     const grossMarginPct = grossRevenueCents > 0 ? Math.round((grossProfitCents / grossRevenueCents) * 100) : 0;
 
     // Shrinkage Loss in selected period
-    const filteredShrinkage = safeShrinkageLogs.filter(log => (log.created_at || 0) >= filterTimestamp);
+    const filteredShrinkage = safeShrinkageLogs.filter(log => {
+      const ts = log.created_at || log.timestamp || 0;
+      return filterTimestamp === 0 || ts >= filterTimestamp;
+    });
     const shrinkageLossCents = filteredShrinkage.reduce((sum, log) => sum + (log.cogs_loss_cents || 0), 0);
 
-    // Estimated Merchant Fees (~2.9% + 30c on digital portion)
+    // Estimated Merchant Fees (~1.5% average across tender types)
     const estimatedMerchantFeesCents = completedSales.reduce((sum, s) => {
-      // Rough estimate of 1.5% across transactions
       return sum + Math.round((s.total_amount_cents || 0) * 0.015);
     }, 0);
 
-    // Net Profit
+    // Net Operating Profit
     const netProfitCents = grossProfitCents - shrinkageLossCents - estimatedMerchantFeesCents;
     const netMarginPct = grossRevenueCents > 0 ? Math.round((netProfitCents / grossRevenueCents) * 100) : 0;
 
@@ -77,9 +81,14 @@ export const ReportsScreen = () => {
     const arCustomers = safeCustomers.filter(c => (c.current_balance_cents || 0) > 0);
     const totalArCents = arCustomers.reduce((sum, c) => sum + (c.current_balance_cents || 0), 0);
 
-    // Accounts Payable (What I Owe) - Suppliers with balance > 0
+    // Accounts Payable (What I Owe Suppliers) - Suppliers with balance > 0
     const apSuppliers = safeSuppliers.filter(s => (s.current_balance_cents || 0) > 0);
     const totalApCents = apSuppliers.reduce((sum, s) => sum + (s.current_balance_cents || 0), 0);
+
+    // Customer Prepayments & Backorder Liabilities (Owed to Customers)
+    const activePrepayments = safePrepayments.filter(p => p.status !== 'FULFILLED');
+    const totalPrepaymentCreditCents = activePrepayments.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
+    const totalPrepaymentWeightMg = activePrepayments.reduce((sum, p) => sum + (p.weight_mg || 0), 0);
 
     // Inventory Valuation
     const totalInventoryMg = safePigments.reduce((sum, p) => sum + (p.stock_mg || 0), 0);
@@ -105,11 +114,14 @@ export const ReportsScreen = () => {
       totalArCents,
       apSuppliers,
       totalApCents,
+      activePrepayments,
+      totalPrepaymentCreditCents,
+      totalPrepaymentWeightMg,
       totalInventoryMg,
       totalCostBasisCents,
       totalRetailValueCents
     };
-  }, [sales, shrinkageLogs, customers, suppliers, pigments, filterTimestamp]);
+  }, [sales, shrinkageLogs, customers, suppliers, pigments, customerPrepayments, filterTimestamp]);
 
   return (
     <div id="reports-screen">
@@ -176,13 +188,13 @@ export const ReportsScreen = () => {
         </div>
 
         {/* What I Owe (Accounts Payable) */}
-        <div className="card" style={{ borderColor: metrics.totalApCents > 0 ? 'var(--market-error)' : 'var(--market-border)' }}>
-          <div className="label-small text-muted">📤 What I Owe (Accounts Payable)</div>
-          <div className={`title-large ${metrics.totalApCents > 0 ? 'text-error' : ''}`} style={{ fontSize: '1.6rem', fontWeight: 'bold', margin: '4px 0' }}>
-            {formatCents(metrics.totalApCents)}
+        <div className="card" style={{ borderColor: (metrics.totalApCents > 0 || metrics.totalPrepaymentCreditCents > 0) ? 'var(--market-error)' : 'var(--market-border)' }}>
+          <div className="label-small text-muted">📤 What I Owe (Payables & Prepayments)</div>
+          <div className={`title-large ${(metrics.totalApCents > 0 || metrics.totalPrepaymentCreditCents > 0) ? 'text-error' : ''}`} style={{ fontSize: '1.6rem', fontWeight: 'bold', margin: '4px 0' }}>
+            {formatCents(metrics.totalApCents + metrics.totalPrepaymentCreditCents)}
           </div>
           <div className="body-small text-muted">
-            {metrics.apSuppliers.length} Supplier Balance(s) Owed
+            {metrics.apSuppliers.length} Supplier Tab(s) • {metrics.activePrepayments.length} Customer Backorder(s)
           </div>
         </div>
       </div>
@@ -190,7 +202,7 @@ export const ReportsScreen = () => {
       {/* Main Breakdown Section */}
       <div className="grid-2col mb-lg" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
         
-        {/* Profit & Loss Statement Statement Card */}
+        {/* Profit & Loss Statement Card */}
         <div className="card">
           <div className="card-header border-bottom pb-sm mb-md flex-between">
             <h3 className="title-medium">📈 Profit & Loss Statement (P&L)</h3>
@@ -266,6 +278,12 @@ export const ReportsScreen = () => {
               <span>Unrealized Inventory Gross Margin</span>
               <span>{formatCents(metrics.totalRetailValueCents - metrics.totalCostBasisCents)}</span>
             </div>
+
+            {metrics.totalPrepaymentWeightMg > 0 && (
+              <div className="p-xs body-small text-warning" style={{ background: 'var(--market-surface-variant)', borderRadius: '4px' }}>
+                📦 Backordered / Reserved Weight Owed to Customers: <strong>{formatMgToGrams(metrics.totalPrepaymentWeightMg)}</strong>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -308,28 +326,41 @@ export const ReportsScreen = () => {
         {/* Accounts Payable: What I Owe */}
         <div className="card">
           <div className="card-header border-bottom pb-sm mb-md flex-between">
-            <h3 className="title-medium">📤 What I Owe (Supplier Liabilities)</h3>
+            <h3 className="title-medium">📤 What I Owe (Suppliers & Prepayments)</h3>
             <button className="btn btn-ghost btn-sm text-primary" onClick={() => openModal('addSupplier')}>+ Add Supplier</button>
           </div>
 
-          {metrics.apSuppliers.length === 0 ? (
-            <div className="text-center p-md text-muted">No supplier debt outstanding. All restocks paid! 👍</div>
+          {metrics.apSuppliers.length === 0 && metrics.activePrepayments.length === 0 ? (
+            <div className="text-center p-md text-muted">No supplier debt or customer backorders outstanding. 👍</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {metrics.apSuppliers.map(s => (
                 <div key={s.supplier_id} className="flex-between p-sm" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px' }}>
                   <div>
-                    <div className="body-medium font-weight-bold">{s.name}</div>
+                    <div className="body-medium font-weight-bold">{s.name} (Supplier Tab)</div>
                     <div className="body-small text-muted">{s.phone_number || 'No phone'}</div>
                   </div>
                   <div className="flex-center gap-sm">
                     <div className="text-right">
                       <div className="body-medium font-weight-bold text-error">{formatCents(s.current_balance_cents)}</div>
-                      <div className="label-small text-muted">I Owe</div>
+                      <div className="label-small text-muted">Supplier Owed</div>
                     </div>
                     <button className="btn btn-warning btn-sm" onClick={() => openModal('paySupplier', s)}>
                       Pay
                     </button>
+                  </div>
+                </div>
+              ))}
+
+              {metrics.activePrepayments.map(p => (
+                <div key={p.prepayment_id} className="flex-between p-sm" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px' }}>
+                  <div>
+                    <div className="body-medium font-weight-bold">Customer Prepayment ({p.pigment_name || 'Credit'})</div>
+                    <div className="body-small text-muted">{p.weight_mg > 0 ? `Owed: ${formatMgToGrams(p.weight_mg)}` : 'Prepaid Credit'}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="body-medium font-weight-bold text-warning">{formatCents(p.amount_cents)}</div>
+                    <span className="badge badge-vip" style={{ fontSize: '10px' }}>{p.status}</span>
                   </div>
                 </div>
               ))}
