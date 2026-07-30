@@ -329,9 +329,18 @@ export const ModalManager = () => {
     const costD = parseFloat(pigmentCost || 0);
     const retailD = parseFloat(pigmentRetail || 0);
     const wholeD = parseFloat(pigmentWholesale || 0);
+    const paidDownD = parseFloat(restockPaidDown || 0);
 
     if (!pigmentName || retailD <= 0 || wholeD <= 0) {
       showToast('Missing required fields', 'error');
+      return;
+    }
+
+    const totalCostCents = Math.round(costD * 100);
+    const paidDownCents = Math.round(paidDownD * 100);
+
+    if (restockPaymentStatus === 'PARTIAL' && (paidDownCents <= 0 || paidDownCents >= totalCostCents)) {
+      showToast('Partial down payment must be greater than $0 and less than total cost', 'error');
       return;
     }
 
@@ -341,14 +350,18 @@ export const ModalManager = () => {
         color_code: pigmentColor,
         finish_type: pigmentFinish,
         stock_mg: Math.round(stockG * 1000),
-        total_cost_cents: Math.round(costD * 100),
+        total_cost_cents: totalCostCents,
         retail_price_per_gram_cents: Math.round(retailD * 100),
         wholesale_price_per_gram_cents: Math.round(wholeD * 100),
-        default_pkg_cents: 0
+        default_pkg_cents: 0,
+        supplier_name: restockSupplier,
+        supplier_id: restockSupplierId ? Number(restockSupplierId) : null,
+        payment_status: restockPaymentStatus,
+        paid_down_cents: paidDownCents
       });
       await refreshAllData();
       handleClose();
-      showToast('Pigment created', 'success');
+      showToast('Pigment created & initial stock purchase recorded!', 'success');
     } catch (e) {
       showToast(e.message, 'error');
     }
@@ -1089,9 +1102,76 @@ export const ModalManager = () => {
               <div className="form-group">
                 <input type="number" className="form-input" placeholder="Initial Stock (g)" value={pigmentStock} onChange={e => setPigmentStock(e.target.value)} min="0" step="1" />
               </div>
-              <div className="form-group">
+              <div className="form-group mb-sm">
                 <input type="number" className="form-input" placeholder="Initial Cost ($)" value={pigmentCost} onChange={e => setPigmentCost(e.target.value)} min="0" step="0.01" />
               </div>
+
+              {/* Initial Purchase Supplier & Payment Terms */}
+              <div className="form-group mb-sm">
+                <label className="form-label">Supplier / Vendor (Optional)</label>
+                <select
+                  className="form-select mb-xs"
+                  value={restockSupplierId}
+                  onChange={e => {
+                    const id = e.target.value;
+                    setRestockSupplierId(id);
+                    const selected = suppliers.find(s => String(s.supplier_id) === String(id));
+                    if (selected) setRestockSupplier(selected.name);
+                  }}
+                >
+                  <option value="">-- Choose Existing Supplier --</option>
+                  {suppliers.map(s => (
+                    <option key={s.supplier_id} value={s.supplier_id}>{s.name} (Bal: {formatCents(s.current_balance_cents)})</option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Or enter new supplier name..."
+                  value={restockSupplier}
+                  onChange={e => setRestockSupplier(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group mb-sm">
+                <label className="form-label">Initial Purchase Payment Option</label>
+                <select
+                  className="form-select"
+                  value={restockPaymentStatus}
+                  onChange={e => setRestockPaymentStatus(e.target.value)}
+                >
+                  <option value="PAID">💵 Paid Immediately (Cash / Digital / Transfer)</option>
+                  <option value="PARTIAL">💵 Partial Down Payment (Pay Down Now + Put Rest on Supplier Tab)</option>
+                  <option value="UNPAID_TAB">📑 Add Entire Amount to Supplier Tab (Pay Later)</option>
+                </select>
+              </div>
+
+              {restockPaymentStatus === 'PARTIAL' && (
+                <div className="form-group mb-md">
+                  <label className="form-label">Amount Paid Down Now ($)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={restockPaidDown}
+                    onChange={e => setRestockPaidDown(e.target.value)}
+                    step="0.01"
+                    min="0.01"
+                    placeholder="e.g. 30.00"
+                  />
+                  <div className="card card-static p-sm mt-xs" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px' }}>
+                    <div className="flex-between body-small mb-xs">
+                      <span>Paid Down Now:</span>
+                      <strong className="text-success">${(parseFloat(restockPaidDown) || 0).toFixed(2)}</strong>
+                    </div>
+                    <div className="flex-between body-small font-weight-bold">
+                      <span>Added to Supplier Tab (Owed):</span>
+                      <strong className="text-error">
+                        ${Math.max(0, (parseFloat(pigmentCost) || 0) - (parseFloat(restockPaidDown) || 0)).toFixed(2)}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="form-group">
                 <input type="number" className="form-input" placeholder="Retail Price/g ($)" value={pigmentRetail} onChange={e => setPigmentRetail(e.target.value)} min="0" step="0.01" />
               </div>

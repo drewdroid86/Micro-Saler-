@@ -479,7 +479,7 @@ export class PosRepository {
   }
 
   async createPigment(data) {
-    return await this.db.add('pigments', {
+    const pigmentId = await this.db.add('pigments', {
       name: data.name,
       color_code: data.color_code || '#888888',
       finish_type: data.finish_type || 'Mica Pearl',
@@ -491,6 +491,61 @@ export class PosRepository {
       is_archived: false,
       tier_pricing_json: data.tier_pricing_json || null,
     });
+
+    if (data.stock_mg > 0 || data.total_cost_cents > 0) {
+      let sId = data.supplier_id ? Number(data.supplier_id) : null;
+      if (!sId && data.supplier_name && data.supplier_name.trim()) {
+        const allSuppliers = await this.db.getAllSuppliers();
+        const existing = allSuppliers.find(s => s.name.toLowerCase() === data.supplier_name.trim().toLowerCase());
+        if (existing) {
+          sId = existing.supplier_id;
+        }
+      }
+
+      const totalCostCents = data.total_cost_cents || 0;
+      const paymentStatus = data.payment_status || 'PAID';
+      const paidDownCents = data.paid_down_cents || 0;
+
+      const safePaidDown = paymentStatus === 'PAID'
+        ? totalCostCents
+        : Math.min(totalCostCents, Math.max(0, paidDownCents || 0));
+
+      const unpaidTabCents = paymentStatus === 'PAID' ? 0 : Math.max(0, totalCostCents - safePaidDown);
+
+      if (unpaidTabCents > 0 && sId) {
+        await this.db.updateSupplierBalance(sId, unpaidTabCents);
+      }
+
+      const statusLabel = paymentStatus === 'PAID'
+        ? 'PAID'
+        : safePaidDown > 0
+          ? `PARTIAL ($${(safePaidDown / 100).toFixed(2)} Paid / $${(unpaidTabCents / 100).toFixed(2)} Owed)`
+          : 'UNPAID_TAB';
+
+      const receiptId = await this.db.add('stock_receipts', {
+        pigment_id: Number(pigmentId),
+        received_mg: data.stock_mg || 0,
+        total_cost_cents: totalCostCents,
+        paid_down_cents: safePaidDown,
+        unpaid_tab_cents: unpaidTabCents,
+        supplier_name: data.supplier_name || '',
+        supplier_id: sId,
+        payment_status: statusLabel,
+        received_at: Date.now(),
+      });
+
+      if (safePaidDown > 0 && sId && paymentStatus !== 'PAID') {
+        await this.db.add('supplier_payments', {
+          supplier_id: sId,
+          amount_cents: safePaidDown,
+          payment_type: 'DOWN_PAYMENT',
+          notes: `Initial stock purchase down payment for receipt #${receiptId}`,
+          created_at: Date.now(),
+        });
+      }
+    }
+
+    return pigmentId;
   }
 
   async createCustomer(data) {

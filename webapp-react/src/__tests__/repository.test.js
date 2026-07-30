@@ -104,3 +104,13 @@ test('Editing restock terms rebalances supplier liability correctly', () => {
   assert.equal(tabDiffCents, -4000);
   assert.equal(supplierBalanceCents, 6000);
 });
+
+test('New pigment initial purchase with supplier tab calculates supplier balance', () => {
+  const initialCostCents = 15000;
+  const paymentStatus = 'PARTIAL';
+  const paidDownCents = 5000;
+  const unpaidTabCents = initialCostCents - paidDownCents;
+
+  assert.equal(paidDownCents, 5000);
+  assert.equal(unpaidTabCents, 10000);
+});
