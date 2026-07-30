@@ -173,6 +173,40 @@ export const PosProvider = ({ children }) => {
     };
   }, []);
 
+  const retryDbInit = async () => {
+    setLoading(true);
+    setLoadingError(null);
+    setIsDbBlocked(false);
+
+    try {
+      if (db && db.db) {
+        try { db.db.close(); } catch (e) {}
+      }
+      const database = new MicroSalerDB();
+      await database.init(() => {
+        setIsDbBlocked(true);
+      });
+      const repository = new PosRepository(database);
+
+      setDb(database);
+      setRepo(repository);
+
+      await refreshAllData(repository, database);
+      await checkStartupIntegrity(database);
+
+      const activeP = await database.getActivePigments();
+      if (activeP.length > 0) {
+        setSelectedPigment(activeP[0]);
+      }
+      showToast('Database reconnected successfully!', 'success');
+    } catch (e) {
+      console.error('Database retry error:', e);
+      setLoadingError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const addToCart = (pigment, weightMg, customPriceCents = null) => {
     if (!pigment) {
       showToast('Please select a pigment first.', 'error');
@@ -403,7 +437,8 @@ export const PosProvider = ({ children }) => {
     quickCollectCash,
     exportBackup,
     importBackup,
-    refreshAllData
+    refreshAllData,
+    retryDbInit
   }), [
     db, repo, loading, loadingError, isDbBlocked, currentTab, pigments, priceTiers,
     customers, suppliers, supplierPayments, stockReceipts, customerPrepayments, sales, saleItems, auditLogs,

@@ -15,12 +15,17 @@ export default class MicroSalerDB {
 
   async init(onBlockedCallback = null) {
     return new Promise((resolve, reject) => {
+      let resolved = false;
       const request = indexedDB.open(DB_NAME, DB_VERSION);
 
       request.onblocked = () => {
         console.warn('Database upgrade blocked by another open tab or Service Worker connection.');
         if (onBlockedCallback) onBlockedCallback();
-        reject(new Error('Database upgrade blocked by another open tab. Please close other tabs and reload.'));
+        setTimeout(() => {
+          if (!resolved) {
+            reject(new Error('Database upgrade blocked by another open tab. Please close other tabs and click Reload.'));
+          }
+        }, 2000);
       };
 
       request.onupgradeneeded = (event) => {

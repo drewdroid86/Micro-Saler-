@@ -13,19 +13,22 @@ import { ModalManager } from './components/ModalManager';
 import { Toast } from './components/Toast';
 
 export function App() {
-  const { currentTab, loading, loadingError, isDbBlocked } = usePos();
+  const { currentTab, loading, loadingError, isDbBlocked, retryDbInit } = usePos();
 
   if (loadingError || isDbBlocked) {
     return (
       <div className="flex-center" style={{ height: '100vh', flexDirection: 'column', padding: '24px', textAlign: 'center', backgroundColor: 'var(--market-bg, #121212)', color: 'var(--market-text, #ffffff)' }}>
         <h2 style={{ color: 'var(--market-error, #ef4444)', marginBottom: '12px' }}>Database Upgrade Notice</h2>
-        <p style={{ maxWidth: '420px', marginBottom: '24px', color: 'var(--market-text-secondary, #9e9e9e)', lineHeight: '1.5', fontSize: '0.95rem' }}>
+        <p style={{ maxWidth: '440px', marginBottom: '24px', color: 'var(--market-text-secondary, #9e9e9e)', lineHeight: '1.5', fontSize: '0.95rem' }}>
           {isDbBlocked
-            ? 'A database update is pending. Please close any other open tabs or instances of this app and click Reload.'
+            ? 'A database update is pending. Close any other open tabs of this app, or click Auto-Fix to reconnect.'
             : (loadingError || 'Database failed to initialize.')}
         </p>
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
-          <button className="btn btn-primary" onClick={() => window.location.reload()}>
+          <button className="btn btn-primary" onClick={retryDbInit}>
+            ⚡ Auto-Fix & Retry Connection
+          </button>
+          <button className="btn btn-secondary" onClick={() => window.location.reload()}>
             🔄 Reload Page
           </button>
           <button
