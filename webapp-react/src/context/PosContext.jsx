@@ -380,6 +380,10 @@ export const PosProvider = ({ children }) => {
     });
   };
 
+  const clearCart = () => {
+    setCart([]);
+  };
+
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const quickCollectCash = async () => {
