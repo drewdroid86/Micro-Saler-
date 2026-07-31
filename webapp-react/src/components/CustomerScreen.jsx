@@ -58,7 +58,17 @@ export const CustomerScreen = () => {
                   <div className="customer-name">{c.name}</div>
                   <div className="customer-phone">{c.phone_number || c.phone || 'No phone'}</div>
                 </div>
-                <span className={`badge ${badgeClass}`}>{c.trust_status}</span>
+                <div className="flex-center gap-xs">
+                  <span className={`badge ${badgeClass}`}>{c.trust_status}</span>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ padding: '2px 6px', fontSize: '12px' }}
+                    onClick={() => openModal('editCustomer', c)}
+                    title="Edit Customer Profile"
+                  >
+                    ✏️ Edit
+                  </button>
+                </div>
               </div>
 
               <div>

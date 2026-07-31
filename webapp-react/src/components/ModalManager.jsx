@@ -243,6 +243,13 @@ export const ModalManager = () => {
     if (modal.name === 'returnItem' && modal.payload?.saleItem) {
       setReturnWeight((modal.payload.saleItem.weight_mg / 1000).toFixed(1));
     }
+
+    if (modal.name === 'editCustomer' && modal.payload) {
+      setCustName(modal.payload.name || '');
+      setCustPhone(modal.payload.phone_number || modal.payload.phone || '');
+      setCustLimit(modal.payload.credit_limit_cents !== undefined && modal.payload.credit_limit_cents !== null ? (modal.payload.credit_limit_cents / 100).toString() : '25');
+      setCustStatus(modal.payload.trust_status || 'GOOD_STANDING');
+    }
   }, [modal.name, modal.payload, resetAllFormStates]);
 
   if (!modal.name) return null;
@@ -485,6 +492,28 @@ export const ModalManager = () => {
       await refreshAllData();
       handleClose();
       showToast('Customer created', 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const handleEditCustomer = async () => {
+    if (!custName || !custName.trim()) {
+      showToast('Name is required', 'error');
+      return;
+    }
+    const limitD = parseFloat(custLimit || 0);
+    try {
+      await repo.updateCustomer({
+        ...modal.payload,
+        name: custName.trim(),
+        phone_number: custPhone || '',
+        credit_limit_cents: Math.round(limitD * 100),
+        trust_status: custStatus
+      });
+      await refreshAllData();
+      handleClose();
+      showToast('Customer profile updated successfully!', 'success');
     } catch (e) {
       showToast(e.message, 'error');
     }
@@ -1758,6 +1787,42 @@ export const ModalManager = () => {
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
               <button className="btn btn-primary" onClick={handleAddCustomer}>Add Customer</button>
+            </div>
+          </div>
+        )}
+
+        {/* Edit Customer Profile */}
+        {modal.name === 'editCustomer' && (
+          <div>
+            <div className="modal-header">
+              <h2>Edit Customer Profile</h2>
+              <button className="modal-close" onClick={handleClose}>&times;</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group mb-sm">
+                <label className="form-label">Full Name *</label>
+                <input type="text" className="form-input" placeholder="Full Name" value={custName} onChange={e => setCustName(e.target.value)} />
+              </div>
+              <div className="form-group mb-sm">
+                <label className="form-label">Phone Number</label>
+                <input type="text" className="form-input" placeholder="Phone Number" value={custPhone} onChange={e => setCustPhone(e.target.value)} />
+              </div>
+              <div className="form-group mb-sm">
+                <label className="form-label">Credit Limit ($)</label>
+                <input type="number" className="form-input" placeholder="Credit Limit ($)" value={custLimit} onChange={e => setCustLimit(e.target.value)} min="0" step="1" />
+              </div>
+              <div className="form-group mb-sm">
+                <label className="form-label">Trust Status</label>
+                <select className="form-select" value={custStatus} onChange={e => setCustStatus(e.target.value)}>
+                  <option value="GOOD_STANDING">Good Standing</option>
+                  <option value="VIP">VIP</option>
+                  <option value="PAUSED">Paused</option>
+                </select>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleEditCustomer}>Save Changes</button>
             </div>
           </div>
         )}
