@@ -119,6 +119,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_1_4 = object : Migration(1, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_3_4.migrate(db)
+            }
+        }
+
+        val MIGRATION_2_4 = object : Migration(2, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_3_4.migrate(db)
+            }
+        }
+
         fun getDatabase(context: Context, scope: CoroutineScope): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -127,7 +139,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "micro_saler_database"
                 )
                 .addCallback(DatabaseCallback(appScope))
-                .addMigrations(MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_4, MIGRATION_2_4, MIGRATION_3_4)
                 .build()
                 INSTANCE = instance
                 instance
