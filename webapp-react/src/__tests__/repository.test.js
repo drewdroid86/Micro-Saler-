@@ -4,7 +4,9 @@ import {
   formatCents,
   formatMgToGrams,
   formatMgToOz,
-  getEffectivePricePerGramCents
+  getEffectivePricePerGramCents,
+  validateCompletedSale,
+  APPROVED_PAYMENT_TYPES
 } from '../repository.js';
 
 test('formatCents converts integer cents to formatted dollar string', () => {
@@ -279,4 +281,86 @@ test('Data integrity check identifies payment total mismatches and auto-repairs 
   });
 
   assert.equal(postRepairMismatches.length, 0);
+});
+
+test('validateCompletedSale accepts valid sales with matching payments', () => {
+  const validSale = {
+    sale: { total_amount_cents: 2500 },
+    items: [{ pigment_id: 1, price_charged_cents: 2500 }],
+    payments: [{ payment_type: 'CASH', amount_cents: 2500 }]
+  };
+  const res = validateCompletedSale(validSale);
+  assert.equal(res.isValid, true);
+  assert.equal(res.errors.length, 0);
+});
+
+test('validateCompletedSale accepts valid split payment matching exact sale total', () => {
+  const splitSale = {
+    sale: { total_amount_cents: 5000 },
+    items: [{ pigment_id: 1, price_charged_cents: 5000 }],
+    payments: [
+      { payment_type: 'CASH', amount_cents: 2000 },
+      { payment_type: 'DIGITAL', digital_provider: 'Square', amount_cents: 3000 }
+    ]
+  };
+  const res = validateCompletedSale(splitSale);
+  assert.equal(res.isValid, true);
+});
+
+test('validateCompletedSale rejects payment total mismatch', () => {
+  const mismatchedSale = {
+    sale: { total_amount_cents: 5000 },
+    items: [{ pigment_id: 1, price_charged_cents: 5000 }],
+    payments: [{ payment_type: 'CASH', amount_cents: 4999 }]
+  };
+  const res = validateCompletedSale(mismatchedSale);
+  assert.equal(res.isValid, false);
+  assert.ok(res.errors.some(e => e.includes('does not match sale total')));
+});
+
+test('validateCompletedSale rejects zero, negative, NaN, decimal, and missing payment amounts', () => {
+  assert.equal(validateCompletedSale({
+    sale: { total_amount_cents: 0 },
+    items: [{ price_charged_cents: 0 }],
+    payments: []
+  }).isValid, false);
+
+  assert.equal(validateCompletedSale({
+    sale: { total_amount_cents: 1000 },
+    items: [{ price_charged_cents: 1000 }],
+    payments: [{ payment_type: 'CASH', amount_cents: 0 }]
+  }).isValid, false);
+
+  assert.equal(validateCompletedSale({
+    sale: { total_amount_cents: 1000 },
+    items: [{ price_charged_cents: 1000 }],
+    payments: [{ payment_type: 'CASH', amount_cents: -500 }]
+  }).isValid, false);
+
+  assert.equal(validateCompletedSale({
+    sale: { total_amount_cents: 1000 },
+    items: [{ price_charged_cents: 1000 }],
+    payments: [{ payment_type: 'CASH', amount_cents: 10.5 }]
+  }).isValid, false);
+
+  assert.equal(validateCompletedSale({
+    sale: { total_amount_cents: 1000 },
+    items: [{ price_charged_cents: 1000 }],
+    payments: [{ payment_type: 'CASH', amount_cents: NaN }]
+  }).isValid, false);
+});
+
+test('validateCompletedSale rejects unapproved payment types and missing HOUSE_TAB customer', () => {
+  assert.equal(validateCompletedSale({
+    sale: { total_amount_cents: 1000 },
+    items: [{ price_charged_cents: 1000 }],
+    payments: [{ payment_type: 'BITCOIN', amount_cents: 1000 }]
+  }).isValid, false);
+
+  assert.equal(validateCompletedSale({
+    sale: { total_amount_cents: 1000 },
+    items: [{ price_charged_cents: 1000 }],
+    payments: [{ payment_type: 'HOUSE_TAB', amount_cents: 1000 }],
+    customerId: null
+  }).isValid, false);
 });

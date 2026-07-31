@@ -12,6 +12,78 @@ export function formatMgToGrams(mg) {
   return `${(m / 1000).toFixed(1)}g`;
 }
 
+export const APPROVED_PAYMENT_TYPES = new Set(['CASH', 'DIGITAL', 'HOUSE_TAB', 'PREPAID_DELIVERY']);
+
+export function validateCompletedSale({ sale, items = [], payments = [], customerId = null }) {
+  const errors = [];
+
+  if (!payments || !Array.isArray(payments) || payments.length === 0) {
+    errors.push('Completed sale must have at least one payment record.');
+  }
+
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    errors.push('Completed sale must have at least one line item.');
+  }
+
+  let calculatedItemsTotal = 0;
+  if (items && Array.isArray(items)) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item || typeof item !== 'object') {
+        errors.push(`Item #${i + 1} is invalid.`);
+        continue;
+      }
+      if (!Number.isInteger(item.price_charged_cents) || item.price_charged_cents < 0) {
+        errors.push(`Item #${i + 1} price charged must be a non-negative integer in cents (got: ${item?.price_charged_cents}).`);
+      } else {
+        calculatedItemsTotal += item.price_charged_cents;
+      }
+    }
+  }
+
+  const saleTotalCents = (sale && sale.total_amount_cents !== undefined && sale.total_amount_cents !== null)
+    ? sale.total_amount_cents
+    : calculatedItemsTotal;
+
+  if (!Number.isInteger(saleTotalCents) || saleTotalCents < 0) {
+    errors.push(`Sale total amount must be a non-negative integer in cents (got: ${saleTotalCents}).`);
+  }
+
+  let calculatedPaymentsTotal = 0;
+  if (payments && Array.isArray(payments)) {
+    for (let i = 0; i < payments.length; i++) {
+      const p = payments[i];
+      if (!p || typeof p !== 'object') {
+        errors.push(`Payment #${i + 1} is invalid.`);
+        continue;
+      }
+      if (!Number.isInteger(p.amount_cents) || p.amount_cents <= 0) {
+        errors.push(`Payment #${i + 1} amount must be a positive integer in cents (got: ${p?.amount_cents}).`);
+      } else {
+        calculatedPaymentsTotal += p.amount_cents;
+      }
+      if (!p.payment_type || !APPROVED_PAYMENT_TYPES.has(p.payment_type)) {
+        errors.push(`Payment #${i + 1} has unapproved payment type '${p?.payment_type}'. Approved types: ${Array.from(APPROVED_PAYMENT_TYPES).join(', ')}.`);
+      }
+      if (p.payment_type === 'HOUSE_TAB' && !customerId) {
+        errors.push(`Payment #${i + 1} (HOUSE_TAB) requires a valid customer ID.`);
+      }
+    }
+  }
+
+  if (calculatedPaymentsTotal !== saleTotalCents) {
+    errors.push(`Payment total (${formatCents(calculatedPaymentsTotal)}) does not match sale total (${formatCents(saleTotalCents)}).`);
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors,
+    saleTotalCents,
+    calculatedPaymentsTotal,
+    calculatedItemsTotal
+  };
+}
+
 export function formatMgToOz(mg) {
   const m = (mg === null || mg === undefined || isNaN(mg)) ? 0 : Number(mg);
   return `${(m / 28349.5).toFixed(2)} oz`;
@@ -294,15 +366,19 @@ export class PosRepository {
   }
 
   async completeSale(customerId, items, payments, isCreditOverride = false) {
-    if (!items || items.length === 0) throw new Error('Sale must have at least one item');
-    if (!payments || payments.length === 0) throw new Error('Sale must have at least one payment');
+    const totalSaleAmountCents = items.reduce((sum, i) => sum + (i.price_charged_cents || 0), 0);
+    const totalPaymentsCents = payments.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
+    const totalCogsCents = items.reduce((sum, i) => sum + (i.unit_cogs_cents || 0), 0);
 
-    const totalSaleAmountCents = items.reduce((sum, i) => sum + i.price_charged_cents, 0);
-    const totalPaymentsCents = payments.reduce((sum, p) => sum + p.amount_cents, 0);
-    const totalCogsCents = items.reduce((sum, i) => sum + i.unit_cogs_cents, 0);
+    const validation = validateCompletedSale({
+      sale: { total_amount_cents: totalSaleAmountCents },
+      items,
+      payments,
+      customerId
+    });
 
-    if (Math.abs(totalSaleAmountCents - totalPaymentsCents) > 1) {
-      throw new Error(`Payments ($${(totalPaymentsCents/100).toFixed(2)}) do not match sale total ($${(totalSaleAmountCents/100).toFixed(2)})`);
+    if (!validation.isValid) {
+      throw new Error(`Sale validation failed: ${validation.errors.join(' ')}`);
     }
 
     const hasHouseTab = payments.some(p => p.payment_type === 'HOUSE_TAB');
@@ -321,61 +397,90 @@ export class PosRepository {
       }
     }
 
-    const saleId = await this.db.add('sales', {
-      customer_id: customerId ? Number(customerId) : null,
-      total_amount_cents: totalSaleAmountCents,
-      total_cogs_cents: totalCogsCents,
-      status: 'COMPLETED',
-      is_credit_override: isCreditOverride,
-      created_at: Date.now(),
+    // Atomic IndexedDB multi-store transaction
+    const storeNames = ['sales', 'sale_items', 'sale_payments', 'pigments', 'customers', 'audit_log'];
+    const now = Date.now();
+
+    const pigmentIds = [...new Set(items.map(i => Number(i.pigment_id)))];
+    const pigmentsMap = {};
+    for (const pid of pigmentIds) {
+      if (pid > 0) {
+        pigmentsMap[pid] = await this.db.getById('pigments', pid);
+      }
+    }
+    const customerObj = customerId ? await this.db.getById('customers', Number(customerId)) : null;
+
+    let createdSaleId = null;
+
+    await this.db.runTransaction(storeNames, 'readwrite', (tx) => {
+      const salesStore = tx.objectStore('sales');
+      const saleItemsStore = tx.objectStore('sale_items');
+      const salePaymentsStore = tx.objectStore('sale_payments');
+      const pigmentsStore = tx.objectStore('pigments');
+      const customersStore = tx.objectStore('customers');
+      const auditStore = tx.objectStore('audit_log');
+
+      const saleReq = salesStore.add({
+        customer_id: customerId ? Number(customerId) : null,
+        total_amount_cents: totalSaleAmountCents,
+        total_cogs_cents: totalCogsCents,
+        status: 'COMPLETED',
+        is_credit_override: isCreditOverride,
+        needs_reconciliation: false,
+        reconciliation_status: 'RECONCILED',
+        created_at: now,
+      });
+
+      saleReq.onsuccess = (e) => {
+        createdSaleId = e.target.result;
+
+        for (const item of items) {
+          saleItemsStore.add({
+            sale_id: createdSaleId,
+            pigment_id: Number(item.pigment_id),
+            weight_mg: item.weight_mg,
+            price_charged_cents: item.price_charged_cents,
+            unit_cogs_cents: item.unit_cogs_cents,
+          });
+
+          const pId = Number(item.pigment_id);
+          const pigment = pigmentsMap[pId];
+          if (pigment) {
+            pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
+            pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - item.unit_cogs_cents);
+            pigmentsStore.put(pigment);
+          }
+        }
+
+        for (const payment of payments) {
+          salePaymentsStore.add({
+            sale_id: createdSaleId,
+            payment_type: payment.payment_type,
+            digital_provider: payment.digital_provider || null,
+            amount_cents: payment.amount_cents,
+            merchant_fee_cents: payment.merchant_fee_cents || 0,
+          });
+
+          if (payment.payment_type === 'HOUSE_TAB' && customerObj) {
+            customerObj.current_balance_cents += payment.amount_cents;
+            customersStore.put(customerObj);
+          }
+        }
+
+        if (isCreditOverride) {
+          auditStore.add({
+            entity_type: 'Sale',
+            entity_id: createdSaleId,
+            action: 'HANDSHAKE_CREDIT_OVERRIDE',
+            details_json: JSON.stringify({ sale_id: createdSaleId, customer_id: customerId }),
+            created_at: now,
+            timestamp: now,
+          });
+        }
+      };
     });
 
-    for (const item of items) {
-      await this.db.add('sale_items', {
-        sale_id: saleId,
-        pigment_id: Number(item.pigment_id),
-        weight_mg: item.weight_mg,
-        price_charged_cents: item.price_charged_cents,
-        unit_cogs_cents: item.unit_cogs_cents,
-      });
-
-      const pigment = await this.db.getById('pigments', Number(item.pigment_id));
-      if (pigment) {
-        await this.db.updateStockAndCost(
-          Number(item.pigment_id),
-          pigment.stock_mg - item.weight_mg,
-          pigment.total_cost_cents - item.unit_cogs_cents
-        );
-      }
-    }
-
-    for (const payment of payments) {
-      await this.db.add('sale_payments', {
-        sale_id: saleId,
-        payment_type: payment.payment_type,
-        digital_provider: payment.digital_provider || null,
-        amount_cents: payment.amount_cents,
-        merchant_fee_cents: payment.merchant_fee_cents || 0,
-      });
-
-      if (payment.payment_type === 'HOUSE_TAB' && customerId) {
-        await this.db.updateCustomerBalance(Number(customerId), payment.amount_cents);
-      }
-    }
-
-    if (isCreditOverride) {
-      const now = Date.now();
-      await this.db.add('audit_log', {
-        entity_type: 'Sale',
-        entity_id: saleId,
-        action: 'HANDSHAKE_CREDIT_OVERRIDE',
-        details_json: JSON.stringify({ sale_id: saleId, customer_id: customerId }),
-        created_at: now,
-        timestamp: now,
-      });
-    }
-
-    return saleId;
+    return createdSaleId;
   }
 
   async processReturn(saleItemId, mgReturned, reason, restockToInventory) {
@@ -828,15 +933,20 @@ export class PosRepository {
 
       const itemsTotal = itemsForSale.reduce((sum, item) => sum + (item.price_charged_cents || 0), 0);
       const paymentsTotal = paymentsForSale.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
+      const saleTotal = sale.total_amount_cents !== undefined ? sale.total_amount_cents : itemsTotal;
 
-      const diff = Math.abs(itemsTotal - paymentsTotal);
-      if (diff > 1) {
+      const diff = Math.abs(saleTotal - paymentsTotal);
+      if (diff !== 0 || sale.needs_reconciliation) {
         mismatches.push({
           sale_id: saleId,
           sale,
           itemsTotal,
           paymentsTotal,
           diffCents: diff,
+          needs_reconciliation: sale.needs_reconciliation || diff !== 0,
+          reconciliation_status: sale.reconciliation_status || (diff === 0 ? 'RECONCILED' : 'NEEDS_RECONCILIATION'),
+          items: itemsForSale,
+          payments: paymentsForSale,
           created_at: sale.created_at
         });
       }
@@ -845,19 +955,44 @@ export class PosRepository {
     return mismatches;
   }
 
-  async repairDataIntegrity() {
-    const mismatches = await this.getIntegrityMismatches();
+  async scanAndReconcileIntegrity() {
+    const allSales = await this.db.getAll('sales');
+    const completedSales = allSales.filter(s => s.status === 'COMPLETED');
+    const allItems = await this.db.getAll('sale_items');
+    const allPayments = await this.db.getAll('sale_payments');
+    const allAudits = await this.db.getAll('audit_log');
+
+    const auditedSaleIds = new Set(
+      allAudits
+        .filter(a => a.entity_type === 'Sale' && (a.action === 'INTEGRITY_AUTO_REPAIR' || a.action === 'INTEGRITY_NEEDS_RECONCILIATION'))
+        .map(a => Number(a.entity_id))
+    );
+
     let repairedCount = 0;
+    let flaggedCount = 0;
 
-    for (const mismatch of mismatches) {
-      const { sale_id, sale, itemsTotal, paymentsTotal } = mismatch;
-      const saleId = Number(sale_id);
+    for (const sale of completedSales) {
+      const saleId = Number(sale.sale_id);
+      const itemsForSale = allItems.filter(i => Number(i.sale_id) === saleId);
+      const paymentsForSale = allPayments.filter(p => Number(p.sale_id) === saleId);
 
-      const itemsForSale = await this.db.getAllByIndex('sale_items', 'sale_id', saleId);
-      const paymentsForSale = await this.db.getAllByIndex('sale_payments', 'sale_id', saleId);
+      const itemsTotal = itemsForSale.reduce((sum, item) => sum + (item.price_charged_cents || 0), 0);
+      const paymentsTotal = paymentsForSale.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
+      const saleTotal = sale.total_amount_cents !== undefined ? sale.total_amount_cents : itemsTotal;
 
-      if (itemsForSale.length === 0 && paymentsTotal > 0) {
-        // Case A: Missing sale_items (e.g. credit store prepayment fulfillment)
+      const diff = Math.abs(saleTotal - paymentsTotal);
+      if (diff === 0 && !sale.needs_reconciliation) {
+        continue;
+      }
+
+      if (auditedSaleIds.has(saleId) && sale.reconciliation_status) {
+        continue;
+      }
+
+      const now = Date.now();
+
+      // Case A: Missing sale_items (prepayment fulfillment) where saleTotal === paymentsTotal
+      if (itemsForSale.length === 0 && paymentsTotal > 0 && saleTotal === paymentsTotal) {
         await this.db.add('sale_items', {
           sale_id: saleId,
           pigment_id: 0,
@@ -865,50 +1000,169 @@ export class PosRepository {
           price_charged_cents: paymentsTotal,
           unit_cogs_cents: 0,
         });
-        sale.total_amount_cents = paymentsTotal;
+        sale.needs_reconciliation = false;
+        sale.reconciliation_status = 'AUTO_REPAIRED';
         await this.db.put('sales', sale);
-        repairedCount++;
-      } else if (paymentsForSale.length === 0 && itemsTotal > 0) {
-        // Case B: Missing sale_payments
-        await this.db.add('sale_payments', {
-          sale_id: saleId,
-          payment_type: 'CASH',
-          digital_provider: null,
-          amount_cents: itemsTotal,
-          merchant_fee_cents: 0,
-        });
-        sale.total_amount_cents = itemsTotal;
-        await this.db.put('sales', sale);
-        repairedCount++;
-      } else if (itemsTotal > 0 && paymentsTotal > 0 && itemsTotal !== paymentsTotal) {
-        // Case C: Both exist but totals differ. Adjust last payment to match items total.
-        const lastPayment = paymentsForSale[paymentsForSale.length - 1];
-        const diffCents = itemsTotal - paymentsTotal;
-        lastPayment.amount_cents = (lastPayment.amount_cents || 0) + diffCents;
-        await this.db.put('sale_payments', lastPayment);
 
-        sale.total_amount_cents = itemsTotal;
-        await this.db.put('sales', sale);
+        await this.db.add('audit_log', {
+          entity_type: 'Sale',
+          entity_id: saleId,
+          action: 'INTEGRITY_AUTO_REPAIR',
+          details_json: JSON.stringify({
+            sale_id: saleId,
+            original_sale_total: saleTotal,
+            calculated_payment_total: paymentsTotal,
+            difference_cents: diff,
+            timestamp: now,
+            repair_status: 'AUTO_REPAIRED',
+            reason: 'Created missing placeholder line item for credit store prepayment'
+          }),
+          created_at: now,
+          timestamp: now,
+        });
+        auditedSaleIds.add(saleId);
         repairedCount++;
       }
+      // Case B: Exactly 1 payment, single line item, unambiguous 1-cent rounding difference
+      else if (paymentsForSale.length === 1 && itemsForSale.length > 0 && diff === 1) {
+        const singlePayment = paymentsForSale[0];
+        singlePayment.amount_cents = saleTotal;
+        await this.db.put('sale_payments', singlePayment);
 
-      const now = Date.now();
-      await this.db.add('audit_log', {
-        entity_type: 'Sale',
-        entity_id: saleId,
-        action: 'INTEGRITY_AUTO_REPAIR',
-        details_json: JSON.stringify({
-          sale_id: saleId,
-          previous_items_total: itemsTotal,
-          previous_payments_total: paymentsTotal,
-          repaired_total: itemsTotal || paymentsTotal
-        }),
-        created_at: now,
-        timestamp: now,
-      });
+        sale.needs_reconciliation = false;
+        sale.reconciliation_status = 'AUTO_REPAIRED';
+        await this.db.put('sales', sale);
+
+        await this.db.add('audit_log', {
+          entity_type: 'Sale',
+          entity_id: saleId,
+          action: 'INTEGRITY_AUTO_REPAIR',
+          details_json: JSON.stringify({
+            sale_id: saleId,
+            original_sale_total: saleTotal,
+            calculated_payment_total: paymentsTotal,
+            difference_cents: diff,
+            timestamp: now,
+            repair_status: 'AUTO_REPAIRED',
+            reason: 'Reconciled 1-cent rounding variance on single payment'
+          }),
+          created_at: now,
+          timestamp: now,
+        });
+        auditedSaleIds.add(saleId);
+        repairedCount++;
+      }
+      // Ambiguous Case: Flag for manual UI reconciliation
+      else {
+        sale.needs_reconciliation = true;
+        sale.reconciliation_status = 'NEEDS_RECONCILIATION';
+        await this.db.put('sales', sale);
+
+        if (!auditedSaleIds.has(saleId)) {
+          await this.db.add('audit_log', {
+            entity_type: 'Sale',
+            entity_id: saleId,
+            action: 'INTEGRITY_NEEDS_RECONCILIATION',
+            details_json: JSON.stringify({
+              sale_id: saleId,
+              original_sale_total: saleTotal,
+              calculated_payment_total: paymentsTotal,
+              difference_cents: diff,
+              timestamp: now,
+              repair_status: 'NEEDS_RECONCILIATION'
+            }),
+            created_at: now,
+            timestamp: now,
+          });
+          auditedSaleIds.add(saleId);
+        }
+        flaggedCount++;
+      }
     }
 
-    return repairedCount;
+    return { repairedCount, flaggedCount };
+  }
+
+  async repairDataIntegrity() {
+    return await this.scanAndReconcileIntegrity();
+  }
+
+  async reconcileSaleRecord(saleId, actionType, payload = {}) {
+    const sId = Number(saleId);
+    const sale = await this.db.getById('sales', sId);
+    if (!sale) throw new Error(`Sale #${saleId} not found.`);
+
+    const now = Date.now();
+
+    if (actionType === 'CORRECT_PAYMENT') {
+      const { payments } = payload;
+      const items = await this.db.getAllByIndex('sale_items', 'sale_id', sId);
+      const validation = validateCompletedSale({ sale, items, payments, customerId: sale.customer_id });
+      if (!validation.isValid) {
+        throw new Error(`Validation error: ${validation.errors.join(', ')}`);
+      }
+
+      const oldPayments = await this.db.getAllByIndex('sale_payments', 'sale_id', sId);
+      for (const op of oldPayments) {
+        if (op.payment_id) {
+          await this.db.delete('sale_payments', op.payment_id);
+        }
+      }
+
+      for (const p of payments) {
+        await this.db.add('sale_payments', {
+          sale_id: sId,
+          payment_type: p.payment_type,
+          digital_provider: p.digital_provider || null,
+          amount_cents: p.amount_cents,
+          merchant_fee_cents: p.merchant_fee_cents || 0
+        });
+      }
+
+      sale.needs_reconciliation = false;
+      sale.reconciliation_status = 'RECONCILED';
+      await this.db.put('sales', sale);
+
+      await this.db.add('audit_log', {
+        entity_type: 'Sale',
+        entity_id: sId,
+        action: 'MANUAL_RECONCILIATION_CORRECT_PAYMENT',
+        details_json: JSON.stringify({ sale_id: sId, corrected_payments: payments }),
+        created_at: now,
+        timestamp: now
+      });
+    } else if (actionType === 'EXTERNAL_RECONCILE') {
+      const { note } = payload;
+      if (!note || !note.trim()) {
+        throw new Error('A note is required to mark as externally reconciled.');
+      }
+      sale.needs_reconciliation = false;
+      sale.reconciliation_status = 'EXTERNALLY_RECONCILED';
+      sale.reconciliation_note = note.trim();
+      await this.db.put('sales', sale);
+
+      await this.db.add('audit_log', {
+        entity_type: 'Sale',
+        entity_id: sId,
+        action: 'MANUAL_RECONCILIATION_EXTERNAL',
+        details_json: JSON.stringify({ sale_id: sId, note: note.trim() }),
+        created_at: now,
+        timestamp: now
+      });
+    } else if (actionType === 'VOID_SALE') {
+      const { note } = payload;
+      if (!note || !note.trim()) {
+        throw new Error('A note is required to void the sale.');
+      }
+      await this.voidSale(sId, note.trim());
+      sale.needs_reconciliation = false;
+      sale.reconciliation_status = 'VOIDED';
+      await this.db.put('sales', sale);
+    } else {
+      throw new Error(`Unknown reconciliation action '${actionType}'.`);
+    }
+
+    return true;
   }
 }
 
