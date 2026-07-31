@@ -172,7 +172,7 @@ class PosRepository(
                         customer_id = customerId,
                         total_amount_cents = totalSaleAmountCents,
                         total_cogs_cents = totalCogsCents,
-                        status = "COMPLETED",
+                        status = SaleStatus.COMPLETED,
                         is_credit_override = isCreditOverride
                     )
                 )
@@ -192,7 +192,7 @@ class PosRepository(
                 // Save Payments & Update Customer Balance if House Tab
                 payments.forEach { payment ->
                     salePaymentDao.insertPayment(payment.copy(sale_id = saleId))
-                    if (payment.payment_type == "HOUSE_TAB" && customerId != null) {
+                    if (payment.payment_type == PaymentType.HOUSE_TAB && customerId != null) {
                         customerDao.updateCustomerBalance(customerId, payment.amount_cents)
                     }
                 }
@@ -300,7 +300,7 @@ class PosRepository(
                 val sale = saleDao.getSaleById(saleId)
                     ?: throw Exception("Sale not found")
 
-                if (sale.status == "VOIDED") {
+                if (sale.status == SaleStatus.VOIDED) {
                     throw Exception("Sale is already voided")
                 }
 
@@ -319,12 +319,12 @@ class PosRepository(
 
                 // Reverse House Tab balance if applicable
                 val payments = salePaymentDao.getPaymentsForSaleSync(saleId)
-                val houseTabPayment = payments.find { it.payment_type == "HOUSE_TAB" }
+                val houseTabPayment = payments.find { it.payment_type == PaymentType.HOUSE_TAB }
                 if (houseTabPayment != null && sale.customer_id != null) {
                     customerDao.updateCustomerBalance(sale.customer_id, -houseTabPayment.amount_cents)
                 }
 
-                saleDao.updateSaleStatus(saleId, "VOIDED")
+                saleDao.updateSaleStatus(saleId, SaleStatus.VOIDED)
 
                 val detailsJson = JSONObject().apply {
                     put("sale_id", saleId)
@@ -338,7 +338,7 @@ class PosRepository(
                                 // HOUSE_TAB is reversed on the customer's balance above, not owed back in cash/digital.
                                 put(
                                     "refund_due_cents",
-                                    if (p.payment_type == "HOUSE_TAB") 0 else p.amount_cents
+                                    if (p.payment_type == PaymentType.HOUSE_TAB) 0 else p.amount_cents
                                 )
                             })
                         }

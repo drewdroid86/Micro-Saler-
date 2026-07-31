@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.microsaler.data.dao.*
 import com.example.microsaler.data.model.*
@@ -25,7 +26,7 @@ import kotlinx.coroutines.launch
         ShrinkageLog::class,
         AuditLog::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -51,6 +52,73 @@ abstract class AppDatabase : RoomDatabase() {
         // viewModelScope is cancelled first.
         private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // --- 1. sale_payments ---
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `sale_payments_new` (
+                        `payment_id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `sale_id` INTEGER NOT NULL,
+                        `payment_type` TEXT NOT NULL,
+                        `digital_provider` TEXT,
+                        `amount_cents` INTEGER NOT NULL,
+                        `merchant_fee_cents` INTEGER NOT NULL,
+                        FOREIGN KEY(`sale_id`) REFERENCES `sales`(`sale_id`) ON UPDATE NO ACTION ON DELETE NO ACTION
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT INTO `sale_payments_new` (`payment_id`, `sale_id`, `payment_type`, `digital_provider`, `amount_cents`, `merchant_fee_cents`)
+                    SELECT `payment_id`, `sale_id`, `payment_type`, `digital_provider`, `amount_cents`, `merchant_fee_cents` FROM `sale_payments`
+                """.trimIndent())
+                db.execSQL("DROP TABLE `sale_payments`")
+                db.execSQL("ALTER TABLE `sale_payments_new` RENAME TO `sale_payments`")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_sale_payments_sale_id` ON `sale_payments` (`sale_id`)")
+
+                // --- 2. sale_items ---
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `sale_items_new` (
+                        `sale_item_id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `sale_id` INTEGER NOT NULL,
+                        `pigment_id` INTEGER NOT NULL,
+                        `weight_mg` INTEGER NOT NULL,
+                        `price_charged_cents` INTEGER NOT NULL,
+                        `unit_cogs_cents` INTEGER NOT NULL,
+                        FOREIGN KEY(`sale_id`) REFERENCES `sales`(`sale_id`) ON UPDATE NO ACTION ON DELETE NO ACTION,
+                        FOREIGN KEY(`pigment_id`) REFERENCES `pigments`(`pigment_id`) ON UPDATE NO ACTION ON DELETE NO ACTION
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT INTO `sale_items_new` (`sale_item_id`, `sale_id`, `pigment_id`, `weight_mg`, `price_charged_cents`, `unit_cogs_cents`)
+                    SELECT `sale_item_id`, `sale_id`, `pigment_id`, `weight_mg`, `price_charged_cents`, `unit_cogs_cents` FROM `sale_items`
+                """.trimIndent())
+                db.execSQL("DROP TABLE `sale_items`")
+                db.execSQL("ALTER TABLE `sale_items_new` RENAME TO `sale_items`")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_sale_items_sale_id` ON `sale_items` (`sale_id`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_sale_items_pigment_id` ON `sale_items` (`pigment_id`)")
+
+                // --- 3. returns ---
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `returns_new` (
+                        `return_id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `sale_item_id` INTEGER NOT NULL,
+                        `mg_returned` INTEGER NOT NULL,
+                        `refund_amount_cents` INTEGER NOT NULL,
+                        `restock_to_inventory` INTEGER NOT NULL,
+                        `reason` TEXT NOT NULL,
+                        `created_at` INTEGER NOT NULL,
+                        FOREIGN KEY(`sale_item_id`) REFERENCES `sale_items`(`sale_item_id`) ON UPDATE NO ACTION ON DELETE NO ACTION
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT INTO `returns_new` (`return_id`, `sale_item_id`, `mg_returned`, `refund_amount_cents`, `restock_to_inventory`, `reason`, `created_at`)
+                    SELECT `return_id`, `sale_item_id`, `mg_returned`, `refund_amount_cents`, `restock_to_inventory`, `reason`, `created_at` FROM `returns`
+                """.trimIndent())
+                db.execSQL("DROP TABLE `returns`")
+                db.execSQL("ALTER TABLE `returns_new` RENAME TO `returns`")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_returns_sale_item_id` ON `returns` (`sale_item_id`)")
+            }
+        }
+
         fun getDatabase(context: Context, scope: CoroutineScope): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -59,11 +127,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "micro_saler_database"
                 )
                 .addCallback(DatabaseCallback(appScope))
-                // BUG-7: fallbackToDestructiveMigration() was silently wiping all sales,
-                // customers, and tab balances on any future schema bump. Removed. When you
-                // add fields/tables and bump `version` above, write an explicit
-                // Migration(oldVersion, newVersion) and add it with .addMigrations(...) here
-                // instead of falling back to a wipe.
+                .addMigrations(MIGRATION_3_4)
                 .build()
                 INSTANCE = instance
                 instance

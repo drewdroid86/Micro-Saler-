@@ -1,7 +1,27 @@
 package com.example.microsaler.data.model
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
 import androidx.room.PrimaryKey
+
+object TrustStatus {
+    const val GOOD_STANDING = "GOOD_STANDING"
+    const val PAUSED = "PAUSED"
+    const val VIP = "VIP"
+}
+
+object SaleStatus {
+    const val COMPLETED = "COMPLETED"
+    const val VOIDED = "VOIDED"
+    const val REFUNDED = "REFUNDED"
+}
+
+object PaymentType {
+    const val CASH = "CASH"
+    const val DIGITAL = "DIGITAL"
+    const val HOUSE_TAB = "HOUSE_TAB"
+}
 
 @Entity(tableName = "pigments")
 data class Pigment(
@@ -45,7 +65,7 @@ data class Customer(
     val phone: String,
     val credit_limit_cents: Long = 2500, // default $25.00
     val current_balance_cents: Long = 0,
-    val trust_status: String = "GOOD_STANDING" // GOOD_STANDING / PAUSED / VIP
+    val trust_status: String = TrustStatus.GOOD_STANDING // GOOD_STANDING / PAUSED / VIP
 ) {
     val availableCreditCents: Long
         get() = (credit_limit_cents - current_balance_cents).coerceAtLeast(0)
@@ -57,12 +77,25 @@ data class Sale(
     val customer_id: Long? = null, // null means walk-in
     val total_amount_cents: Long,
     val total_cogs_cents: Long,
-    val status: String = "COMPLETED", // COMPLETED / VOIDED / REFUNDED
+    val status: String = SaleStatus.COMPLETED, // COMPLETED / VOIDED / REFUNDED
     val is_credit_override: Boolean = false,
     val created_at: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "sale_payments")
+@Entity(
+    tableName = "sale_payments",
+    foreignKeys = [
+        ForeignKey(
+            entity = Sale::class,
+            parentColumns = ["sale_id"],
+            childColumns = ["sale_id"],
+            onDelete = ForeignKey.NO_ACTION
+        )
+    ],
+    indices = [
+        Index("sale_id")
+    ]
+)
 data class SalePayment(
     @PrimaryKey(autoGenerate = true) val payment_id: Long = 0,
     val sale_id: Long,
@@ -72,7 +105,27 @@ data class SalePayment(
     val merchant_fee_cents: Long = 0
 )
 
-@Entity(tableName = "sale_items")
+@Entity(
+    tableName = "sale_items",
+    foreignKeys = [
+        ForeignKey(
+            entity = Sale::class,
+            parentColumns = ["sale_id"],
+            childColumns = ["sale_id"],
+            onDelete = ForeignKey.NO_ACTION
+        ),
+        ForeignKey(
+            entity = Pigment::class,
+            parentColumns = ["pigment_id"],
+            childColumns = ["pigment_id"],
+            onDelete = ForeignKey.NO_ACTION
+        )
+    ],
+    indices = [
+        Index("sale_id"),
+        Index("pigment_id")
+    ]
+)
 data class SaleItem(
     @PrimaryKey(autoGenerate = true) val sale_item_id: Long = 0,
     val sale_id: Long,
@@ -82,7 +135,20 @@ data class SaleItem(
     val unit_cogs_cents: Long
 )
 
-@Entity(tableName = "returns")
+@Entity(
+    tableName = "returns",
+    foreignKeys = [
+        ForeignKey(
+            entity = SaleItem::class,
+            parentColumns = ["sale_item_id"],
+            childColumns = ["sale_item_id"],
+            onDelete = ForeignKey.NO_ACTION
+        )
+    ],
+    indices = [
+        Index("sale_item_id")
+    ]
+)
 data class ReturnRecord(
     @PrimaryKey(autoGenerate = true) val return_id: Long = 0,
     val sale_item_id: Long,

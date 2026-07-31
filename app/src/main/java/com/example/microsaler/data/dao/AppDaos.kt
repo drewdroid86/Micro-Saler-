@@ -20,7 +20,7 @@ interface PigmentDao {
     @Query("SELECT * FROM pigments WHERE pigment_id = :id LIMIT 1")
     suspend fun getPigmentById(id: Long): Pigment?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertPigment(pigment: Pigment): Long
 
     @Update
@@ -38,7 +38,7 @@ interface StockReceiptDao {
     @Query("SELECT * FROM stock_receipts WHERE pigment_id = :pigmentId ORDER BY received_at DESC")
     fun getReceiptsForPigment(pigmentId: Long): Flow<List<StockReceipt>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertReceipt(receipt: StockReceipt): Long
 }
 
@@ -50,7 +50,7 @@ interface CustomerDao {
     @Query("SELECT * FROM customers WHERE customer_id = :id LIMIT 1")
     suspend fun getCustomerById(id: Long): Customer?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertCustomer(customer: Customer): Long
 
     @Update
@@ -71,7 +71,7 @@ interface SaleDao {
     @Query("SELECT * FROM sales WHERE sale_id = :id LIMIT 1")
     suspend fun getSaleById(id: Long): Sale?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertSale(sale: Sale): Long
 
     @Query("UPDATE sales SET status = :status WHERE sale_id = :saleId")
@@ -86,15 +86,16 @@ interface SalePaymentDao {
     @Query("SELECT * FROM sale_payments WHERE sale_id = :saleId")
     suspend fun getPaymentsForSaleSync(saleId: Long): List<SalePayment>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertPayment(payment: SalePayment): Long
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertPayments(payments: List<SalePayment>)
 }
 
 @Dao
 interface SaleItemDao {
+    // TODO: This query loads all sale items into memory. Paginate (or query per-sale) before sales history exceeds ~10,000 rows.
     @Query("SELECT * FROM sale_items")
     fun getAllSaleItems(): Flow<List<SaleItem>>
 
@@ -107,10 +108,10 @@ interface SaleItemDao {
     @Query("SELECT * FROM sale_items WHERE sale_item_id = :saleItemId LIMIT 1")
     suspend fun getSaleItemById(saleItemId: Long): SaleItem?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertSaleItem(saleItem: SaleItem): Long
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertSaleItems(items: List<SaleItem>)
 }
 
@@ -125,7 +126,7 @@ interface ReturnDao {
     @Query("SELECT SUM(refund_amount_cents) FROM returns WHERE sale_item_id = :saleItemId")
     suspend fun getTotalRefundedCentsForSaleItem(saleItemId: Long): Long?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertReturn(returnRecord: ReturnRecord): Long
 }
 
@@ -134,7 +135,7 @@ interface TabPaymentDao {
     @Query("SELECT * FROM tab_payments WHERE customer_id = :customerId ORDER BY created_at DESC")
     fun getTabPaymentsForCustomer(customerId: Long): Flow<List<TabPayment>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertTabPayment(tabPayment: TabPayment): Long
 }
 
@@ -143,7 +144,7 @@ interface ShrinkageLogDao {
     @Query("SELECT * FROM shrinkage_logs ORDER BY created_at DESC")
     fun getAllShrinkageLogs(): Flow<List<ShrinkageLog>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertShrinkageLog(log: ShrinkageLog): Long
 }
 
@@ -152,6 +153,6 @@ interface AuditLogDao {
     @Query("SELECT * FROM audit_log ORDER BY timestamp DESC")
     fun getAllAuditLogs(): Flow<List<AuditLog>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertAuditLog(log: AuditLog): Long
 }
