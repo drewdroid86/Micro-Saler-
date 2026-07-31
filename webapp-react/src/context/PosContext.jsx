@@ -17,6 +17,7 @@ export const PosProvider = ({ children }) => {
   const [saleItems, setSaleItems] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [shrinkageLogs, setShrinkageLogs] = useState([]);
+  const [integrityMismatches, setIntegrityMismatches] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [supplierPayments, setSupplierPayments] = useState([]);
   const [stockReceipts, setStockReceipts] = useState([]);
@@ -85,34 +86,14 @@ export const PosProvider = ({ children }) => {
     }
   };
 
-  const checkStartupIntegrity = async (activeDb) => {
+  const checkStartupIntegrity = async (activeDb, activeRepo = repo) => {
     try {
-      const allSales = await activeDb.getAllSales();
-      const completedSales = allSales.filter(s => s.status === 'COMPLETED');
-      const allItems = await activeDb.getAll('sale_items');
-      const allPayments = await activeDb.getAll('sale_payments');
+      const mismatches = activeRepo ? await activeRepo.getIntegrityMismatches() : [];
+      setIntegrityMismatches(mismatches);
 
-      let mismatchCount = 0;
-
-      for (const sale of completedSales) {
-        const saleId = sale.sale_id;
-        const itemsForSale = allItems.filter(i => Number(i.sale_id) === Number(saleId));
-        const paymentsForSale = allPayments.filter(p => Number(p.sale_id) === Number(saleId));
-
-        const itemsTotal = itemsForSale.reduce((sum, item) => sum + (item.price_charged_cents || 0), 0);
-        const paymentsTotal = paymentsForSale.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
-
-        if (Math.abs(itemsTotal - paymentsTotal) > 1) {
-          mismatchCount++;
-          console.warn(
-            `[Data Integrity Warning] Sale ID ${saleId}: Items Total = ${itemsTotal}¢, Payments Total = ${paymentsTotal}¢ (Diff: ${Math.abs(itemsTotal - paymentsTotal)}¢)`
-          );
-        }
-      }
-
-      if (mismatchCount > 0) {
-        console.warn(`Startup integrity check: Found ${mismatchCount} completed sale(s) with payment total mismatches.`);
-        showToast(`Data integrity warning: ${mismatchCount} completed sale(s) have payment total mismatches.`, 'warning');
+      if (mismatches.length > 0) {
+        console.warn(`Startup integrity check: Found ${mismatches.length} completed sale(s) with payment total mismatches.`);
+        showToast(`Data integrity warning: ${mismatches.length} completed sale(s) have payment total mismatches.`, 'warning');
       }
     } catch (err) {
       console.error('Startup integrity check error:', err);
@@ -146,7 +127,7 @@ export const PosProvider = ({ children }) => {
         setRepo(repository);
 
         await refreshAllData(repository, database);
-        await checkStartupIntegrity(database);
+        await checkStartupIntegrity(database, repository);
 
         // Pre-select first pigment if available
         const activeP = await database.getActivePigments();
@@ -445,10 +426,19 @@ export const PosProvider = ({ children }) => {
       await refreshAllData();
       showToast('Ledger backup restored successfully!', 'success');
       return true;
-    } catch (error) {
-      showToast('Import failed: ' + error.message, 'error');
-      throw error;
+    } catch (err) {
+      showToast('Restore failed: ' + err.message, 'error');
+      throw err;
     }
+  };
+
+  const repairDataIntegrity = async () => {
+    if (!repo || !db) return 0;
+    const count = await repo.repairDataIntegrity();
+    await refreshAllData(repo, db);
+    const remaining = await repo.getIntegrityMismatches();
+    setIntegrityMismatches(remaining);
+    return count;
   };
 
 
@@ -498,12 +488,16 @@ export const PosProvider = ({ children }) => {
     exportBackup,
     importBackup,
     refreshAllData,
-    retryDbInit
+    retryDbInit,
+    integrityMismatches,
+    integrityMismatchCount: integrityMismatches.length,
+    repairDataIntegrity,
+    checkStartupIntegrity
   }), [
     db, repo, loading, loadingError, isDbBlocked, currentTab, pigments, priceTiers,
     customers, suppliers, supplierPayments, stockReceipts, customerPrepayments, sales, saleItems, auditLogs,
     shrinkageLogs, cart, selectedCustomer, selectedPigment, pricingMode, isHandshakeOverride,
-    isSubmitting, toasts, modal
+    isSubmitting, toasts, modal, integrityMismatches
   ]);
 
   return (

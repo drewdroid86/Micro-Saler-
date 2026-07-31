@@ -48,6 +48,7 @@ export const CheckoutScreen = () => {
     openModal,
     showToast,
     customerPrepayments,
+    integrityMismatchCount,
     repo,
     refreshAllData
   } = usePos();
@@ -106,6 +107,26 @@ export const CheckoutScreen = () => {
 
   return (
     <div className="checkout-layout">
+      {integrityMismatchCount > 0 && (
+        <div className="card mb-md flex-between" style={{ background: 'rgba(245, 124, 0, 0.15)', borderColor: '#f57c00', padding: '10px 14px', alignItems: 'center' }}>
+          <div>
+            <div className="font-weight-bold" style={{ color: '#e65100', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span>⚠️</span> Data Integrity Warning: {integrityMismatchCount} completed sale(s) have payment total mismatches.
+            </div>
+            <div className="body-small text-muted" style={{ fontSize: '12px', marginTop: '2px' }}>
+              Line item amounts do not match recorded payment totals in local IndexedDB.
+            </div>
+          </div>
+          <button
+            className="btn btn-warning btn-sm"
+            style={{ backgroundColor: '#f57c00', borderColor: '#e65100', color: '#fff', fontWeight: 'bold', whiteSpace: 'nowrap' }}
+            onClick={() => openModal('integrityRepair')}
+          >
+            Review & Fix
+          </button>
+        </div>
+      )}
+
       <div className="flex-between mb-md">
         <div
           className={`customer-pill ${selectedCustomer ? '' : 'walk-in'}`}

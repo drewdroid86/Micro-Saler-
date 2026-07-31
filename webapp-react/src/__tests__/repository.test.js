@@ -234,3 +234,49 @@ test('Partial cash and tab payment breakdown correctly allocates paid now vs tab
   const newCustomerBalance = initialCustomerBalance + tabAmountCents;
   assert.equal(newCustomerBalance, 4500); // $45.00
 });
+
+test('Data integrity check identifies payment total mismatches and auto-repairs safely', () => {
+  const completedSales = [
+    { sale_id: 1, status: 'COMPLETED', total_amount_cents: 2000 },
+    { sale_id: 2, status: 'COMPLETED', total_amount_cents: 1500 }
+  ];
+  const saleItems = [
+    { sale_id: 1, price_charged_cents: 2000 }
+    // sale 2 has no sale_items
+  ];
+  const salePayments = [
+    { sale_id: 1, amount_cents: 2000 },
+    { sale_id: 2, amount_cents: 1500 }
+  ];
+
+  const mismatches = completedSales.filter(s => {
+    const items = saleItems.filter(i => i.sale_id === s.sale_id);
+    const payments = salePayments.filter(p => p.sale_id === s.sale_id);
+    const iTotal = items.reduce((sum, i) => sum + i.price_charged_cents, 0);
+    const pTotal = payments.reduce((sum, p) => sum + p.amount_cents, 0);
+    return Math.abs(iTotal - pTotal) > 1;
+  });
+
+  assert.equal(mismatches.length, 1);
+  assert.equal(mismatches[0].sale_id, 2);
+
+  // Auto-repair simulation for missing sale_items (Case A)
+  for (const m of mismatches) {
+    const items = saleItems.filter(i => i.sale_id === m.sale_id);
+    const payments = salePayments.filter(p => p.sale_id === m.sale_id);
+    const pTotal = payments.reduce((sum, p) => sum + p.amount_cents, 0);
+    if (items.length === 0 && pTotal > 0) {
+      saleItems.push({ sale_id: m.sale_id, pigment_id: 0, weight_mg: 0, price_charged_cents: pTotal, unit_cogs_cents: 0 });
+    }
+  }
+
+  const postRepairMismatches = completedSales.filter(s => {
+    const items = saleItems.filter(i => i.sale_id === s.sale_id);
+    const payments = salePayments.filter(p => p.sale_id === s.sale_id);
+    const iTotal = items.reduce((sum, i) => sum + i.price_charged_cents, 0);
+    const pTotal = payments.reduce((sum, p) => sum + p.amount_cents, 0);
+    return Math.abs(iTotal - pTotal) > 1;
+  });
+
+  assert.equal(postRepairMismatches.length, 0);
+});

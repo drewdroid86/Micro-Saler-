@@ -5,6 +5,7 @@ import { CustomWeightModal } from './modals/CustomWeightModal';
 import { EditCartItemModal } from './modals/EditCartItemModal';
 import { BackupRestoreModal } from './modals/BackupRestoreModal';
 import { EditCartTotalModal } from './modals/EditCartTotalModal';
+import { IntegrityRepairModal } from './modals/IntegrityRepairModal';
 
 const PRESET_TIERS = [
   { label: '¼g', weight_mg: 250 },
@@ -264,6 +265,16 @@ export const ModalManager = () => {
 
   if (modal.name === 'editCartTotal') {
     return <EditCartTotalModal />;
+  }
+
+  if (modal.name === 'integrityRepair') {
+    return (
+      <div className="modal-backdrop">
+        <div className="modal-card modal-medium">
+          <IntegrityRepairModal />
+        </div>
+      </div>
+    );
   }
 
   const safeCart = cart || [];

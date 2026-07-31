@@ -701,6 +701,14 @@ export class PosRepository {
         created_at: now,
       });
 
+      await this.db.add('sale_items', {
+        sale_id: saleId,
+        pigment_id: 0,
+        weight_mg: 0,
+        price_charged_cents: item.amount_cents,
+        unit_cogs_cents: 0,
+      });
+
       await this.db.add('sale_payments', {
         sale_id: saleId,
         payment_type: 'PREPAID_DELIVERY',
@@ -803,6 +811,104 @@ export class PosRepository {
       }),
       timestamp: Date.now()
     });
+  }
+
+  async getIntegrityMismatches() {
+    const allSales = await this.db.getAll('sales');
+    const completedSales = allSales.filter(s => s.status === 'COMPLETED');
+    const allItems = await this.db.getAll('sale_items');
+    const allPayments = await this.db.getAll('sale_payments');
+
+    const mismatches = [];
+
+    for (const sale of completedSales) {
+      const saleId = Number(sale.sale_id);
+      const itemsForSale = allItems.filter(i => Number(i.sale_id) === saleId);
+      const paymentsForSale = allPayments.filter(p => Number(p.sale_id) === saleId);
+
+      const itemsTotal = itemsForSale.reduce((sum, item) => sum + (item.price_charged_cents || 0), 0);
+      const paymentsTotal = paymentsForSale.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
+
+      const diff = Math.abs(itemsTotal - paymentsTotal);
+      if (diff > 1) {
+        mismatches.push({
+          sale_id: saleId,
+          sale,
+          itemsTotal,
+          paymentsTotal,
+          diffCents: diff,
+          created_at: sale.created_at
+        });
+      }
+    }
+
+    return mismatches;
+  }
+
+  async repairDataIntegrity() {
+    const mismatches = await this.getIntegrityMismatches();
+    let repairedCount = 0;
+
+    for (const mismatch of mismatches) {
+      const { sale_id, sale, itemsTotal, paymentsTotal } = mismatch;
+      const saleId = Number(sale_id);
+
+      const itemsForSale = await this.db.getAllByIndex('sale_items', 'sale_id', saleId);
+      const paymentsForSale = await this.db.getAllByIndex('sale_payments', 'sale_id', saleId);
+
+      if (itemsForSale.length === 0 && paymentsTotal > 0) {
+        // Case A: Missing sale_items (e.g. credit store prepayment fulfillment)
+        await this.db.add('sale_items', {
+          sale_id: saleId,
+          pigment_id: 0,
+          weight_mg: 0,
+          price_charged_cents: paymentsTotal,
+          unit_cogs_cents: 0,
+        });
+        sale.total_amount_cents = paymentsTotal;
+        await this.db.put('sales', sale);
+        repairedCount++;
+      } else if (paymentsForSale.length === 0 && itemsTotal > 0) {
+        // Case B: Missing sale_payments
+        await this.db.add('sale_payments', {
+          sale_id: saleId,
+          payment_type: 'CASH',
+          digital_provider: null,
+          amount_cents: itemsTotal,
+          merchant_fee_cents: 0,
+        });
+        sale.total_amount_cents = itemsTotal;
+        await this.db.put('sales', sale);
+        repairedCount++;
+      } else if (itemsTotal > 0 && paymentsTotal > 0 && itemsTotal !== paymentsTotal) {
+        // Case C: Both exist but totals differ. Adjust last payment to match items total.
+        const lastPayment = paymentsForSale[paymentsForSale.length - 1];
+        const diffCents = itemsTotal - paymentsTotal;
+        lastPayment.amount_cents = (lastPayment.amount_cents || 0) + diffCents;
+        await this.db.put('sale_payments', lastPayment);
+
+        sale.total_amount_cents = itemsTotal;
+        await this.db.put('sales', sale);
+        repairedCount++;
+      }
+
+      const now = Date.now();
+      await this.db.add('audit_log', {
+        entity_type: 'Sale',
+        entity_id: saleId,
+        action: 'INTEGRITY_AUTO_REPAIR',
+        details_json: JSON.stringify({
+          sale_id: saleId,
+          previous_items_total: itemsTotal,
+          previous_payments_total: paymentsTotal,
+          repaired_total: itemsTotal || paymentsTotal
+        }),
+        created_at: now,
+        timestamp: now,
+      });
+    }
+
+    return repairedCount;
   }
 }
 
