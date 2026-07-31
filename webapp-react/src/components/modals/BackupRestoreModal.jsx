@@ -8,6 +8,7 @@ export const BackupRestoreModal = () => {
   const [parsedBackup, setParsedBackup] = useState(null);
   const [parseError, setParseError] = useState(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [confirmOverwrite, setConfirmOverwrite] = useState(false);
 
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
@@ -108,17 +109,43 @@ export const BackupRestoreModal = () => {
 
           {parsedBackup && (
             <div style={{ background: 'rgba(245, 124, 0, 0.12)', border: '1px solid rgba(245, 124, 0, 0.4)', color: '#e65100', padding: '10px 12px', borderRadius: '6px', fontSize: '0.85rem', marginBottom: '12px' }}>
-              ⚠️ <strong>Warning:</strong> Restoring will overwrite all current local IndexedDB data with the contents of this backup.
+              ⚠️ <strong>Warning:</strong> Restoring will overwrite all current local IndexedDB data. A safety backup of your current database will be downloaded automatically before restoring.
+            </div>
+          )}
+
+          {parsedBackup && (
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={confirmOverwrite}
+                  onChange={(e) => setConfirmOverwrite(e.target.checked)}
+                />
+                <span>I understand and confirm overwriting local data with this backup</span>
+              </label>
             </div>
           )}
 
           <button 
             className="btn btn-warning" 
-            onClick={handleConfirmImport} 
-            disabled={!parsedBackup || isImporting}
+            onClick={async () => {
+              if (!confirmOverwrite) return;
+              setIsImporting(true);
+              try {
+                // Auto-create safety backup before overwrite
+                showToast('Downloading safety backup of current data...', 'info');
+                await exportBackup();
+                await handleConfirmImport();
+              } catch (err) {
+                // Handled
+              } finally {
+                setIsImporting(false);
+              }
+            }} 
+            disabled={!parsedBackup || !confirmOverwrite || isImporting}
             style={{ width: '100%', display: 'inline-flex', justifyContent: 'center', alignItems: 'center', gap: '8px' }}
           >
-            <span>{isImporting ? '⏳ Restoring...' : '📤 Overwrite & Restore Ledger'}</span>
+            <span>{isImporting ? '⏳ Creating Safety Backup & Restoring...' : '📤 Overwrite & Restore Ledger'}</span>
           </button>
         </div>
 

@@ -397,22 +397,12 @@ export class PosRepository {
       }
     }
 
-    // Atomic IndexedDB multi-store transaction
+    // Atomic IndexedDB multi-store transaction with in-transaction inventory reads & stock validation
     const storeNames = ['sales', 'sale_items', 'sale_payments', 'pigments', 'customers', 'audit_log'];
     const now = Date.now();
-
-    const pigmentIds = [...new Set(items.map(i => Number(i.pigment_id)))];
-    const pigmentsMap = {};
-    for (const pid of pigmentIds) {
-      if (pid > 0) {
-        pigmentsMap[pid] = await this.db.getById('pigments', pid);
-      }
-    }
-    const customerObj = customerId ? await this.db.getById('customers', Number(customerId)) : null;
-
     let createdSaleId = null;
 
-    await this.db.runTransaction(storeNames, 'readwrite', (tx) => {
+    await this.db.runTransaction(storeNames, 'readwrite', async (tx) => {
       const salesStore = tx.objectStore('sales');
       const saleItemsStore = tx.objectStore('sale_items');
       const salePaymentsStore = tx.objectStore('sale_payments');
@@ -420,21 +410,74 @@ export class PosRepository {
       const customersStore = tx.objectStore('customers');
       const auditStore = tx.objectStore('audit_log');
 
-      const saleReq = salesStore.add({
-        customer_id: customerId ? Number(customerId) : null,
-        total_amount_cents: totalSaleAmountCents,
-        total_cogs_cents: totalCogsCents,
-        status: 'COMPLETED',
-        is_credit_override: isCreditOverride,
-        needs_reconciliation: false,
-        reconciliation_status: 'RECONCILED',
-        created_at: now,
+      // 1. Read & validate all pigments inside the transaction lock
+      const pigmentUpdates = [];
+      for (const item of items) {
+        const pId = Number(item.pigment_id);
+        if (pId > 0) {
+          const pigment = await new Promise((resolve, reject) => {
+            const req = pigmentsStore.get(pId);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+
+          if (!pigment) {
+            tx.abort();
+            throw new Error(`Pigment #${pId} not found in database.`);
+          }
+          if (pigment.stock_mg < item.weight_mg) {
+            tx.abort();
+            throw new Error(`Insufficient stock for ${pigment.name}. Available: ${formatMgToGrams(pigment.stock_mg)}, Requested: ${formatMgToGrams(item.weight_mg)}.`);
+          }
+
+          pigmentUpdates.push({ pigment, item });
+        }
+      }
+
+      // 2. Read customer inside transaction lock if customerId present
+      let customerObj = null;
+      if (customerId) {
+        customerObj = await new Promise((resolve, reject) => {
+          const req = customersStore.get(Number(customerId));
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+      }
+
+      // 3. Write sale record
+      createdSaleId = await new Promise((resolve, reject) => {
+        const req = salesStore.add({
+          customer_id: customerId ? Number(customerId) : null,
+          total_amount_cents: totalSaleAmountCents,
+          total_cogs_cents: totalCogsCents,
+          status: 'COMPLETED',
+          is_credit_override: isCreditOverride,
+          needs_reconciliation: false,
+          reconciliation_status: 'RECONCILED',
+          created_at: now,
+        });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
       });
 
-      saleReq.onsuccess = (e) => {
-        createdSaleId = e.target.result;
+      // 4. Write sale_items and update pigment stock
+      for (const { pigment, item } of pigmentUpdates) {
+        saleItemsStore.add({
+          sale_id: createdSaleId,
+          pigment_id: Number(item.pigment_id),
+          weight_mg: item.weight_mg,
+          price_charged_cents: item.price_charged_cents,
+          unit_cogs_cents: item.unit_cogs_cents,
+        });
 
-        for (const item of items) {
+        pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
+        pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - item.unit_cogs_cents);
+        pigmentsStore.put(pigment);
+      }
+
+      // Handle items with pigment_id <= 0 (e.g. general credit prepayments)
+      for (const item of items) {
+        if (Number(item.pigment_id) <= 0) {
           saleItemsStore.add({
             sale_id: createdSaleId,
             pigment_id: Number(item.pigment_id),
@@ -442,42 +485,35 @@ export class PosRepository {
             price_charged_cents: item.price_charged_cents,
             unit_cogs_cents: item.unit_cogs_cents,
           });
-
-          const pId = Number(item.pigment_id);
-          const pigment = pigmentsMap[pId];
-          if (pigment) {
-            pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
-            pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - item.unit_cogs_cents);
-            pigmentsStore.put(pigment);
-          }
         }
+      }
 
-        for (const payment of payments) {
-          salePaymentsStore.add({
-            sale_id: createdSaleId,
-            payment_type: payment.payment_type,
-            digital_provider: payment.digital_provider || null,
-            amount_cents: payment.amount_cents,
-            merchant_fee_cents: payment.merchant_fee_cents || 0,
-          });
+      // 5. Write payments and update customer balance
+      for (const payment of payments) {
+        salePaymentsStore.add({
+          sale_id: createdSaleId,
+          payment_type: payment.payment_type,
+          digital_provider: payment.digital_provider || null,
+          amount_cents: payment.amount_cents,
+          merchant_fee_cents: payment.merchant_fee_cents || 0,
+        });
 
-          if (payment.payment_type === 'HOUSE_TAB' && customerObj) {
-            customerObj.current_balance_cents += payment.amount_cents;
-            customersStore.put(customerObj);
-          }
+        if (payment.payment_type === 'HOUSE_TAB' && customerObj) {
+          customerObj.current_balance_cents += payment.amount_cents;
+          customersStore.put(customerObj);
         }
+      }
 
-        if (isCreditOverride) {
-          auditStore.add({
-            entity_type: 'Sale',
-            entity_id: createdSaleId,
-            action: 'HANDSHAKE_CREDIT_OVERRIDE',
-            details_json: JSON.stringify({ sale_id: createdSaleId, customer_id: customerId }),
-            created_at: now,
-            timestamp: now,
-          });
-        }
-      };
+      if (isCreditOverride) {
+        auditStore.add({
+          entity_type: 'Sale',
+          entity_id: createdSaleId,
+          action: 'HANDSHAKE_CREDIT_OVERRIDE',
+          details_json: JSON.stringify({ sale_id: createdSaleId, customer_id: customerId }),
+          created_at: now,
+          timestamp: now,
+        });
+      }
     });
 
     return createdSaleId;

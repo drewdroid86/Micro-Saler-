@@ -5,7 +5,7 @@ import { CustomWeightModal } from './modals/CustomWeightModal';
 import { EditCartItemModal } from './modals/EditCartItemModal';
 import { BackupRestoreModal } from './modals/BackupRestoreModal';
 import { EditCartTotalModal } from './modals/EditCartTotalModal';
-import { IntegrityRepairModal } from './modals/IntegrityRepairModal';
+import { IntegrityRepairModal } from './IntegrityRepairModal';
 
 const PRESET_TIERS = [
   { label: '¼g', weight_mg: 250 },

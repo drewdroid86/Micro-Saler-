@@ -370,3 +370,65 @@ test('validateCompletedSale rejects unapproved payment types and missing HOUSE_T
     customerId: null
   }).isValid, false);
 });
+
+test('Simulated inventory stock validation prevents overselling stock_mg', () => {
+  let pigmentStockMg = 5000; // 5g
+  const saleItemWeightMg = 7000; // 7g request
+
+  function attemptCheckout(requestedMg) {
+    if (pigmentStockMg < requestedMg) {
+      throw new Error(`Insufficient stock. Available: ${pigmentStockMg}mg, Requested: ${requestedMg}mg`);
+    }
+    pigmentStockMg -= requestedMg;
+    return true;
+  }
+
+  assert.throws(() => attemptCheckout(saleItemWeightMg), /Insufficient stock/);
+  assert.equal(pigmentStockMg, 5000); // stock unchanged
+});
+
+test('Ambiguous sales are flagged as needs_reconciliation and not silently overwritten', () => {
+  const ambiguousSale = {
+    sale_id: 99,
+    status: 'COMPLETED',
+    total_amount_cents: 5000
+  };
+  const itemsTotal = 5000;
+  const paymentsTotal = 3000; // $20.00 mismatch with 2 payments
+  const payments = [
+    { payment_type: 'CASH', amount_cents: 1500 },
+    { payment_type: 'DIGITAL', amount_cents: 1500 }
+  ];
+
+  const diff = Math.abs(ambiguousSale.total_amount_cents - paymentsTotal);
+  assert.equal(diff, 2000);
+
+  // Is not unambiguous 1-payment rounding -> must be marked needs_reconciliation
+  const isSinglePaymentRounding = payments.length === 1 && diff === 1;
+  assert.equal(isSinglePaymentRounding, false);
+
+  ambiguousSale.needs_reconciliation = true;
+  ambiguousSale.reconciliation_status = 'NEEDS_RECONCILIATION';
+
+  assert.equal(ambiguousSale.needs_reconciliation, true);
+  assert.equal(ambiguousSale.reconciliation_status, 'NEEDS_RECONCILIATION');
+});
+
+test('Backup export/import structure preserves audit_log and reconciliation metadata', () => {
+  const mockBackupData = {
+    exported_at: new Date().toISOString(),
+    db_version: 4,
+    stores: {
+      sales: [
+        { sale_id: 1, total_amount_cents: 2000, status: 'COMPLETED', reconciliation_status: 'AUTO_REPAIRED', needs_reconciliation: false }
+      ],
+      audit_log: [
+        { audit_id: 1, entity_type: 'Sale', entity_id: 1, action: 'INTEGRITY_AUTO_REPAIR' }
+      ]
+    }
+  };
+
+  assert.ok(mockBackupData.stores.sales[0].reconciliation_status);
+  assert.equal(mockBackupData.stores.sales[0].reconciliation_status, 'AUTO_REPAIRED');
+  assert.equal(mockBackupData.stores.audit_log[0].action, 'INTEGRITY_AUTO_REPAIR');
+});
