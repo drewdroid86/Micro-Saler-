@@ -327,6 +327,12 @@ test('validateCompletedSale rejects zero, negative, NaN, decimal, and missing pa
 
   assert.equal(validateCompletedSale({
     sale: { total_amount_cents: 1000 },
+    items: [],
+    payments: [{ payment_type: 'CASH', amount_cents: 1000 }]
+  }).isValid, false);
+
+  assert.equal(validateCompletedSale({
+    sale: { total_amount_cents: 1000 },
     items: [{ price_charged_cents: 1000 }],
     payments: [{ payment_type: 'CASH', amount_cents: 0 }]
   }).isValid, false);
