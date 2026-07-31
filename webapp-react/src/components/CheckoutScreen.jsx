@@ -46,8 +46,18 @@ export const CheckoutScreen = () => {
     resetCartPrices,
     quickCollectCash,
     openModal,
-    showToast
+    showToast,
+    customerPrepayments,
+    repo,
+    refreshAllData
   } = usePos();
+
+  const safeCustomerPrepayments = customerPrepayments || [];
+  const selectedCustomerActivePrepayments = selectedCustomer
+    ? safeCustomerPrepayments.filter(p => Number(p.customer_id) === Number(selectedCustomer.customer_id) && p.status !== 'FULFILLED')
+    : [];
+  const customerPrepaymentWeightMg = selectedCustomerActivePrepayments.reduce((sum, p) => sum + (p.weight_mg || 0), 0);
+  const customerPrepaymentCreditCents = selectedCustomerActivePrepayments.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
 
   const presets = [
     { label: '¼g', mg: 250 },
@@ -119,6 +129,36 @@ export const CheckoutScreen = () => {
           </button>
         </div>
       </div>
+
+      {selectedCustomerActivePrepayments.length > 0 && (
+        <div className="card mb-md flex-between" style={{ background: 'rgba(56, 107, 31, 0.15)', borderColor: 'var(--market-green-primary)', padding: '10px 14px', alignItems: 'center' }}>
+          <div>
+            <div className="font-weight-bold text-success" style={{ fontSize: '13px' }}>
+              📦 Pending Prepayment / Backorder Owed ({selectedCustomerActivePrepayments.length})
+            </div>
+            <div className="body-small text-muted" style={{ fontSize: '12px' }}>
+              {customerPrepaymentWeightMg > 0 ? `Owed: ${formatMgToGrams(customerPrepaymentWeightMg)} ` : ''}
+              {customerPrepaymentCreditCents > 0 ? `• Credit: ${formatCents(customerPrepaymentCreditCents)}` : ''}
+            </div>
+          </div>
+          <button
+            className="btn btn-success btn-sm"
+            onClick={async () => {
+              try {
+                for (const p of selectedCustomerActivePrepayments) {
+                  await repo.fulfillCustomerPrepayment(p.prepayment_id);
+                }
+                await refreshAllData();
+                showToast('Prepayment marked as delivered / fulfilled!', 'success');
+              } catch (e) {
+                showToast('Fulfillment failed: ' + e.message, 'error');
+              }
+            }}
+          >
+            ✅ Mark Delivered
+          </button>
+        </div>
+      )}
 
       <div className="grid-2col mb-md">
         {safePigments.map(p => {

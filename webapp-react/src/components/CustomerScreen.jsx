@@ -78,13 +78,27 @@ export const CustomerScreen = () => {
               </div>
 
               {(totalWeightOwedMg > 0 || totalCreditCents > 0) && (
-                <div className="p-xs mt-sm body-small" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px' }}>
-                  <div className="font-weight-bold text-success">
-                    📦 Owed to Customer: {totalWeightOwedMg > 0 ? formatMgToGrams(totalWeightOwedMg) : ''} {totalCreditCents > 0 ? `(${formatCents(totalCreditCents)} Credit)` : ''}
+                <div className="p-xs mt-sm body-small flex-between" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px', alignItems: 'center' }}>
+                  <div>
+                    <div className="font-weight-bold text-success">
+                      📦 Owed: {totalWeightOwedMg > 0 ? formatMgToGrams(totalWeightOwedMg) : ''} {totalCreditCents > 0 ? `(${formatCents(totalCreditCents)} Credit)` : ''}
+                    </div>
+                    <div className="text-muted font-italic" style={{ fontSize: '11px' }}>
+                      {activePrepayments.length} pending delivery
+                    </div>
                   </div>
-                  <div className="text-muted font-italic" style={{ fontSize: '11px' }}>
-                    {activePrepayments.length} pending backorder / delivery
-                  </div>
+                  <button
+                    className="btn btn-success btn-sm"
+                    style={{ padding: '4px 8px', fontSize: '11px', whiteSpace: 'nowrap' }}
+                    onClick={async () => {
+                      for (const p of activePrepayments) {
+                        await handleFulfill(p.prepayment_id);
+                      }
+                    }}
+                    title="Mark all pending prepayments for this customer as delivered"
+                  >
+                    ✅ Mark Delivered
+                  </button>
                 </div>
               )}
 

@@ -38,7 +38,8 @@ export const ModalManager = () => {
     overrideCartTotal,
     repo,
     refreshAllData,
-    showToast
+    showToast,
+    customerPrepayments
   } = usePos();
 
   // Local form states
@@ -1184,19 +1185,30 @@ export const ModalManager = () => {
               >
                 <strong>👤 Walk-in Customer</strong>
               </button>
-              {customers.map(c => (
-                <button
-                  key={c.customer_id}
-                  className="btn btn-ghost btn-block flex-between"
-                  onClick={() => { setSelectedCustomer(c); handleClose(); }}
-                >
-                  <div className="text-left">
-                    <strong>{c.name}</strong><br />
-                    <small className="text-muted">{c.phone_number || c.phone || ''}</small>
-                  </div>
-                  <span className="body-medium text-muted">Bal: {formatCents(c.current_balance_cents)}</span>
-                </button>
-              ))}
+              {(customers || []).map(c => {
+                const safePrepayments = customerPrepayments || [];
+                const activePreps = safePrepayments.filter(p => Number(p.customer_id) === Number(c.customer_id) && p.status !== 'FULFILLED');
+                return (
+                  <button
+                    key={c.customer_id}
+                    className="btn btn-ghost btn-block flex-between"
+                    onClick={() => { setSelectedCustomer(c); handleClose(); }}
+                  >
+                    <div className="text-left">
+                      <div className="flex-center gap-xs">
+                        <strong>{c.name}</strong>
+                        {activePreps.length > 0 && (
+                          <span className="badge badge-good-standing" style={{ fontSize: '10px', padding: '2px 6px' }}>
+                            📦 {activePreps.length} Prepaid
+                          </span>
+                        )}
+                      </div>
+                      <small className="text-muted">{c.phone_number || c.phone || ''}</small>
+                    </div>
+                    <span className="body-medium text-muted">Bal: {formatCents(c.current_balance_cents)}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
