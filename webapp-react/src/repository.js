@@ -649,17 +649,78 @@ export class PosRepository {
   async fulfillCustomerPrepayment(prepaymentId, notes = '') {
     const item = await this.db.getById('customer_prepayments', Number(prepaymentId));
     if (!item) throw new Error(`Prepayment #${prepaymentId} not found`);
+    if (item.status === 'FULFILLED') return item;
+
+    const now = Date.now();
+
+    // 1. If pigment & weight reserved, deduct inventory stock & WAC cost basis
+    if (item.pigment_id && item.weight_mg > 0) {
+      const pigment = await this.db.getById('pigments', Number(item.pigment_id));
+      if (pigment) {
+        const unitCogsCents = pigment.stock_mg > 0
+          ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * item.weight_mg)
+          : 0;
+
+        const newStock = Math.max(0, pigment.stock_mg - item.weight_mg);
+        const newCost = Math.max(0, pigment.total_cost_cents - unitCogsCents);
+
+        await this.db.updateStockAndCost(Number(item.pigment_id), newStock, newCost);
+
+        // 2. Create Completed Sale record in Sales History
+        const saleId = await this.db.add('sales', {
+          customer_id: item.customer_id ? Number(item.customer_id) : null,
+          total_amount_cents: item.amount_cents || 0,
+          total_cogs_cents: unitCogsCents,
+          status: 'COMPLETED',
+          created_at: now,
+        });
+
+        await this.db.add('sale_items', {
+          sale_id: saleId,
+          pigment_id: Number(item.pigment_id),
+          weight_mg: item.weight_mg,
+          price_charged_cents: item.amount_cents || 0,
+          unit_cogs_cents: unitCogsCents,
+        });
+
+        await this.db.add('sale_payments', {
+          sale_id: saleId,
+          payment_type: 'PREPAID_DELIVERY',
+          digital_provider: null,
+          amount_cents: item.amount_cents || 0,
+          merchant_fee_cents: 0,
+        });
+      }
+    } else if (item.amount_cents > 0) {
+      // General credit store fulfillment
+      const saleId = await this.db.add('sales', {
+        customer_id: item.customer_id ? Number(item.customer_id) : null,
+        total_amount_cents: item.amount_cents,
+        total_cogs_cents: 0,
+        status: 'COMPLETED',
+        created_at: now,
+      });
+
+      await this.db.add('sale_payments', {
+        sale_id: saleId,
+        payment_type: 'PREPAID_DELIVERY',
+        digital_provider: null,
+        amount_cents: item.amount_cents,
+        merchant_fee_cents: 0,
+      });
+    }
+
+    // 3. Mark prepayment status as FULFILLED
     item.status = 'FULFILLED';
-    item.fulfilled_at = Date.now();
+    item.fulfilled_at = now;
     if (notes) item.fulfillment_notes = notes;
     await this.db.put('customer_prepayments', item);
 
-    const now = Date.now();
     await this.db.add('audit_log', {
       entity_type: 'CustomerPrepayment',
       entity_id: Number(prepaymentId),
       action: 'FULFILL_PREPAYMENT',
-      details_json: JSON.stringify({ prepayment_id: Number(prepaymentId) }),
+      details_json: JSON.stringify({ prepayment_id: Number(prepaymentId), weight_mg: item.weight_mg, amount_cents: item.amount_cents }),
       created_at: now,
       timestamp: now,
     });
