@@ -27,6 +27,7 @@ export const ModalManager = () => {
     closeModal,
     customers,
     suppliers,
+    pigments,
     selectedCustomer,
     setSelectedCustomer,
     cart,
@@ -587,7 +588,8 @@ export const ModalManager = () => {
       return;
     }
 
-    const selPigment = pigments.find(p => String(p.pigment_id) === String(prepaymentPigmentId));
+    const safePigments = pigments || [];
+    const selPigment = safePigments.find(p => String(p.pigment_id) === String(prepaymentPigmentId));
 
     try {
       await repo.createCustomerPrepayment({
@@ -1934,7 +1936,7 @@ export const ModalManager = () => {
                   onChange={e => setPrepaymentCustomerId(e.target.value)}
                 >
                   <option value="">-- Select Customer --</option>
-                  {customers.map(c => (
+                  {(customers || []).map(c => (
                     <option key={c.customer_id} value={c.customer_id}>{c.name} ({c.phone_number || 'No phone'})</option>
                   ))}
                 </select>
@@ -1948,7 +1950,7 @@ export const ModalManager = () => {
                   onChange={e => setPrepaymentPigmentId(e.target.value)}
                 >
                   <option value="">-- Store Credit / General Delivery --</option>
-                  {pigments.map(p => (
+                  {(pigments || []).map(p => (
                     <option key={p.pigment_id} value={p.pigment_id}>{p.name} ({p.finish_type})</option>
                   ))}
                 </select>
