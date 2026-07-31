@@ -9,6 +9,7 @@ import com.example.microsaler.data.dao.*
 import com.example.microsaler.data.model.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 @Database(
@@ -44,6 +45,12 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        // BUG-8 fix: seeding must survive whichever ViewModel happened to trigger DB creation
+        // being cleared. A SupervisorJob-backed application scope is not tied to any
+        // ViewModel's lifecycle, so seeding always completes even if the caller's
+        // viewModelScope is cancelled first.
+        private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
         fun getDatabase(context: Context, scope: CoroutineScope): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -51,8 +58,12 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "micro_saler_database"
                 )
-                .addCallback(DatabaseCallback(scope))
-                .fallbackToDestructiveMigration()
+                .addCallback(DatabaseCallback(appScope))
+                // BUG-7: fallbackToDestructiveMigration() was silently wiping all sales,
+                // customers, and tab balances on any future schema bump. Removed. When you
+                // add fields/tables and bump `version` above, write an explicit
+                // Migration(oldVersion, newVersion) and add it with .addMigrations(...) here
+                // instead of falling back to a wipe.
                 .build()
                 INSTANCE = instance
                 instance

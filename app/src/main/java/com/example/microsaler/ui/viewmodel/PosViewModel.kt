@@ -8,6 +8,7 @@ import com.example.microsaler.data.model.*
 import com.example.microsaler.data.repository.PosRepository
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlin.math.roundToLong
 
 data class CartItem(
     val pigment: Pigment,
@@ -112,11 +113,13 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
             pigment.retail_price_per_gram_cents
         }
         val calculatedPriceCents = customPriceCents ?: (
-            (weightMg / 1000.0 * activePricePerGramCents).toLong() + pigment.default_pkg_cents
+            (weightMg / 1000.0 * activePricePerGramCents).roundToLong() + pigment.default_pkg_cents
         )
 
+        // Note: this is a display/estimate only — completeSale() recomputes COGS from the
+        // pigment's live weighted-average cost inside its own transaction (see BUG-1 fix).
         val unitCogsCents = if (pigment.stock_mg > 0) {
-            ((pigment.total_cost_cents.toDouble() / pigment.stock_mg) * weightMg).toLong()
+            ((pigment.total_cost_cents.toDouble() / pigment.stock_mg) * weightMg).roundToLong()
         } else {
             0L
         }
@@ -241,7 +244,7 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
     // RESTOCK PIGMENT
     fun restockPigment(pigmentId: Long, grams: Double, totalCostDollars: Double, supplierName: String, onComplete: () -> Unit) {
         val receivedMg = (grams * 1000).toLong()
-        val totalCostCents = (totalCostDollars * 100).toLong()
+        val totalCostCents = (totalCostDollars * 100).roundToLong()
 
         viewModelScope.launch {
             val result = repository.restockPigment(pigmentId, receivedMg, totalCostCents, supplierName)
@@ -268,7 +271,7 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
 
     // SETTLE CUSTOMER TAB
     fun settleCustomerTab(customerId: Long, amountPaidDollars: Double, paymentType: String, digitalProvider: String?, onComplete: () -> Unit) {
-        val amountCents = (amountPaidDollars * 100).toLong()
+        val amountCents = (amountPaidDollars * 100).roundToLong()
         viewModelScope.launch {
             val result = repository.settleTabPayment(customerId, amountCents, paymentType, digitalProvider)
             result.onSuccess {
@@ -282,7 +285,7 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
     // PROCESS RETURN
     fun processReturn(saleItemId: Long, gramsReturned: Double, refundDollars: Double, restock: Boolean, reason: String, onComplete: () -> Unit) {
         val mgReturned = (gramsReturned * 1000).toLong()
-        val refundCents = (refundDollars * 100).toLong()
+        val refundCents = (refundDollars * 100).roundToLong()
 
         viewModelScope.launch {
             val result = repository.processReturn(saleItemId, mgReturned, refundCents, restock, reason)
@@ -317,9 +320,9 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
         wholesalePricePerGramDollars: Double = 1.50
     ) {
         val stockMg = (initialGrams * 1000).toLong()
-        val totalCostCents = (initialCostDollars * 100).toLong()
-        val retailCentsPerGram = (retailPricePerGramDollars * 100).toLong()
-        val wholesaleCentsPerGram = (wholesalePricePerGramDollars * 100).toLong()
+        val totalCostCents = (initialCostDollars * 100).roundToLong()
+        val retailCentsPerGram = (retailPricePerGramDollars * 100).roundToLong()
+        val wholesaleCentsPerGram = (wholesalePricePerGramDollars * 100).roundToLong()
 
         viewModelScope.launch {
             repository.addPigment(
@@ -341,15 +344,15 @@ class PosViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.updatePigmentPricing(
                 pigmentId = pigmentId,
-                retailPricePerGramCents = (retailPricePerGramDollars * 100).toLong(),
-                wholesalePricePerGramCents = (wholesalePricePerGramDollars * 100).toLong()
+                retailPricePerGramCents = (retailPricePerGramDollars * 100).roundToLong(),
+                wholesalePricePerGramCents = (wholesalePricePerGramDollars * 100).roundToLong()
             )
         }
     }
 
     // CREATE NEW CUSTOMER
     fun createCustomer(name: String, phone: String, creditLimitDollars: Double, trustStatus: String) {
-        val limitCents = (creditLimitDollars * 100).toLong()
+        val limitCents = (creditLimitDollars * 100).roundToLong()
         viewModelScope.launch {
             repository.addCustomer(
                 Customer(

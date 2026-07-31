@@ -7,6 +7,7 @@ import com.example.microsaler.data.model.*
 import kotlinx.coroutines.flow.Flow
 import org.json.JSONObject
 import kotlin.math.abs
+import kotlin.math.roundToLong
 
 class PosRepository(
     private val db: AppDatabase,
@@ -31,64 +32,78 @@ class PosRepository(
     suspend fun getPigmentById(id: Long): Pigment? = pigmentDao.getPigmentById(id)
     suspend fun getCustomerById(id: Long): Customer? = customerDao.getCustomerById(id)
 
-    // RESTOCK PIGMENT
+    // RESTOCK PIGMENT (BUG-3: now transactional)
     suspend fun restockPigment(
         pigmentId: Long,
         receivedMg: Long,
         totalCostCents: Long,
         supplierName: String
     ): Result<Unit> {
-        val pigment = pigmentDao.getPigmentById(pigmentId)
-            ?: return Result.failure(Exception("Pigment not found"))
+        return try {
+            db.withTransaction {
+                if (receivedMg <= 0) throw Exception("Received weight must be greater than 0")
+                if (totalCostCents < 0) throw Exception("Cost cannot be negative")
 
-        val newStockMg = pigment.stock_mg + receivedMg
-        val newTotalCostCents = pigment.total_cost_cents + totalCostCents
+                val pigment = pigmentDao.getPigmentById(pigmentId)
+                    ?: throw Exception("Pigment not found")
 
-        pigmentDao.updateStockAndCost(pigmentId, newStockMg, newTotalCostCents)
+                val newStockMg = pigment.stock_mg + receivedMg
+                val newTotalCostCents = pigment.total_cost_cents + totalCostCents
 
-        stockReceiptDao.insertReceipt(
-            StockReceipt(
-                pigment_id = pigmentId,
-                received_mg = receivedMg,
-                total_cost_cents = totalCostCents,
-                supplier_name = supplierName
-            )
-        )
-        return Result.success(Unit)
+                pigmentDao.updateStockAndCost(pigmentId, newStockMg, newTotalCostCents)
+
+                stockReceiptDao.insertReceipt(
+                    StockReceipt(
+                        pigment_id = pigmentId,
+                        received_mg = receivedMg,
+                        total_cost_cents = totalCostCents,
+                        supplier_name = supplierName
+                    )
+                )
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
-    // SHRINKAGE LOG (Spillage / Sample / Loss)
+    // SHRINKAGE LOG (Spillage / Sample / Loss) (BUG-3: now transactional)
     suspend fun logShrinkage(
         pigmentId: Long,
         mgLost: Long,
         reason: String
     ): Result<Unit> {
-        val pigment = pigmentDao.getPigmentById(pigmentId)
-            ?: return Result.failure(Exception("Pigment not found"))
+        return try {
+            db.withTransaction {
+                if (mgLost <= 0) throw Exception("Loss weight must be greater than 0")
 
-        if (mgLost <= 0) return Result.failure(Exception("Loss weight must be greater than 0"))
+                val pigment = pigmentDao.getPigmentById(pigmentId)
+                    ?: throw Exception("Pigment not found")
 
-        val cogsLossCents = if (pigment.stock_mg > 0) {
-            ((pigment.total_cost_cents.toDouble() / pigment.stock_mg) * mgLost).toLong()
-        } else {
-            0L
+                val cogsLossCents = if (pigment.stock_mg > 0) {
+                    ((pigment.total_cost_cents.toDouble() / pigment.stock_mg) * mgLost).roundToLong()
+                } else {
+                    0L
+                }
+
+                val newStockMg = (pigment.stock_mg - mgLost).coerceAtLeast(0)
+                val newTotalCostCents = (pigment.total_cost_cents - cogsLossCents).coerceAtLeast(0)
+
+                pigmentDao.updateStockAndCost(pigmentId, newStockMg, newTotalCostCents)
+
+                shrinkageLogDao.insertShrinkageLog(
+                    ShrinkageLog(
+                        pigment_id = pigmentId,
+                        mg_lost = mgLost,
+                        cogs_loss_cents = cogsLossCents,
+                        reason = reason
+                    )
+                )
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
         }
-
-        val newStockMg = (pigment.stock_mg - mgLost).coerceAtLeast(0)
-        val newTotalCostCents = (pigment.total_cost_cents - cogsLossCents).coerceAtLeast(0)
-
-        pigmentDao.updateStockAndCost(pigmentId, newStockMg, newTotalCostCents)
-
-        shrinkageLogDao.insertShrinkageLog(
-            ShrinkageLog(
-                pigment_id = pigmentId,
-                mg_lost = mgLost,
-                cogs_loss_cents = cogsLossCents,
-                reason = reason
-            )
-        )
-
-        return Result.success(Unit)
     }
 
     // COMPLETE SALE (With Split Payment Reconciliation & Handshake Mode Check)
@@ -103,8 +118,22 @@ class PosRepository(
                 if (items.isEmpty()) throw Exception("Cart is empty")
                 if (payments.isEmpty()) throw Exception("No payments provided")
 
+                // BUG-1/BUG-2 fix: recompute COGS from the pigment's CURRENT weighted-average
+                // cost (not whatever the caller passed in), and validate stock before any deduction.
+                val cogsByLine = items.map { item ->
+                    val pigment = pigmentDao.getPigmentById(item.pigment_id)
+                        ?: throw Exception("Pigment ${item.pigment_id} not found")
+                    if (pigment.stock_mg < item.weight_mg) {
+                        throw Exception(
+                            "Insufficient stock for ${pigment.name}: " +
+                            "need ${item.weight_mg / 1000.0}g, have ${pigment.stockGrams}g"
+                        )
+                    }
+                    (pigment.costPerMgCents * item.weight_mg).roundToLong()
+                }
+
                 val totalSaleAmountCents = items.sumOf { it.price_charged_cents }
-                val totalCogsCents = items.sumOf { it.unit_cogs_cents }
+                val totalCogsCents = cogsByLine.sum()
                 val totalPaymentsCents = payments.sumOf { it.amount_cents }
 
                 // RULE 4: Split payments must sum to exactly the sale total (±1 cent rounding tolerance)
@@ -149,15 +178,15 @@ class PosRepository(
                 )
 
                 // Save Sale Items & Deduct Inventory Stock
-                items.forEach { item ->
-                    saleItemDao.insertSaleItem(item.copy(sale_id = saleId))
+                items.forEachIndexed { index, item ->
+                    val lineCogs = cogsByLine[index]
+                    saleItemDao.insertSaleItem(item.copy(sale_id = saleId, unit_cogs_cents = lineCogs))
 
-                    val pigment = pigmentDao.getPigmentById(item.pigment_id)
-                    if (pigment != null) {
-                        val newStock = (pigment.stock_mg - item.weight_mg).coerceAtLeast(0)
-                        val newCost = (pigment.total_cost_cents - item.unit_cogs_cents).coerceAtLeast(0)
-                        pigmentDao.updateStockAndCost(item.pigment_id, newStock, newCost)
-                    }
+                    // Stock was already validated above, so this is safe (no more coerceAtLeast masking).
+                    val pigment = pigmentDao.getPigmentById(item.pigment_id)!!
+                    val newStock = pigment.stock_mg - item.weight_mg
+                    val newCost = (pigment.total_cost_cents - lineCogs).coerceAtLeast(0)
+                    pigmentDao.updateStockAndCost(item.pigment_id, newStock, newCost)
                 }
 
                 // Save Payments & Update Customer Balance if House Tab
@@ -223,6 +252,15 @@ class PosRepository(
                     )
                 }
 
+                if (refundAmountCents < 0) throw Exception("Refund amount cannot be negative")
+                val alreadyRefundedCents = returnDao.getTotalRefundedCentsForSaleItem(saleItemId) ?: 0L
+                if (alreadyRefundedCents + refundAmountCents > saleItem.price_charged_cents) {
+                    throw Exception(
+                        "Cumulative refund ($${String.format("%.2f", (alreadyRefundedCents + refundAmountCents) / 100.0)}) " +
+                        "would exceed the original sale price ($${String.format("%.2f", saleItem.price_charged_cents / 100.0)})."
+                    )
+                }
+
                 returnDao.insertReturn(
                     ReturnRecord(
                         sale_item_id = saleItemId,
@@ -238,7 +276,7 @@ class PosRepository(
                     val pigment = pigmentDao.getPigmentById(saleItem.pigment_id)
                     if (pigment != null) {
                         val restockCogsCents = if (saleItem.weight_mg > 0) {
-                            ((saleItem.unit_cogs_cents.toDouble() / saleItem.weight_mg) * mgReturned).toLong()
+                            ((saleItem.unit_cogs_cents.toDouble() / saleItem.weight_mg) * mgReturned).roundToLong()
                         } else 0L
 
                         pigmentDao.updateStockAndCost(
@@ -292,6 +330,19 @@ class PosRepository(
                     put("sale_id", saleId)
                     put("reason", reason)
                     put("total_amount_cents", sale.total_amount_cents)
+                    put("payments", org.json.JSONArray().apply {
+                        payments.forEach { p ->
+                            put(JSONObject().apply {
+                                put("type", p.payment_type)
+                                put("amount_cents", p.amount_cents)
+                                // HOUSE_TAB is reversed on the customer's balance above, not owed back in cash/digital.
+                                put(
+                                    "refund_due_cents",
+                                    if (p.payment_type == "HOUSE_TAB") 0 else p.amount_cents
+                                )
+                            })
+                        }
+                    })
                 }.toString()
 
                 auditLogDao.insertAuditLog(
@@ -309,31 +360,42 @@ class PosRepository(
         }
     }
 
-    // SETTLE TAB PAYMENT
+    // SETTLE TAB PAYMENT (BUG-3: transactional, BUG-5: no overpayment past the current balance)
     suspend fun settleTabPayment(
         customerId: Long,
         amountPaidCents: Long,
         paymentType: String,
         digitalProvider: String?
     ): Result<Unit> {
-        val customer = customerDao.getCustomerById(customerId)
-            ?: return Result.failure(Exception("Customer not found"))
+        return try {
+            db.withTransaction {
+                val customer = customerDao.getCustomerById(customerId)
+                    ?: throw Exception("Customer not found")
 
-        if (amountPaidCents <= 0) return Result.failure(Exception("Payment amount must be greater than $0.00"))
+                if (amountPaidCents <= 0) throw Exception("Payment amount must be greater than $0.00")
+                if (amountPaidCents > customer.current_balance_cents) {
+                    throw Exception(
+                        "Payment ($${String.format("%.2f", amountPaidCents / 100.0)}) exceeds " +
+                        "the customer's balance ($${String.format("%.2f", customer.current_balance_cents / 100.0)})."
+                    )
+                }
 
-        tabPaymentDao.insertTabPayment(
-            TabPayment(
-                customer_id = customerId,
-                amount_paid_cents = amountPaidCents,
-                payment_type = paymentType,
-                digital_provider = digitalProvider
-            )
-        )
+                tabPaymentDao.insertTabPayment(
+                    TabPayment(
+                        customer_id = customerId,
+                        amount_paid_cents = amountPaidCents,
+                        payment_type = paymentType,
+                        digital_provider = digitalProvider
+                    )
+                )
 
-        // Reduce balance
-        customerDao.updateCustomerBalance(customerId, -amountPaidCents)
-
-        return Result.success(Unit)
+                // Reduce balance
+                customerDao.updateCustomerBalance(customerId, -amountPaidCents)
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     // PIGMENT & CUSTOMER MANAGEMENTS

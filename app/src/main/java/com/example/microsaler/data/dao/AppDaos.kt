@@ -122,6 +122,9 @@ interface ReturnDao {
     @Query("SELECT SUM(mg_returned) FROM returns WHERE sale_item_id = :saleItemId")
     suspend fun getTotalReturnedMgForSaleItem(saleItemId: Long): Long?
 
+    @Query("SELECT SUM(refund_amount_cents) FROM returns WHERE sale_item_id = :saleItemId")
+    suspend fun getTotalRefundedCentsForSaleItem(saleItemId: Long): Long?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertReturn(returnRecord: ReturnRecord): Long
 }
