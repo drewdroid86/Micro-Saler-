@@ -4,6 +4,8 @@ import { formatCents, formatMgToGrams } from '../repository';
 
 export const InventoryScreen = () => {
   const { pigments, saleItems, openModal } = usePos();
+  const safePigments = pigments || [];
+  const safeSaleItems = saleItems || [];
 
   return (
     <div>
@@ -22,9 +24,9 @@ export const InventoryScreen = () => {
       <div className="chart-container">
         <h3 className="title-medium mb-md">Cost vs Revenue Chart</h3>
         <div>
-          {pigments.map(p => {
+          {safePigments.map(p => {
             const cost = p.total_cost_cents;
-            const rev = saleItems.filter(si => Number(si.pigment_id) === Number(p.pigment_id)).reduce((sum, si) => sum + si.price_charged_cents, 0);
+            const rev = safeSaleItems.filter(si => Number(si.pigment_id) === Number(p.pigment_id)).reduce((sum, si) => sum + si.price_charged_cents, 0);
             const maxVal = Math.max(cost, rev, 1);
             const costPct = (cost / maxVal) * 100;
             const revPct = (rev / maxVal) * 100;
@@ -51,7 +53,7 @@ export const InventoryScreen = () => {
       </div>
 
       <div className="grid-2col">
-        {pigments.map(p => {
+        {safePigments.map(p => {
           const wac = p.stock_mg > 0 ? (p.total_cost_cents / p.stock_mg) * 1000 : 0;
           return (
             <div key={p.pigment_id} className="inventory-card">

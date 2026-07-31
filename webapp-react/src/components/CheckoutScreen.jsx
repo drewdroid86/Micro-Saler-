@@ -121,7 +121,7 @@ export const CheckoutScreen = () => {
       </div>
 
       <div className="grid-2col mb-md">
-        {pigments.map(p => {
+        {safePigments.map(p => {
           const isSelected = selectedPigment && selectedPigment.pigment_id === p.pigment_id;
           return (
             <div
