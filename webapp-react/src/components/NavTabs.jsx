@@ -7,6 +7,7 @@ export const NavTabs = () => {
   const tabs = [
     { id: 'checkout', icon: '🛒', label: 'Checkout' },
     { id: 'inventory', icon: '📦', label: 'Inventory' },
+    { id: 'pricing', icon: '🧮', label: 'Pricing Calculator' },
     { id: 'customers', icon: '👥', label: 'Customers' },
     { id: 'suppliers', icon: '🏭', label: 'Suppliers' },
     { id: 'reports', icon: '📊', label: 'Reports & P&L' },

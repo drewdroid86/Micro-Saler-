@@ -4,6 +4,7 @@ import { Header } from './components/Header';
 import { NavTabs } from './components/NavTabs';
 import { CheckoutScreen } from './components/CheckoutScreen';
 import { InventoryScreen } from './components/InventoryScreen';
+import { PricingCalculatorScreen } from './components/PricingCalculatorScreen';
 import { CustomerScreen } from './components/CustomerScreen';
 import { SupplierScreen } from './components/SupplierScreen';
 import { ReportsScreen } from './components/ReportsScreen';
@@ -62,6 +63,7 @@ export function App() {
       <main className="main-content">
         {currentTab === 'checkout' && <CheckoutScreen />}
         {currentTab === 'inventory' && <InventoryScreen />}
+        {currentTab === 'pricing' && <PricingCalculatorScreen />}
         {currentTab === 'customers' && <CustomerScreen />}
         {currentTab === 'suppliers' && <SupplierScreen />}
         {currentTab === 'reports' && <ReportsScreen />}

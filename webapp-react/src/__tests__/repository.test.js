@@ -6,8 +6,64 @@ import {
   formatMgToOz,
   getEffectivePricePerGramCents,
   validateCompletedSale,
-  APPROVED_PAYMENT_TYPES
+  APPROVED_PAYMENT_TYPES,
+  gramsToMg,
+  ozToMg,
+  mgToGrams,
+  mgToOz,
+  calculatePricingBreakdown,
+  getMatchedTier
 } from '../repository.js';
+
+test('gramsToMg and ozToMg convert accurately', () => {
+  assert.equal(gramsToMg(10), 10000);
+  assert.equal(gramsToMg(0.5), 500);
+  assert.equal(ozToMg(1), 28350); // Math.round(28349.523)
+  assert.equal(mgToGrams(5000), 5);
+  assert.equal(Math.round(mgToOz(28349.523)), 1);
+});
+
+test('calculatePricingBreakdown computes retail price, COGS, profit, and margin correctly', () => {
+  const pigment = {
+    pigment_id: 1,
+    name: 'Sample Ruby',
+    retail_price_per_gram_cents: 1000, // $10/g
+    wholesale_price_per_gram_cents: 600, // $6/g
+    stock_mg: 100000, // 100g in stock
+    total_cost_cents: 30000 // $300 total cost => WAC is $3/g (300 cents/g)
+  };
+
+  // Test 25g Retail
+  const breakdown = calculatePricingBreakdown({
+    pigment,
+    weightMg: 25000,
+    pricingMode: 'RETAIL'
+  });
+
+  assert.equal(breakdown.weightGrams, 25);
+  assert.equal(breakdown.totalPriceCents, 25000); // 25g * $10 = $250.00 (25000 cents)
+  assert.equal(breakdown.cogsCents, 7500); // 25g * $3 = $75.00 (7500 cents)
+  assert.equal(breakdown.grossProfitCents, 17500); // $175.00 profit
+  assert.equal(breakdown.marginPercent, 70); // 17500 / 25000 = 70%
+  assert.equal(breakdown.markupMultiplier, 25000 / 7500); // 3.33x
+
+  // Test Tier matching
+  const pigmentWithTiers = {
+    ...pigment,
+    price_tiers: [
+      { min_weight_mg: 50000, retail_price_per_gram_cents: 800, wholesale_price_per_gram_cents: 500 }
+    ]
+  };
+
+  const tierBreakdown = calculatePricingBreakdown({
+    pigment: pigmentWithTiers,
+    weightMg: 50000,
+    pricingMode: 'RETAIL'
+  });
+
+  assert.equal(tierBreakdown.effectiveRatePerGramCents, 800); // Tier applied ($8/g instead of $10/g)
+  assert.equal(tierBreakdown.totalPriceCents, 40000); // 50g * $8 = $400.00
+});
 
 test('formatCents converts integer cents to formatted dollar string', () => {
   assert.equal(formatCents(100), '$1.00');

@@ -1496,3 +1496,71 @@ body {
     padding: var(--spacing-lg);
   }
 }
+
+/* =========================================
+   29. Pricing Calculator Styles
+========================================= */
+.pricing-tabs-bar {
+  display: flex;
+  gap: var(--spacing-xs);
+  flex-wrap: wrap;
+}
+
+.preset-pills-container {
+  display: flex;
+  align-items: center;
+  margin-top: var(--spacing-xs);
+}
+
+.preset-pill {
+  background: var(--market-surface-variant);
+  border: 1px solid var(--market-border);
+  color: var(--market-text-primary);
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.preset-pill:hover {
+  background: var(--market-green-light);
+  border-color: var(--market-green-primary);
+  color: var(--market-green-dark);
+}
+
+.preset-pill.active {
+  background: var(--market-green-primary);
+  border-color: var(--market-green-dark);
+  color: #ffffff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+}
+
+.unit-toggle-group {
+  display: flex;
+  gap: 2px;
+  background: var(--market-surface-variant);
+  padding: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.badge-success { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
+.badge-info { background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }
+.badge-warning { background: #fff8e1; color: #f57f17; border: 1px solid #ffe082; }
+.badge-error { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
+
+.highlight-row {
+  background-color: var(--market-green-light) !important;
+  font-weight: bold;
+}
+
