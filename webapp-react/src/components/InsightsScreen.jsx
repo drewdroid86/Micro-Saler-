@@ -21,6 +21,7 @@ export const InsightsScreen = () => {
     customers,
     suppliers,
     shrinkageLogs,
+    stockReceipts,
     setCurrentTab,
     openModal
   } = usePos();
@@ -53,9 +54,10 @@ export const InsightsScreen = () => {
       customers,
       suppliers,
       shrinkageLogs,
+      stockReceipts,
       timeRange
     });
-  }, [sales, saleItems, pigments, customers, suppliers, shrinkageLogs, timeRange]);
+  }, [sales, saleItems, pigments, customers, suppliers, shrinkageLogs, stockReceipts, timeRange]);
 
   // Sorted Per-Pigment Profitability Table
   const sortedProfitability = useMemo(() => {
@@ -88,7 +90,7 @@ export const InsightsScreen = () => {
     return list;
   }, [insights.detailedSalesList, customerFilter, pigmentFilter]);
 
-  // CSV Export Handler for all 7 sections
+  // CSV Export Handler for all sections
   const handleDownloadCSV = () => {
     const csvLines = [];
 
@@ -146,8 +148,16 @@ export const InsightsScreen = () => {
     });
     csvLines.push(``);
 
-    // Section 7: Drill-Down Completed Sales
-    csvLines.push(`"7. INDIVIDUAL COMPLETED SALES DRILL-DOWN"`);
+    // Section 7: Stock Receipt Cost Trends
+    csvLines.push(`"7. SUPPLIER COST TRENDS PER PIGMENT"`);
+    csvLines.push(`"Pigment Name","Supplier","Initial Cost ($/g)","Latest Cost ($/g)","Cost Change (%)","Trend Status"`);
+    (insights.pigmentCostTrends || []).forEach(t => {
+      csvLines.push(`"${t.name}","${t.latestSupplierName}","${(t.oldestCostPerGramCents / 100).toFixed(2)}","${(t.latestCostPerGramCents / 100).toFixed(2)}","${t.pctChange}%","${t.trendStatus}"`);
+    });
+    csvLines.push(``);
+
+    // Section 8: Drill-Down Completed Sales
+    csvLines.push(`"8. INDIVIDUAL COMPLETED SALES DRILL-DOWN"`);
     csvLines.push(`"Sale ID","Date","Customer","Revenue ($)","COGS ($)","Profit ($)","Margin (%)","Line Items Count"`);
     insights.detailedSalesList.forEach(s => {
       csvLines.push(`"${s.sale_id}","${new Date(s.created_at).toLocaleString()}","${s.customer_name}","${(s.total_amount_cents / 100).toFixed(2)}","${(s.total_cogs_cents / 100).toFixed(2)}","${(s.profit_cents / 100).toFixed(2)}","${s.margin_pct}%","${s.items.length}"`);
@@ -185,7 +195,7 @@ export const InsightsScreen = () => {
         <div>
           <h2 className="section-title">📈 BUSINESS INSIGHTS & DECISION DASHBOARD</h2>
           <p className="body-small text-muted">
-            Profitability per pigment, velocity & reorder signals, time patterns, receivables, payables, shrinkage loss, and sale drill-down
+            Pigment profitability, inventory velocity, time patterns, receivables, payables, shrinkage loss, cost trends, and sale drill-downs
           </p>
         </div>
 
@@ -480,7 +490,7 @@ export const InsightsScreen = () => {
         </div>
       </div>
 
-      {/* SECTION 4: Receivables (Who Owes Me) & SECTION 5: Payables (What I Owe) */}
+      {/* SECTION 4: Receivables & SECTION 5: Payables */}
       <div className="grid-2col mb-lg" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
         {/* Receivables Summary (Who Owes Me) */}
         <div className="card" style={{ borderColor: insights.totalArCents > 0 ? 'var(--market-warning)' : 'var(--market-border)' }}>
@@ -611,11 +621,99 @@ export const InsightsScreen = () => {
         )}
       </div>
 
-      {/* SECTION 7: Individual Sale History (Drill-Down Detail) */}
+      {/* SECTION 7: Stock Receipt History & Supplier Cost Trends */}
+      <div className="card mb-lg">
+        <div className="flex-center space-between mb-sm" style={{ flexWrap: 'wrap', gap: '8px' }}>
+          <div>
+            <h3 className="title-medium">📜 7. Stock Receipt History & Supplier Cost Trends</h3>
+            <p className="body-small text-muted">Incoming restock inventory over time &amp; unit cost trends per pigment (cost inflation tracking)</p>
+          </div>
+          <button className="btn btn-sm btn-ghost" onClick={() => setCurrentTab('suppliers')}>
+            View Supplier Restocks →
+          </button>
+        </div>
+
+        {/* Cost Trends Per Pigment Table */}
+        {insights.pigmentCostTrends && insights.pigmentCostTrends.length > 0 && (
+          <div className="mb-md p-sm" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px' }}>
+            <strong className="body-small text-muted mb-xs" style={{ display: 'block' }}>Pigment Unit Cost Trend Overview</strong>
+            <div className="table-responsive">
+              <table className="table" style={{ width: '100%', textAlign: 'left', background: 'var(--market-surface)', borderRadius: '6px' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--market-border)' }}>
+                    <th style={{ padding: '8px' }}>Pigment Name</th>
+                    <th style={{ padding: '8px' }}>Latest Supplier</th>
+                    <th style={{ padding: '8px', textAlign: 'right' }}>Initial Cost/g</th>
+                    <th style={{ padding: '8px', textAlign: 'right' }}>Latest Cost/g</th>
+                    <th style={{ padding: '8px', textAlign: 'center' }}>Cost Trend</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {insights.pigmentCostTrends.map(t => {
+                    let badgeClass = 'badge-info';
+                    if (t.trendStatus === 'INCREASING') badgeClass = 'badge-warning';
+                    else if (t.trendStatus === 'DECREASING') badgeClass = 'badge-success';
+
+                    return (
+                      <tr key={t.pigment_id} style={{ borderBottom: '1px solid var(--market-border-light)' }}>
+                        <td style={{ padding: '8px', fontWeight: '500' }}>{t.name}</td>
+                        <td style={{ padding: '8px' }} className="text-muted">{t.latestSupplierName}</td>
+                        <td style={{ padding: '8px', textAlign: 'right' }}>{formatCents(t.oldestCostPerGramCents)}/g</td>
+                        <td style={{ padding: '8px', textAlign: 'right', fontWeight: 'bold' }}>{formatCents(t.latestCostPerGramCents)}/g</td>
+                        <td style={{ padding: '8px', textAlign: 'center' }}>
+                          <span className={`badge ${badgeClass}`} style={{ fontSize: '0.75rem' }}>
+                            {t.trendStatus === 'INCREASING' ? `+${t.pctChange}% Inflation` : t.trendStatus === 'DECREASING' ? `${t.pctChange}% Savings` : 'Stable'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Incoming Stock Receipts Ledger */}
+        {(!insights.validReceipts || insights.validReceipts.length === 0) ? (
+          <p className="body-medium text-muted" style={{ padding: '12px 0' }}>Zero stock receipts recorded.</p>
+        ) : (
+          <div className="table-responsive">
+            <table className="table" style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid var(--market-border)' }}>
+                  <th style={{ padding: '10px 8px' }}>Restock Date</th>
+                  <th style={{ padding: '10px 8px' }}>Pigment Name</th>
+                  <th style={{ padding: '10px 8px' }}>Supplier</th>
+                  <th style={{ padding: '10px 8px', textAlign: 'right' }}>Received Weight</th>
+                  <th style={{ padding: '10px 8px', textAlign: 'right' }}>Total Cost</th>
+                  <th style={{ padding: '10px 8px', textAlign: 'right' }}>Unit Cost ($/g)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {insights.validReceipts.slice(0, 15).map(r => (
+                  <tr key={r.stock_receipt_id} style={{ borderBottom: '1px solid var(--market-border-light)' }}>
+                    <td style={{ padding: '10px 8px', fontSize: '0.88rem' }}>{new Date(r.received_at).toLocaleDateString()}</td>
+                    <td style={{ padding: '10px 8px', fontWeight: '500' }}>{r.pigment_name}</td>
+                    <td style={{ padding: '10px 8px' }} className="text-muted">{r.supplier_name}</td>
+                    <td style={{ padding: '10px 8px', textAlign: 'right' }}>{formatMgToGrams(r.received_mg)}</td>
+                    <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 'bold' }}>{formatCents(r.total_cost_cents)}</td>
+                    <td style={{ padding: '10px 8px', textAlign: 'right' }} className="text-success font-weight-bold">
+                      {formatCents(r.cost_per_gram_cents)}/g
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* SECTION 8: Individual Sale History (Drill-Down Detail) */}
       <div className="card mb-lg">
         <div className="flex-center space-between mb-sm" style={{ flexWrap: 'wrap', gap: '12px' }}>
           <div>
-            <h3 className="title-medium">🔍 7. Individual Sale History (Drill-Down Detail)</h3>
+            <h3 className="title-medium">🔍 8. Individual Sale History (Drill-Down Detail)</h3>
             <p className="body-small text-muted">Complete audit trail of sales with date, customer, line items, revenue, COGS, profit $, and margin %</p>
           </div>
 

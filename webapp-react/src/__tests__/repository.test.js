@@ -524,6 +524,11 @@ test('calculateBusinessInsights computes per-pigment profitability, inventory ve
     { pigment_id: 1, weight_mg: 1000, cogs_loss_cents: 300, created_at: nowTs - 1800000 }
   ];
 
+  const stockReceipts = [
+    { receipt_id: 1, pigment_id: 1, supplier_id: 1, supplier_name: 'Mica World Inc', received_mg: 10000, total_cost_cents: 2000, received_at: nowTs - 864000000 }, // $2.00/g initial
+    { receipt_id: 2, pigment_id: 1, supplier_id: 1, supplier_name: 'Mica World Inc', received_mg: 10000, total_cost_cents: 3000, received_at: nowTs - 86400000 }  // $3.00/g latest => +50% increase
+  ];
+
   const insights = calculateBusinessInsights({
     sales,
     saleItems,
@@ -531,6 +536,7 @@ test('calculateBusinessInsights computes per-pigment profitability, inventory ve
     customers,
     suppliers,
     shrinkageLogs,
+    stockReceipts,
     timeRange: 'ALL',
     nowTimestamp: nowTs
   });
@@ -583,6 +589,13 @@ test('calculateBusinessInsights computes per-pigment profitability, inventory ve
   assert.equal(insights.detailedSalesList[0].customer_name, 'Alice Smith');
   assert.equal(insights.detailedSalesList[0].items.length, 2);
 
+  // 8. Stock receipt history & cost trend check
+  assert.equal(insights.validReceipts.length, 2);
+  assert.equal(insights.pigmentCostTrends.length, 1);
+  assert.equal(insights.pigmentCostTrends[0].name, 'Emerald Sparkle');
+  assert.equal(insights.pigmentCostTrends[0].trendStatus, 'INCREASING');
+  assert.equal(insights.pigmentCostTrends[0].pctChange, 50);
+
   // Deterministic recommendations check
   assert.ok(insights.recommendations.length > 0);
   assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_reorder_1')));
@@ -590,7 +603,9 @@ test('calculateBusinessInsights computes per-pigment profitability, inventory ve
   assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_slow_3')));
   assert.ok(insights.recommendations.some(r => r.id === 'rec_payables'));
   assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_waste_1')));
+  assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_cost_increase_1')));
 });
+
 
 
 

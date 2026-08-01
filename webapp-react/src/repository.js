@@ -1345,6 +1345,7 @@ export function calculateBusinessInsights({
   customers = [],
   suppliers = [],
   shrinkageLogs = [],
+  stockReceipts = [],
   timeRange = 'ALL',
   nowTimestamp = null
 }) {
@@ -1683,7 +1684,68 @@ export function calculateBusinessInsights({
     };
   }).sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
 
-  // Add Payables & Waste Warnings to Deterministic Recommendations
+  // 9. Stock Receipt History & Supplier Cost Trends
+  const validReceipts = (stockReceipts || [])
+    .filter(r => r.payment_status !== 'VOIDED')
+    .map(r => {
+      const matchP = (pigments || []).find(p => Number(p.pigment_id) === Number(r.pigment_id));
+      const receivedGrams = (r.received_mg || 0) / 1000;
+      const totalCostCents = r.total_cost_cents || 0;
+      const costPerGramCents = receivedGrams > 0 ? Math.round(totalCostCents / receivedGrams) : 0;
+      const dateTs = r.received_at || r.timestamp || r.created_at || 0;
+
+      return {
+        stock_receipt_id: r.stock_receipt_id || r.receipt_id,
+        pigment_id: r.pigment_id,
+        pigment_name: matchP?.name || `Pigment #${r.pigment_id}`,
+        supplier_id: r.supplier_id,
+        supplier_name: r.supplier_name || 'Direct Restock',
+        received_mg: r.received_mg || 0,
+        total_cost_cents: totalCostCents,
+        cost_per_gram_cents: costPerGramCents,
+        received_at: dateTs
+      };
+    })
+    .sort((a, b) => b.received_at - a.received_at);
+
+  const costTrendMap = new Map();
+  validReceipts.forEach(r => {
+    if (!r.pigment_id || r.pigment_id <= 0) return;
+    let list = costTrendMap.get(r.pigment_id);
+    if (!list) {
+      list = [];
+      costTrendMap.set(r.pigment_id, list);
+    }
+    list.push(r);
+  });
+
+  const pigmentCostTrends = Array.from(costTrendMap.entries()).map(([pId, receipts]) => {
+    const matchP = (pigments || []).find(p => Number(p.pigment_id) === Number(pId));
+    const latestReceipt = receipts[0];
+    const oldestReceipt = receipts[receipts.length - 1];
+
+    const latestCostPerGram = latestReceipt.cost_per_gram_cents;
+    const oldestCostPerGram = oldestReceipt.cost_per_gram_cents;
+    const diffCents = latestCostPerGram - oldestCostPerGram;
+    const pctChange = oldestCostPerGram > 0 ? Number(((diffCents / oldestCostPerGram) * 100).toFixed(1)) : 0;
+
+    let trendStatus = 'STABLE';
+    if (pctChange > 2) trendStatus = 'INCREASING';
+    else if (pctChange < -2) trendStatus = 'DECREASING';
+
+    return {
+      pigment_id: pId,
+      name: matchP?.name || `Pigment #${pId}`,
+      receiptCount: receipts.length,
+      latestCostPerGramCents: latestCostPerGram,
+      oldestCostPerGramCents: oldestCostPerGram,
+      pctChange,
+      trendStatus,
+      latestSupplierName: latestReceipt.supplier_name
+    };
+  }).sort((a, b) => b.pctChange - a.pctChange);
+
+  // Add Payables, Waste & Cost Inflation Warnings to Deterministic Recommendations
   if (totalApCents > 0) {
     recommendations.push({
       id: 'rec_payables',
@@ -1705,6 +1767,16 @@ export function calculateBusinessInsights({
     });
   }
 
+  pigmentCostTrends.filter(t => t.trendStatus === 'INCREASING' && t.pctChange >= 10).forEach(t => {
+    recommendations.push({
+      id: `rec_cost_increase_${t.pigment_id}`,
+      type: 'WARNING',
+      icon: '📈',
+      title: 'Restock Cost Inflation Warning',
+      message: `"${t.name}" supplier restock cost per gram increased by +${t.pctChange}% (from ${formatCents(t.oldestCostPerGramCents)}/g to ${formatCents(t.latestCostPerGramCents)}/g). Evaluate margin adjustment.`
+    });
+  });
+
   return {
     timeRange,
     completedCount,
@@ -1725,9 +1797,12 @@ export function calculateBusinessInsights({
     shrinkageImpact,
     totalShrinkageLossCents,
     detailedSalesList,
+    validReceipts,
+    pigmentCostTrends,
     recommendations
   };
 }
+
 
 
 
