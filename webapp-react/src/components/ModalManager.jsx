@@ -37,6 +37,7 @@ export const ModalManager = () => {
     isHandshakeOverride,
     setIsHandshakeOverride,
     overrideCartTotal,
+    pricingMode,
     repo,
     refreshAllData,
     showToast,
@@ -673,7 +674,7 @@ export const ModalManager = () => {
     const payments = [{ payment_type: 'DIGITAL', digital_provider: digitalProvider, amount_cents: totalAmountCents, merchant_fee_cents: feeCents }];
 
     try {
-      await repo.completeSale(customerId, cart, payments, false);
+      await repo.completeSale(customerId, cart, payments, false, pricingMode);
       setCart([]);
       setSelectedCustomer(null);
       setSelectedPigment(null);
@@ -743,7 +744,7 @@ export const ModalManager = () => {
     }
 
     try {
-      await repo.completeSale(customerId, cart, payments, isHandshakeOverride);
+      await repo.completeSale(customerId, cart, payments, isHandshakeOverride, pricingMode);
       setCart([]);
       setSelectedCustomer(null);
       setSelectedPigment(null);
@@ -791,7 +792,7 @@ export const ModalManager = () => {
     const customerId = selectedCustomer?.customer_id || null;
 
     try {
-      await repo.completeSale(customerId, cart, payments, isHandshakeOverride);
+      await repo.completeSale(customerId, cart, payments, isHandshakeOverride, pricingMode);
       setCart([]);
       setSelectedCustomer(null);
       setSelectedPigment(null);

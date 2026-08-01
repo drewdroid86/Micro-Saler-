@@ -5,7 +5,7 @@
  */
 
 const DB_NAME = 'MicroSalerDB';
-export const DB_VERSION = 8;
+export const DB_VERSION = 9;
 
 export default class MicroSalerDB {
   constructor() {
@@ -42,7 +42,25 @@ export default class MicroSalerDB {
 
         request.onupgradeneeded = (event) => {
           const db = event.target.result;
+          const transaction = event.target.transaction;
           this._createStores(db);
+
+          if (event.oldVersion < 9) {
+            if (db.objectStoreNames.contains('sales')) {
+              const salesStore = transaction.objectStore('sales');
+              salesStore.openCursor().onsuccess = (cursorEvent) => {
+                const cursor = cursorEvent.target.result;
+                if (cursor) {
+                  const record = cursor.value;
+                  if (!record.sale_type) {
+                    record.sale_type = record.pricing_mode || 'RETAIL';
+                    cursor.update(record);
+                  }
+                  cursor.continue();
+                }
+              };
+            }
+          }
         };
 
         request.onsuccess = (event) => {

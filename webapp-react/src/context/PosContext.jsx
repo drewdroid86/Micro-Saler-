@@ -379,7 +379,7 @@ export const PosProvider = ({ children }) => {
 
     setIsSubmitting(true);
     try {
-      await repo.completeSale(customerId, cart, payments, false);
+      await repo.completeSale(customerId, cart, payments, false, pricingMode);
       setCart([]);
       setSelectedCustomer(null);
       setSelectedPigment(null);

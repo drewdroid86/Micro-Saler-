@@ -487,7 +487,7 @@ export class PosRepository {
     });
   }
 
-  async completeSale(customerId, items, payments, isCreditOverride = false) {
+  async completeSale(customerId, items, payments, isCreditOverride = false, pricingMode = 'RETAIL') {
     const totalSaleAmountCents = items.reduce((sum, i) => sum + (i.price_charged_cents || 0), 0);
     const totalPaymentsCents = payments.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
     const totalCogsCents = items.reduce((sum, i) => sum + (i.unit_cogs_cents || 0), 0);
@@ -570,6 +570,8 @@ export class PosRepository {
       createdSaleId = await new Promise((resolve, reject) => {
         const req = salesStore.add({
           customer_id: customerId ? Number(customerId) : null,
+          sale_type: (pricingMode || 'RETAIL').toUpperCase(),
+          pricing_mode: (pricingMode || 'RETAIL').toUpperCase(),
           total_amount_cents: totalSaleAmountCents,
           total_cogs_cents: totalCogsCents,
           status: 'COMPLETED',
@@ -932,6 +934,8 @@ export class PosRepository {
         // 2. Create Completed Sale record in Sales History
         const saleId = await this.db.add('sales', {
           customer_id: item.customer_id ? Number(item.customer_id) : null,
+          sale_type: (item.sale_type || item.pricing_mode || 'RETAIL').toUpperCase(),
+          pricing_mode: (item.pricing_mode || item.sale_type || 'RETAIL').toUpperCase(),
           total_amount_cents: item.amount_cents || 0,
           total_cogs_cents: unitCogsCents,
           status: 'COMPLETED',
@@ -958,6 +962,8 @@ export class PosRepository {
       // General credit store fulfillment
       const saleId = await this.db.add('sales', {
         customer_id: item.customer_id ? Number(item.customer_id) : null,
+        sale_type: (item.sale_type || item.pricing_mode || 'RETAIL').toUpperCase(),
+        pricing_mode: (item.pricing_mode || item.sale_type || 'RETAIL').toUpperCase(),
         total_amount_cents: item.amount_cents,
         total_cogs_cents: 0,
         status: 'COMPLETED',
@@ -1485,6 +1491,52 @@ export function calculateBusinessInsights({
   const completedCount = completedSales.length;
   const averageOrderValueCents = completedCount > 0 ? Math.round(grossRevenueCents / completedCount) : 0;
 
+  // Pricing Mode Breakdown
+  let retailSalesCount = 0;
+  let wholesaleSalesCount = 0;
+  let retailRevenueCents = 0;
+  let wholesaleRevenueCents = 0;
+  let retailCogsCents = 0;
+  let wholesaleCogsCents = 0;
+
+  completedSales.forEach(s => {
+    const mode = (s.sale_type || s.pricing_mode || 'RETAIL').toUpperCase();
+    const rev = s.total_amount_cents || 0;
+    const cogs = s.total_cogs_cents || 0;
+
+    if (mode === 'WHOLESALE') {
+      wholesaleSalesCount += 1;
+      wholesaleRevenueCents += rev;
+      wholesaleCogsCents += cogs;
+    } else {
+      retailSalesCount += 1;
+      retailRevenueCents += rev;
+      retailCogsCents += cogs;
+    }
+  });
+
+  const retailProfitCents = retailRevenueCents - retailCogsCents;
+  const wholesaleProfitCents = wholesaleRevenueCents - wholesaleCogsCents;
+  const retailMarginPct = retailRevenueCents > 0 ? Number(((retailProfitCents / retailRevenueCents) * 100).toFixed(1)) : 0;
+  const wholesaleMarginPct = wholesaleRevenueCents > 0 ? Number(((wholesaleProfitCents / wholesaleRevenueCents) * 100).toFixed(1)) : 0;
+  const retailAovCents = retailSalesCount > 0 ? Math.round(retailRevenueCents / retailSalesCount) : 0;
+  const wholesaleAovCents = wholesaleSalesCount > 0 ? Math.round(wholesaleRevenueCents / wholesaleSalesCount) : 0;
+
+  const pricingModeSummary = {
+    retailSalesCount,
+    wholesaleSalesCount,
+    retailRevenueCents,
+    wholesaleRevenueCents,
+    retailCogsCents,
+    wholesaleCogsCents,
+    retailProfitCents,
+    wholesaleProfitCents,
+    retailMarginPct,
+    wholesaleMarginPct,
+    retailAovCents,
+    wholesaleAovCents
+  };
+
   // 3. Time-Based Patterns (Day of Week & Hour of Day)
   const dayOfWeekNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const dayOfWeekStats = dayOfWeekNames.map(day => ({ day, count: 0, revenueCents: 0 }));
@@ -1675,6 +1727,9 @@ export function calculateBusinessInsights({
       created_at: s.created_at || s.timestamp || s.date,
       customer_id: s.customer_id,
       customer_name: custName,
+      sale_type: (s.sale_type || s.pricing_mode || 'RETAIL').toUpperCase(),
+      pricing_mode: (s.pricing_mode || s.sale_type || 'RETAIL').toUpperCase(),
+      is_below_floor: (rev > 0) && (((s.sale_type || s.pricing_mode || 'RETAIL').toUpperCase() === 'WHOLESALE' && marginPct < 50) || ((s.sale_type || s.pricing_mode || 'RETAIL').toUpperCase() === 'RETAIL' && marginPct < 65)),
       status: s.status || 'COMPLETED',
       total_amount_cents: rev,
       total_cogs_cents: cogs,
@@ -1767,6 +1822,31 @@ export function calculateBusinessInsights({
     });
   }
 
+  // Rule 5: Low Margin "Below Floor" Sales Warning (WHOLESALE < 50% or RETAIL < 65%)
+  completedSales.forEach(s => {
+    const rev = s.total_amount_cents || 0;
+    if (rev <= 0) return;
+    const cogs = s.total_cogs_cents || 0;
+    const profit = rev - cogs;
+    const marginPct = Number(((profit / rev) * 100).toFixed(1));
+    const mode = (s.sale_type || s.pricing_mode || 'RETAIL').toUpperCase();
+    const isBelowFloor = (mode === 'WHOLESALE' && marginPct < 50) || (mode === 'RETAIL' && marginPct < 65);
+
+    if (isBelowFloor) {
+      const cust = (customers || []).find(c => Number(c.customer_id) === Number(s.customer_id));
+      const custName = cust ? cust.name : 'Walk-in Customer';
+      const floorPct = mode === 'WHOLESALE' ? 50 : 65;
+
+      recommendations.push({
+        id: `rec_below_floor_${s.sale_id}`,
+        type: 'WARNING',
+        icon: '⚠️',
+        title: `Margin Below Floor (${mode})`,
+        message: `Sale #${String(s.sale_id).substring(0, 8)} (${custName}) yielded ${marginPct}% margin in ${mode} mode, below established ${floorPct}% baseline floor.`
+      });
+    }
+  });
+
   pigmentCostTrends.filter(t => t.trendStatus === 'INCREASING' && t.pctChange >= 10).forEach(t => {
     recommendations.push({
       id: `rec_cost_increase_${t.pigment_id}`,
@@ -1796,6 +1876,7 @@ export function calculateBusinessInsights({
     totalApCents,
     shrinkageImpact,
     totalShrinkageLossCents,
+    pricingModeSummary,
     detailedSalesList,
     validReceipts,
     pigmentCostTrends,

@@ -606,6 +606,80 @@ test('calculateBusinessInsights computes per-pigment profitability, inventory ve
   assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_cost_increase_1')));
 });
 
+test('calculateBusinessInsights calculates pricing mode performance summary and surfaces pricing_mode on detailed sales', () => {
+  const sales = [
+    {
+      sale_id: 101,
+      created_at: 1700000000000,
+      customer_id: 1,
+      total_amount_cents: 10000,
+      total_cogs_cents: 4000,
+      status: 'COMPLETED',
+      pricing_mode: 'RETAIL'
+    },
+    {
+      sale_id: 102,
+      created_at: 1700001000000,
+      customer_id: 2,
+      total_amount_cents: 15000,
+      total_cogs_cents: 9000,
+      status: 'COMPLETED',
+      pricing_mode: 'WHOLESALE'
+    },
+    {
+      sale_id: 103,
+      created_at: 1700002000000,
+      customer_id: 1,
+      total_amount_cents: 5000,
+      total_cogs_cents: 2000,
+      status: 'COMPLETED'
+    }
+  ];
+
+  const saleItems = [
+    { sale_item_id: 1, sale_id: 101, pigment_id: 1, weight_mg: 10000, price_charged_cents: 10000, unit_cogs_cents: 4000 },
+    { sale_item_id: 2, sale_id: 102, pigment_id: 1, weight_mg: 20000, price_charged_cents: 15000, unit_cogs_cents: 9000 },
+    { sale_item_id: 3, sale_id: 103, pigment_id: 1, weight_mg: 5000, price_charged_cents: 5000, unit_cogs_cents: 2000 }
+  ];
+
+  const insights = calculateBusinessInsights({
+    sales,
+    saleItems,
+    pigments: [{ pigment_id: 1, name: 'Sample Mica', stock_mg: 50000 }],
+    timeRange: 'ALL'
+  });
+
+  const pms = insights.pricingModeSummary;
+  assert.ok(pms, 'pricingModeSummary should be defined');
+  assert.equal(pms.retailSalesCount, 2);
+  assert.equal(pms.retailRevenueCents, 15000);
+  assert.equal(pms.retailCogsCents, 6000);
+  assert.equal(pms.retailProfitCents, 9000);
+  assert.equal(pms.retailMarginPct, 60);
+
+  assert.equal(pms.wholesaleSalesCount, 1);
+  assert.equal(pms.wholesaleRevenueCents, 15000);
+  assert.equal(pms.wholesaleCogsCents, 9000);
+  assert.equal(pms.wholesaleProfitCents, 6000);
+  assert.equal(pms.wholesaleMarginPct, 40);
+
+  assert.equal(insights.detailedSalesList.length, 3);
+  const wholesaleSale = insights.detailedSalesList.find(s => s.sale_id === 102);
+  const legacySale = insights.detailedSalesList.find(s => s.sale_id === 103);
+
+  assert.equal(wholesaleSale.pricing_mode, 'WHOLESALE');
+  assert.equal(wholesaleSale.sale_type, 'WHOLESALE');
+  assert.equal(wholesaleSale.is_below_floor, true, 'Wholesale sale with 40% margin (<50%) should be flagged as below floor');
+
+  assert.equal(legacySale.pricing_mode, 'RETAIL');
+  assert.equal(legacySale.sale_type, 'RETAIL');
+  assert.equal(legacySale.is_below_floor, true, 'Retail sale with 60% margin (<65%) should be flagged as below floor');
+
+  assert.ok(insights.recommendations.some(r => r.id === 'rec_below_floor_102'), 'Should trigger below floor recommendation for wholesale sale #102');
+  assert.ok(insights.recommendations.some(r => r.id === 'rec_below_floor_103'), 'Should trigger below floor recommendation for retail sale #103');
+});
+
+
 
 
 

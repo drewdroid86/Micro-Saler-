@@ -35,6 +35,7 @@ export const InsightsScreen = () => {
   // Drill-Down Filters & Expanded State
   const [customerFilter, setCustomerFilter] = useState('ALL');
   const [pigmentFilter, setPigmentFilter] = useState('ALL');
+  const [pricingModeFilter, setPricingModeFilter] = useState('ALL');
   const [expandedSaleIds, setExpandedSaleIds] = useState(new Set());
 
   const toggleExpandSale = (saleId) => {
@@ -87,8 +88,11 @@ export const InsightsScreen = () => {
     if (pigmentFilter !== 'ALL') {
       list = list.filter(s => s.items.some(item => String(item.pigment_id) === String(pigmentFilter)));
     }
+    if (pricingModeFilter !== 'ALL') {
+      list = list.filter(s => (s.pricing_mode || 'RETAIL').toUpperCase() === pricingModeFilter);
+    }
     return list;
-  }, [insights.detailedSalesList, customerFilter, pigmentFilter]);
+  }, [insights.detailedSalesList, customerFilter, pigmentFilter, pricingModeFilter]);
 
   // CSV Export Handler for all sections
   const handleDownloadCSV = () => {
@@ -156,11 +160,21 @@ export const InsightsScreen = () => {
     });
     csvLines.push(``);
 
+    // Section 1b: Pricing Mode Summary
+    csvLines.push(`"PRICING MODE PERFORMANCE SUMMARY"`);
+    csvLines.push(`"Pricing Mode","Orders Count","Revenue ($)","COGS ($)","Profit ($)","Margin (%)","Avg Order ($)"`);
+    if (insights.pricingModeSummary) {
+      const pms = insights.pricingModeSummary;
+      csvLines.push(`"RETAIL","${pms.retailSalesCount}","${(pms.retailRevenueCents / 100).toFixed(2)}","${(pms.retailCogsCents / 100).toFixed(2)}","${(pms.retailProfitCents / 100).toFixed(2)}","${pms.retailMarginPct}%","${(pms.retailAovCents / 100).toFixed(2)}"`);
+      csvLines.push(`"WHOLESALE","${pms.wholesaleSalesCount}","${(pms.wholesaleRevenueCents / 100).toFixed(2)}","${(pms.wholesaleCogsCents / 100).toFixed(2)}","${(pms.wholesaleProfitCents / 100).toFixed(2)}","${pms.wholesaleMarginPct}%","${(pms.wholesaleAovCents / 100).toFixed(2)}"`);
+    }
+    csvLines.push(``);
+
     // Section 8: Drill-Down Completed Sales
     csvLines.push(`"8. INDIVIDUAL COMPLETED SALES DRILL-DOWN"`);
-    csvLines.push(`"Sale ID","Date","Customer","Revenue ($)","COGS ($)","Profit ($)","Margin (%)","Line Items Count"`);
+    csvLines.push(`"Sale ID","Date","Customer","Pricing Mode","Revenue ($)","COGS ($)","Profit ($)","Margin (%)","Line Items Count"`);
     insights.detailedSalesList.forEach(s => {
-      csvLines.push(`"${s.sale_id}","${new Date(s.created_at).toLocaleString()}","${s.customer_name}","${(s.total_amount_cents / 100).toFixed(2)}","${(s.total_cogs_cents / 100).toFixed(2)}","${(s.profit_cents / 100).toFixed(2)}","${s.margin_pct}%","${s.items.length}"`);
+      csvLines.push(`"${s.sale_id}","${new Date(s.created_at).toLocaleString()}","${s.customer_name}","${s.pricing_mode || 'RETAIL'}","${(s.total_amount_cents / 100).toFixed(2)}","${(s.total_cogs_cents / 100).toFixed(2)}","${(s.profit_cents / 100).toFixed(2)}","${s.margin_pct}%","${s.items.length}"`);
     });
 
     const csvContent = csvLines.join('\n');
@@ -352,6 +366,74 @@ export const InsightsScreen = () => {
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* SECTION: Pricing Mode Performance Breakdown */}
+      <div className="card mb-lg">
+        <div className="flex-center space-between mb-sm" style={{ flexWrap: 'wrap', gap: '8px' }}>
+          <div>
+            <h3 className="title-medium">🏷️ Pricing Mode Performance (Retail vs. Wholesale)</h3>
+            <p className="body-small text-muted">Comparison of retail sales vs. wholesale sales volume, gross revenue, net profit, and profit margins</p>
+          </div>
+        </div>
+
+        <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
+          {/* Retail Summary Card */}
+          <div className="card" style={{ background: 'var(--market-surface-variant)', borderLeft: '4px solid var(--market-primary, #3b82f6)', padding: '16px' }}>
+            <div className="flex-center space-between mb-xs">
+              <span className="badge badge-info" style={{ fontWeight: 'bold', fontSize: '0.8rem', padding: '3px 8px' }}>RETAIL MODE</span>
+              <span className="body-small text-muted">{insights.pricingModeSummary?.retailSalesCount || 0} Order(s)</span>
+            </div>
+            <div style={{ marginTop: '10px' }}>
+              <div className="text-muted body-small">Gross Revenue</div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: 'var(--market-text-primary)' }}>
+                {formatCents(insights.pricingModeSummary?.retailRevenueCents || 0)}
+              </div>
+            </div>
+            <div className="flex-between" style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--market-border)' }}>
+              <div>
+                <span className="body-small text-muted">Net Profit</span>
+                <div className="font-weight-bold text-success">{formatCents(insights.pricingModeSummary?.retailProfitCents || 0)}</div>
+              </div>
+              <div>
+                <span className="body-small text-muted">Margin</span>
+                <div className="font-weight-bold" style={{ textAlign: 'right' }}>{insights.pricingModeSummary?.retailMarginPct || 0}%</div>
+              </div>
+              <div>
+                <span className="body-small text-muted">Avg Order</span>
+                <div className="font-weight-bold" style={{ textAlign: 'right' }}>{formatCents(insights.pricingModeSummary?.retailAovCents || 0)}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Wholesale Summary Card */}
+          <div className="card" style={{ background: 'var(--market-surface-variant)', borderLeft: '4px solid #9c27b0', padding: '16px' }}>
+            <div className="flex-center space-between mb-xs">
+              <span className="badge badge-warning" style={{ fontWeight: 'bold', fontSize: '0.8rem', padding: '3px 8px', background: '#f3e5f5', color: '#7b1fa2', borderColor: '#ce93d8' }}>WHOLESALE MODE</span>
+              <span className="body-small text-muted">{insights.pricingModeSummary?.wholesaleSalesCount || 0} Order(s)</span>
+            </div>
+            <div style={{ marginTop: '10px' }}>
+              <div className="text-muted body-small">Gross Revenue</div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: 'var(--market-text-primary)' }}>
+                {formatCents(insights.pricingModeSummary?.wholesaleRevenueCents || 0)}
+              </div>
+            </div>
+            <div className="flex-between" style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--market-border)' }}>
+              <div>
+                <span className="body-small text-muted">Net Profit</span>
+                <div className="font-weight-bold text-success">{formatCents(insights.pricingModeSummary?.wholesaleProfitCents || 0)}</div>
+              </div>
+              <div>
+                <span className="body-small text-muted">Margin</span>
+                <div className="font-weight-bold" style={{ textAlign: 'right' }}>{insights.pricingModeSummary?.wholesaleMarginPct || 0}%</div>
+              </div>
+              <div>
+                <span className="body-small text-muted">Avg Order</span>
+                <div className="font-weight-bold" style={{ textAlign: 'right' }}>{formatCents(insights.pricingModeSummary?.wholesaleAovCents || 0)}</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -744,6 +826,18 @@ export const InsightsScreen = () => {
                 <option key={p.pigment_id} value={p.pigment_id}>{p.name}</option>
               ))}
             </select>
+
+            {/* Pricing Mode Filter */}
+            <select
+              className="input-select"
+              value={pricingModeFilter}
+              onChange={e => setPricingModeFilter(e.target.value)}
+              style={{ fontSize: '0.85rem', padding: '4px 8px' }}
+            >
+              <option value="ALL">All Pricing Modes</option>
+              <option value="RETAIL">Retail Only</option>
+              <option value="WHOLESALE">Wholesale Only</option>
+            </select>
           </div>
         </div>
 
@@ -758,6 +852,7 @@ export const InsightsScreen = () => {
                 <tr style={{ borderBottom: '2px solid var(--market-border)' }}>
                   <th style={{ padding: '10px 8px' }}>Sale Date</th>
                   <th style={{ padding: '10px 8px' }}>Customer</th>
+                  <th style={{ padding: '10px 8px', textAlign: 'center' }}>Mode</th>
                   <th style={{ padding: '10px 8px', textAlign: 'center' }}>Items</th>
                   <th style={{ padding: '10px 8px', textAlign: 'right' }}>Revenue</th>
                   <th style={{ padding: '10px 8px', textAlign: 'right' }}>COGS</th>
@@ -774,6 +869,19 @@ export const InsightsScreen = () => {
                       <tr style={{ borderBottom: '1px solid var(--market-border-light)' }}>
                         <td style={{ padding: '10px 8px', fontSize: '0.88rem' }}>{formatDate(s.created_at)}</td>
                         <td style={{ padding: '10px 8px', fontWeight: '500' }}>{s.customer_name}</td>
+                        <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+                          <span
+                            className={`badge ${s.pricing_mode === 'WHOLESALE' ? 'badge-warning' : 'badge-info'}`}
+                            style={{
+                              fontSize: '0.75rem',
+                              background: s.pricing_mode === 'WHOLESALE' ? '#f3e5f5' : undefined,
+                              color: s.pricing_mode === 'WHOLESALE' ? '#7b1fa2' : undefined,
+                              borderColor: s.pricing_mode === 'WHOLESALE' ? '#ce93d8' : undefined
+                            }}
+                          >
+                            {s.pricing_mode || 'RETAIL'}
+                          </span>
+                        </td>
                         <td style={{ padding: '10px 8px', textAlign: 'center' }}>{s.items.length} item(s)</td>
                         <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: '600' }}>{formatCents(s.total_amount_cents)}</td>
                         <td style={{ padding: '10px 8px', textAlign: 'right' }} className="text-muted">{formatCents(s.total_cogs_cents)}</td>
@@ -799,7 +907,7 @@ export const InsightsScreen = () => {
                       {/* Expandable Line Items Detail View */}
                       {isExpanded && (
                         <tr>
-                          <td colSpan="8" style={{ padding: '12px 16px', background: 'var(--market-surface-variant)' }}>
+                          <td colSpan="9" style={{ padding: '12px 16px', background: 'var(--market-surface-variant)' }}>
                             <div style={{ fontSize: '0.85rem' }}>
                               <strong className="body-small text-muted" style={{ display: 'block', marginBottom: '6px' }}>
                                 Line Items Breakdown for Sale #{String(s.sale_id).substring(0, 8)}
