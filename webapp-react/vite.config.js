@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  base: '/Micro-Saler-/',
+  base: process.env.VERCEL ? '/' : '/Micro-Saler-/',
   server: {
     port: 3000,
     host: true
