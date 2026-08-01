@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { PosProvider } from './context/PosContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import App from './App';
@@ -10,6 +11,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <ErrorBoundary>
       <PosProvider>
         <App />
+        <SpeedInsights />
       </PosProvider>
     </ErrorBoundary>
   </React.StrictMode>
