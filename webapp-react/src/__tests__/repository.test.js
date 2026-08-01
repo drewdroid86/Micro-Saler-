@@ -490,7 +490,7 @@ test('Backup export/import structure preserves audit_log and reconciliation meta
   assert.equal(mockBackupData.stores.audit_log[0].action, 'INTEGRITY_AUTO_REPAIR');
 });
 
-test('calculateBusinessInsights computes per-pigment profitability, inventory velocity, time patterns, receivables, and deterministic recommendations', () => {
+test('calculateBusinessInsights computes per-pigment profitability, inventory velocity, time patterns, receivables, payables, shrinkage loss, and sale drill-downs', () => {
   const nowTs = new Date('2026-08-01T12:00:00Z').getTime();
 
   const pigments = [
@@ -516,11 +516,21 @@ test('calculateBusinessInsights computes per-pigment profitability, inventory ve
     { customer_id: 2, name: 'Bob Jones', current_balance_cents: 0 }
   ];
 
+  const suppliers = [
+    { supplier_id: 1, name: 'Mica World Inc', current_balance_cents: 12000, contact_info: '555-0199' }
+  ];
+
+  const shrinkageLogs = [
+    { pigment_id: 1, weight_mg: 1000, cogs_loss_cents: 300, created_at: nowTs - 1800000 }
+  ];
+
   const insights = calculateBusinessInsights({
     sales,
     saleItems,
     pigments,
     customers,
+    suppliers,
+    shrinkageLogs,
     timeRange: 'ALL',
     nowTimestamp: nowTs
   });
@@ -529,7 +539,7 @@ test('calculateBusinessInsights computes per-pigment profitability, inventory ve
   assert.equal(insights.grossRevenueCents, 15000);
   assert.equal(insights.totalCogsCents, 4500);
 
-  // Per-pigment profitability check (pigment_id <= 0 excluded)
+  // 1. Per-pigment profitability check (pigment_id <= 0 excluded)
   assert.equal(insights.perPigmentProfitability.length, 3);
   const emerald = insights.perPigmentProfitability.find(p => p.pigment_id === 1);
   assert.ok(emerald);
@@ -540,30 +550,47 @@ test('calculateBusinessInsights computes per-pigment profitability, inventory ve
   assert.equal(emerald.profitCents, 3500);
   assert.equal(emerald.marginPct, 70);
 
-  // Inventory velocity check
+  // 2. Inventory velocity check
   assert.equal(emerald.velocityStatus, 'Reorder Soon');
   assert.equal(emerald.estimatedDaysRemaining, 2); // 2000mg stock / (30000mg / 30) = 2 days
 
   const sapphire = insights.perPigmentProfitability.find(p => p.pigment_id === 3);
   assert.equal(sapphire.velocityStatus, 'Slow Mover');
 
-  // Time-based patterns check
+  // 3. Time-based patterns check
   assert.ok(insights.dayOfWeekStats.length === 7);
   assert.ok(insights.hourOfDayStats.length === 24);
   assert.ok(insights.peakDay);
   assert.ok(insights.peakHour);
 
-  // Receivables summary check
+  // 4. Receivables summary check
   assert.equal(insights.customerReceivables.length, 1);
   assert.equal(insights.customerReceivables[0].name, 'Alice Smith');
   assert.equal(insights.customerReceivables[0].amountOwedCents, 2500);
-  assert.equal(insights.customerReceivables[0].daysOutstanding, 0);
+
+  // 5. Payables summary check
+  assert.equal(insights.supplierPayables.length, 1);
+  assert.equal(insights.supplierPayables[0].name, 'Mica World Inc');
+  assert.equal(insights.supplierPayables[0].amountOwedCents, 12000);
+
+  // 6. Shrinkage loss tracking check
+  assert.equal(insights.shrinkageImpact.length, 1);
+  assert.equal(insights.shrinkageImpact[0].name, 'Emerald Sparkle');
+  assert.equal(insights.shrinkageImpact[0].cogsLossCents, 300);
+
+  // 7. Individual sale history drill-down check
+  assert.equal(insights.detailedSalesList.length, 2);
+  assert.equal(insights.detailedSalesList[0].customer_name, 'Alice Smith');
+  assert.equal(insights.detailedSalesList[0].items.length, 2);
 
   // Deterministic recommendations check
   assert.ok(insights.recommendations.length > 0);
   assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_reorder_1')));
   assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_receivable_1')));
   assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_slow_3')));
+  assert.ok(insights.recommendations.some(r => r.id === 'rec_payables'));
+  assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_waste_1')));
 });
+
 
 

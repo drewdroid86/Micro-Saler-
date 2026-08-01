@@ -1596,6 +1596,115 @@ export function calculateBusinessInsights({
       });
     });
 
+  // 6. Payables Summary (What I Owe Suppliers)
+  const supplierPayables = (suppliers || [])
+    .filter(sup => (sup.current_balance_cents || 0) > 0)
+    .map(sup => {
+      return {
+        supplier_id: sup.supplier_id,
+        name: sup.name,
+        amountOwedCents: sup.current_balance_cents,
+        contactInfo: sup.contact_info || sup.phone || 'N/A'
+      };
+    })
+    .sort((a, b) => b.amountOwedCents - a.amountOwedCents);
+
+  const totalApCents = supplierPayables.reduce((sum, s) => sum + s.amountOwedCents, 0);
+
+  // 7. Shrinkage & Loss Impact Analysis
+  const filteredShrinkage = (shrinkageLogs || []).filter(log => {
+    const ts = log.created_at || log.timestamp || 0;
+    return filterTimestamp === 0 || ts >= filterTimestamp;
+  });
+
+  const shrinkageMap = new Map();
+  filteredShrinkage.forEach(log => {
+    const pId = log.pigment_id || 0;
+    let entry = shrinkageMap.get(pId);
+    if (!entry) {
+      const matchP = (pigments || []).find(p => p.pigment_id === pId);
+      entry = {
+        pigment_id: pId,
+        name: matchP?.name || `Pigment #${pId}`,
+        weightLostMg: 0,
+        cogsLossCents: 0,
+        incidentCount: 0
+      };
+      shrinkageMap.set(pId, entry);
+    }
+    entry.weightLostMg += (log.weight_mg || 0);
+    entry.cogsLossCents += (log.cogs_loss_cents || log.cogs_cents || 0);
+    entry.incidentCount += 1;
+  });
+
+  const shrinkageImpact = Array.from(shrinkageMap.values()).sort((a, b) => b.cogsLossCents - a.cogsLossCents);
+  const totalShrinkageLossCents = shrinkageImpact.reduce((sum, item) => sum + item.cogsLossCents, 0);
+
+  // 8. Individual Sale History (Drill-Down Detail)
+  const detailedSalesList = completedSales.map(s => {
+    const cust = (customers || []).find(c => Number(c.customer_id) === Number(s.customer_id));
+    const custName = cust ? cust.name : 'Walk-in Customer';
+    const sItems = (saleItems || []).filter(si => Number(si.sale_id) === Number(s.sale_id));
+
+    const rev = s.total_amount_cents || 0;
+    const cogs = s.total_cogs_cents || 0;
+    const profit = rev - cogs;
+    const marginPct = rev > 0 ? Number(((profit / rev) * 100).toFixed(1)) : 0;
+
+    const formattedItems = sItems.map(si => {
+      const matchP = (pigments || []).find(p => Number(p.pigment_id) === Number(si.pigment_id));
+      const iRev = si.price_charged_cents || 0;
+      const iCogs = si.unit_cogs_cents !== undefined ? si.unit_cogs_cents : (si.cogs_cents || 0);
+      const iProfit = iRev - iCogs;
+      const iMargin = iRev > 0 ? Number(((iProfit / iRev) * 100).toFixed(1)) : 0;
+      return {
+        sale_item_id: si.sale_item_id,
+        pigment_id: si.pigment_id,
+        name: matchP ? matchP.name : (si.pigment_name || `Pigment #${si.pigment_id}`),
+        weight_mg: si.weight_mg || 0,
+        price_charged_cents: iRev,
+        unit_cogs_cents: iCogs,
+        profit_cents: iProfit,
+        margin_pct: iMargin
+      };
+    });
+
+    return {
+      sale_id: s.sale_id,
+      created_at: s.created_at || s.timestamp || s.date,
+      customer_id: s.customer_id,
+      customer_name: custName,
+      status: s.status || 'COMPLETED',
+      total_amount_cents: rev,
+      total_cogs_cents: cogs,
+      profit_cents: profit,
+      margin_pct: marginPct,
+      items: formattedItems
+    };
+  }).sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+
+  // Add Payables & Waste Warnings to Deterministic Recommendations
+  if (totalApCents > 0) {
+    recommendations.push({
+      id: 'rec_payables',
+      type: 'WARNING',
+      icon: '📤',
+      title: 'Supplier Payables Outstanding',
+      message: `You owe ${formatCents(totalApCents)} across ${supplierPayables.length} supplier account(s).`
+    });
+  }
+
+  if (totalShrinkageLossCents > 0 && shrinkageImpact.length > 0) {
+    const topWaste = shrinkageImpact[0];
+    recommendations.push({
+      id: `rec_waste_${topWaste.pigment_id}`,
+      type: 'WARNING',
+      icon: '📉',
+      title: 'Top Shrinkage & Waste Impact',
+      message: `"${topWaste.name}" accounts for highest waste loss: ${formatCents(topWaste.cogsLossCents)} (${formatMgToGrams(topWaste.weightLostMg)}) lost across ${topWaste.incidentCount} incident(s).`
+    });
+  }
+
   return {
     timeRange,
     completedCount,
@@ -1611,9 +1720,15 @@ export function calculateBusinessInsights({
     peakHour,
     customerReceivables,
     totalArCents,
+    supplierPayables,
+    totalApCents,
+    shrinkageImpact,
+    totalShrinkageLossCents,
+    detailedSalesList,
     recommendations
   };
 }
+
 
 
 
