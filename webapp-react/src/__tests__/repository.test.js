@@ -490,13 +490,14 @@ test('Backup export/import structure preserves audit_log and reconciliation meta
   assert.equal(mockBackupData.stores.audit_log[0].action, 'INTEGRITY_AUTO_REPAIR');
 });
 
-test('calculateBusinessInsights computes accurate KPIs, product rankings, and recommendations', () => {
+test('calculateBusinessInsights computes per-pigment profitability, inventory velocity, time patterns, receivables, and deterministic recommendations', () => {
   const nowTs = new Date('2026-08-01T12:00:00Z').getTime();
 
   const pigments = [
-    { pigment_id: 1, name: 'Emerald Sparkle', stock_mg: 2000, total_cost_cents: 1000, retail_price_per_gram_cents: 1000 },
-    { pigment_id: 2, name: 'Ruby Rush', stock_mg: 50000, total_cost_cents: 15000, retail_price_per_gram_cents: 800 },
-    { pigment_id: 3, name: 'Sapphire Glow', stock_mg: 30000, total_cost_cents: 9000, retail_price_per_gram_cents: 1200 }
+    { pigment_id: 1, name: 'Emerald Sparkle', stock_mg: 2000, is_archived: false }, // 2g stock => velocity reorder soon
+    { pigment_id: 2, name: 'Ruby Rush', stock_mg: 50000, is_archived: false },
+    { pigment_id: 3, name: 'Sapphire Glow', stock_mg: 30000, is_archived: false },
+    { pigment_id: -1, name: 'General Credit', stock_mg: 0, is_archived: false } // should be excluded
   ];
 
   const sales = [
@@ -505,8 +506,9 @@ test('calculateBusinessInsights computes accurate KPIs, product rankings, and re
   ];
 
   const saleItems = [
-    { sale_id: 101, pigment_id: 1, weight_mg: 5000, price_charged_cents: 5000, cogs_cents: 1500 },
-    { sale_id: 102, pigment_id: 2, weight_mg: 12500, price_charged_cents: 10000, cogs_cents: 3000 }
+    { sale_id: 101, pigment_id: 1, weight_mg: 30000, price_charged_cents: 5000, unit_cogs_cents: 1500 }, // 30g sold => 1g/day avg sell rate => stock 2g ÷ 1g/day = 2 days remaining (< 7 days)
+    { sale_id: 102, pigment_id: 2, weight_mg: 12500, price_charged_cents: 10000, unit_cogs_cents: 3000 },
+    { sale_id: 101, pigment_id: -1, weight_mg: 0, price_charged_cents: 500, unit_cogs_cents: 0 } // excluded item
   ];
 
   const customers = [
@@ -514,48 +516,54 @@ test('calculateBusinessInsights computes accurate KPIs, product rankings, and re
     { customer_id: 2, name: 'Bob Jones', current_balance_cents: 0 }
   ];
 
-  const shrinkageLogs = [
-    { pigment_id: 1, weight_mg: 500, cogs_loss_cents: 300, created_at: nowTs - 1800000 }
-  ];
-
   const insights = calculateBusinessInsights({
     sales,
     saleItems,
     pigments,
     customers,
-    shrinkageLogs,
-    timeRange: 'TODAY',
+    timeRange: 'ALL',
     nowTimestamp: nowTs
   });
 
   assert.equal(insights.completedCount, 2);
   assert.equal(insights.grossRevenueCents, 15000);
   assert.equal(insights.totalCogsCents, 4500);
-  assert.equal(insights.grossProfitCents, 10500);
-  assert.equal(insights.grossMarginPct, 70); // 10500 / 15000 = 70%
-  assert.equal(insights.averageOrderValueCents, 7500);
-  assert.equal(insights.totalWeightSoldMg, 17500);
 
-  // Top Sellers check
-  assert.equal(insights.topSellersByRevenue.length, 2);
-  assert.equal(insights.topSellersByRevenue[0].name, 'Ruby Rush'); // $100 vs $50
+  // Per-pigment profitability check (pigment_id <= 0 excluded)
+  assert.equal(insights.perPigmentProfitability.length, 3);
+  const emerald = insights.perPigmentProfitability.find(p => p.pigment_id === 1);
+  assert.ok(emerald);
+  assert.equal(emerald.name, 'Emerald Sparkle');
+  assert.equal(emerald.weightSoldMg, 30000);
+  assert.equal(emerald.revenueCents, 5000);
+  assert.equal(emerald.cogsCents, 1500);
+  assert.equal(emerald.profitCents, 3500);
+  assert.equal(emerald.marginPct, 70);
 
-  // Dead Stock check (Sapphire Glow had 0 sales)
-  assert.equal(insights.deadStock.length, 1);
-  assert.equal(insights.deadStock[0].name, 'Sapphire Glow');
+  // Inventory velocity check
+  assert.equal(emerald.velocityStatus, 'Reorder Soon');
+  assert.equal(emerald.estimatedDaysRemaining, 2); // 2000mg stock / (30000mg / 30) = 2 days
 
-  // Low Stock check (Emerald Sparkle stock_mg = 2000 <= 5000)
-  assert.equal(insights.lowStockPigments.length, 1);
-  assert.equal(insights.lowStockPigments[0].name, 'Emerald Sparkle');
+  const sapphire = insights.perPigmentProfitability.find(p => p.pigment_id === 3);
+  assert.equal(sapphire.velocityStatus, 'Slow Mover');
 
-  // AR exposure
-  assert.equal(insights.totalArCents, 2500);
+  // Time-based patterns check
+  assert.ok(insights.dayOfWeekStats.length === 7);
+  assert.ok(insights.hourOfDayStats.length === 24);
+  assert.ok(insights.peakDay);
+  assert.ok(insights.peakHour);
 
-  // Recommendation flags generated
+  // Receivables summary check
+  assert.equal(insights.customerReceivables.length, 1);
+  assert.equal(insights.customerReceivables[0].name, 'Alice Smith');
+  assert.equal(insights.customerReceivables[0].amountOwedCents, 2500);
+  assert.equal(insights.customerReceivables[0].daysOutstanding, 0);
+
+  // Deterministic recommendations check
   assert.ok(insights.recommendations.length > 0);
-  assert.ok(insights.recommendations.some(r => r.id === 'low_stock'));
-  assert.ok(insights.recommendations.some(r => r.id === 'dead_stock'));
-  assert.ok(insights.recommendations.some(r => r.id === 'ar_risk'));
-  assert.ok(insights.recommendations.some(r => r.id === 'star_product'));
+  assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_reorder_1')));
+  assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_receivable_1')));
+  assert.ok(insights.recommendations.some(r => r.id.startsWith('rec_slow_3')));
 });
+
 
