@@ -8,6 +8,7 @@ import { PricingCalculatorScreen } from './components/PricingCalculatorScreen';
 import { CustomerScreen } from './components/CustomerScreen';
 import { SupplierScreen } from './components/SupplierScreen';
 import { ReportsScreen } from './components/ReportsScreen';
+import { InsightsScreen } from './components/InsightsScreen';
 import { HistoryScreen } from './components/HistoryScreen';
 import { AuditScreen } from './components/AuditScreen';
 import { ModalManager } from './components/ModalManager';
@@ -67,6 +68,7 @@ export function App() {
         {currentTab === 'customers' && <CustomerScreen />}
         {currentTab === 'suppliers' && <SupplierScreen />}
         {currentTab === 'reports' && <ReportsScreen />}
+        {currentTab === 'insights' && <InsightsScreen />}
         {currentTab === 'history' && <HistoryScreen />}
         {currentTab === 'audit' && <AuditScreen />}
       </main>

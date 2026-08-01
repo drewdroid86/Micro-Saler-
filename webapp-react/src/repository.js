@@ -1324,3 +1324,288 @@ export class PosRepository {
   }
 }
 
+/**
+ * Calculates comprehensive business intelligence metrics and actionable recommendations.
+ * @param {Object} params
+ * @param {Array} params.sales
+ * @param {Array} params.saleItems
+ * @param {Array} params.pigments
+ * @param {Array} params.customers
+ * @param {Array} params.suppliers
+ * @param {Array} params.shrinkageLogs
+ * @param {string} params.timeRange - 'TODAY' | 'WEEK' | 'MONTH' | 'QUARTER' | 'YTD' | 'ALL'
+ * @param {number} [params.nowTimestamp] - Optional override for current timestamp in tests
+ * @returns {Object} Calculated metrics, product breakdown, customer insights, stock health & recommendation cards
+ */
+export function calculateBusinessInsights({
+  sales = [],
+  saleItems = [],
+  pigments = [],
+  customers = [],
+  suppliers = [],
+  shrinkageLogs = [],
+  timeRange = 'ALL',
+  nowTimestamp = null
+}) {
+  const now = nowTimestamp ? new Date(nowTimestamp) : new Date();
+  const nowMs = now.getTime();
+
+  let filterTimestamp = 0;
+  if (timeRange === 'TODAY') {
+    filterTimestamp = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  } else if (timeRange === 'WEEK') {
+    filterTimestamp = nowMs - (7 * 24 * 60 * 60 * 1000);
+  } else if (timeRange === 'MONTH') {
+    filterTimestamp = nowMs - (30 * 24 * 60 * 60 * 1000);
+  } else if (timeRange === 'QUARTER') {
+    filterTimestamp = nowMs - (90 * 24 * 60 * 60 * 1000);
+  } else if (timeRange === 'YTD') {
+    filterTimestamp = new Date(now.getFullYear(), 0, 1).getTime();
+  }
+
+  // Filter completed sales within time range
+  const filteredSales = (sales || []).filter(s => {
+    const ts = s.created_at || s.timestamp || s.date || 0;
+    return filterTimestamp === 0 || ts >= filterTimestamp;
+  });
+
+  const completedSales = filteredSales.filter(s => s.status === 'COMPLETED' || !s.status || s.status === 'PAID');
+  const completedSaleIds = new Set(completedSales.map(s => s.sale_id));
+
+  // Line items belonging to completed sales
+  const completedSaleItems = (saleItems || []).filter(item => completedSaleIds.has(item.sale_id));
+
+  // Financial KPI totals
+  const grossRevenueCents = completedSales.reduce((sum, s) => sum + (s.total_amount_cents || 0), 0);
+  const totalCogsCents = completedSales.reduce((sum, s) => sum + (s.total_cogs_cents || 0), 0);
+  const grossProfitCents = grossRevenueCents - totalCogsCents;
+  const grossMarginPct = grossRevenueCents > 0 ? Math.round((grossProfitCents / grossRevenueCents) * 100) : 0;
+  const completedCount = completedSales.length;
+  const averageOrderValueCents = completedCount > 0 ? Math.round(grossRevenueCents / completedCount) : 0;
+  const totalWeightSoldMg = completedSaleItems.reduce((sum, i) => sum + (i.weight_mg || 0), 0);
+
+  // Shrinkage Loss in period
+  const filteredShrinkage = (shrinkageLogs || []).filter(log => {
+    const ts = log.created_at || log.timestamp || 0;
+    return filterTimestamp === 0 || ts >= filterTimestamp;
+  });
+  const totalShrinkageLossCents = filteredShrinkage.reduce((sum, log) => sum + (log.cogs_loss_cents || 0), 0);
+
+  // Merchant Fees (~1.5%)
+  const estimatedMerchantFeesCents = completedSales.reduce((sum, s) => sum + Math.round((s.total_amount_cents || 0) * 0.015), 0);
+  const netProfitCents = grossProfitCents - totalShrinkageLossCents - estimatedMerchantFeesCents;
+  const netMarginPct = grossRevenueCents > 0 ? Math.round((netProfitCents / grossRevenueCents) * 100) : 0;
+
+  // Product-level performance breakdown
+  const productMap = new Map();
+
+  // Initialize with all pigments so we track unsold stock as well
+  (pigments || []).forEach(p => {
+    productMap.set(p.pigment_id, {
+      pigment_id: p.pigment_id,
+      name: p.name,
+      stock_mg: p.stock_mg || 0,
+      total_cost_cents: p.total_cost_cents || 0,
+      retail_price_per_gram_cents: p.retail_price_per_gram_cents || 0,
+      weightSoldMg: 0,
+      revenueCents: 0,
+      cogsCents: 0,
+      profitCents: 0,
+      saleCount: 0,
+      marginPct: 0
+    });
+  });
+
+  // Aggregate item sales
+  completedSaleItems.forEach(item => {
+    const pId = item.pigment_id;
+    let prod = productMap.get(pId);
+    if (!prod) {
+      prod = {
+        pigment_id: pId,
+        name: item.pigment_name || `Pigment #${pId}`,
+        stock_mg: 0,
+        total_cost_cents: 0,
+        retail_price_per_gram_cents: 0,
+        weightSoldMg: 0,
+        revenueCents: 0,
+        cogsCents: 0,
+        profitCents: 0,
+        saleCount: 0,
+        marginPct: 0
+      };
+      productMap.set(pId, prod);
+    }
+    prod.weightSoldMg += (item.weight_mg || 0);
+    prod.revenueCents += (item.price_charged_cents || 0);
+    prod.cogsCents += (item.cogs_cents || 0);
+    prod.profitCents += (item.gross_profit_cents !== undefined ? item.gross_profit_cents : ((item.price_charged_cents || 0) - (item.cogs_cents || 0)));
+    prod.saleCount += 1;
+  });
+
+  // Compute product margins & turnover rates
+  const productList = Array.from(productMap.values()).map(prod => {
+    const marginPct = prod.revenueCents > 0 ? Math.round((prod.profitCents / prod.revenueCents) * 100) : 0;
+    const totalWeightHandledMg = prod.stock_mg + prod.weightSoldMg;
+    const turnoverPct = totalWeightHandledMg > 0 ? Math.round((prod.weightSoldMg / totalWeightHandledMg) * 100) : 0;
+    return {
+      ...prod,
+      marginPct,
+      turnoverPct
+    };
+  });
+
+  // Product Rankings
+  const topSellersByRevenue = [...productList].filter(p => p.revenueCents > 0).sort((a, b) => b.revenueCents - a.revenueCents);
+  const topMarginDrivers = [...productList].filter(p => p.profitCents > 0).sort((a, b) => b.profitCents - a.profitCents);
+  const lowMarginProducts = [...productList].filter(p => p.revenueCents > 0 && p.marginPct < 30).sort((a, b) => a.marginPct - b.marginPct);
+  const deadStock = (pigments || []).filter(p => (p.stock_mg || 0) > 0 && (productMap.get(p.pigment_id)?.weightSoldMg || 0) === 0);
+
+  // Customer Analytics
+  const customerMap = new Map();
+  completedSales.forEach(s => {
+    if (!s.customer_id) return;
+    let cust = customerMap.get(s.customer_id);
+    if (!cust) {
+      const match = (customers || []).find(c => c.customer_id === s.customer_id);
+      cust = {
+        customer_id: s.customer_id,
+        name: match?.name || `Customer #${s.customer_id}`,
+        salesCount: 0,
+        totalSpentCents: 0,
+        currentBalanceCents: match?.current_balance_cents || 0
+      };
+      customerMap.set(s.customer_id, cust);
+    }
+    cust.salesCount += 1;
+    cust.totalSpentCents += (s.total_amount_cents || 0);
+  });
+
+  const customerList = Array.from(customerMap.values());
+  const topCustomers = [...customerList].sort((a, b) => b.totalSpentCents - a.totalSpentCents);
+  const repeatCustomersCount = customerList.filter(c => c.salesCount > 1).length;
+  const totalCustomerCountWithSales = customerList.length;
+  const repeatCustomerRate = totalCustomerCountWithSales > 0 ? Math.round((repeatCustomersCount / totalCustomerCountWithSales) * 100) : 0;
+
+  // AR Tab Exposure
+  const customerTabRisks = (customers || [])
+    .filter(c => (c.current_balance_cents || 0) > 0)
+    .sort((a, b) => (b.current_balance_cents || 0) - (a.current_balance_cents || 0));
+
+  const totalArCents = customerTabRisks.reduce((sum, c) => sum + (c.current_balance_cents || 0), 0);
+
+  // Low stock alert thresholds (< 5000mg = 5g)
+  const lowStockPigments = (pigments || [])
+    .filter(p => (p.stock_mg || 0) <= 5000)
+    .sort((a, b) => (a.stock_mg || 0) - (b.stock_mg || 0));
+
+  // Generate Smart Actionable Recommendations
+  const recommendations = [];
+
+  // Low Stock Recommendations
+  if (lowStockPigments.length > 0) {
+    const names = lowStockPigments.map(p => p.name).join(', ');
+    recommendations.push({
+      id: 'low_stock',
+      type: lowStockPigments.some(p => p.stock_mg === 0) ? 'CRITICAL' : 'WARNING',
+      icon: '📦',
+      title: 'Low Stock & Reorder Alert',
+      message: `${lowStockPigments.length} product(s) running low or out of stock (${names}). Consider placing a supplier restock.`,
+      targetTab: 'inventory'
+    });
+  }
+
+  // Outstanding Customer Accounts Receivable Risk
+  if (totalArCents > 0) {
+    const highestRiskCust = customerTabRisks[0];
+    recommendations.push({
+      id: 'ar_risk',
+      type: totalArCents > 50000 ? 'CRITICAL' : 'WARNING',
+      icon: '📥',
+      title: 'Customer Accounts Receivable Exposure',
+      message: `You have ${formatCents(totalArCents)} outstanding across ${customerTabRisks.length} customer tab(s). Highest tab: ${highestRiskCust?.name} (${formatCents(highestRiskCust?.current_balance_cents)}).`,
+      targetTab: 'customers'
+    });
+  }
+
+  // Dead Stock Recommendation
+  if (deadStock.length > 0) {
+    const totalDeadStockCost = deadStock.reduce((sum, p) => sum + (p.total_cost_cents || 0), 0);
+    recommendations.push({
+      id: 'dead_stock',
+      type: 'OPPORTUNITY',
+      icon: '💡',
+      title: 'Stagnant Inventory Promotion',
+      message: `${deadStock.length} product(s) with ${formatCents(totalDeadStockCost)} total cost basis have zero sales in this period. Run a promotional tier discount to clear stock.`,
+      targetTab: 'pricing'
+    });
+  }
+
+  // Top Star Product Recommendation
+  if (topSellersByRevenue.length > 0) {
+    const topProd = topSellersByRevenue[0];
+    const revPct = grossRevenueCents > 0 ? Math.round((topProd.revenueCents / grossRevenueCents) * 100) : 0;
+    recommendations.push({
+      id: 'star_product',
+      type: 'SUCCESS',
+      icon: '🏆',
+      title: 'Star Revenue Performer',
+      message: `"${topProd.name}" generated ${formatCents(topProd.revenueCents)} (${revPct}% of total revenue) across ${topProd.saleCount} sale(s).`,
+      targetTab: 'inventory'
+    });
+  }
+
+  // Low Margin Squeeze Warning
+  if (lowMarginProducts.length > 0) {
+    const worstMargin = lowMarginProducts[0];
+    recommendations.push({
+      id: 'low_margin',
+      type: 'WARNING',
+      icon: '⚠️',
+      title: 'Margin Squeeze Alert',
+      message: `"${worstMargin.name}" is selling at a low gross margin of ${worstMargin.marginPct}%. Review cost basis WAC or adjust retail price.`,
+      targetTab: 'pricing'
+    });
+  }
+
+  // Shrinkage Warning
+  if (totalShrinkageLossCents > 0) {
+    recommendations.push({
+      id: 'shrinkage',
+      type: 'WARNING',
+      icon: '📉',
+      title: 'Shrinkage & Stock Loss Impact',
+      message: `Shrinkage loss in selected period is ${formatCents(totalShrinkageLossCents)} across ${filteredShrinkage.length} recorded event(s).`,
+      targetTab: 'reports'
+    });
+  }
+
+  return {
+    timeRange,
+    completedCount,
+    grossRevenueCents,
+    totalCogsCents,
+    grossProfitCents,
+    grossMarginPct,
+    averageOrderValueCents,
+    totalWeightSoldMg,
+    netProfitCents,
+    netMarginPct,
+    totalShrinkageLossCents,
+    estimatedMerchantFeesCents,
+    productList,
+    topSellersByRevenue,
+    topMarginDrivers,
+    lowMarginProducts,
+    deadStock,
+    customerList,
+    topCustomers,
+    repeatCustomerRate,
+    customerTabRisks,
+    totalArCents,
+    lowStockPigments,
+    recommendations
+  };
+}
+
+

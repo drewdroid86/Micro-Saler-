@@ -11,6 +11,7 @@ export const NavTabs = () => {
     { id: 'customers', icon: '👥', label: 'Customers' },
     { id: 'suppliers', icon: '🏭', label: 'Suppliers' },
     { id: 'reports', icon: '📊', label: 'Reports & P&L' },
+    { id: 'insights', icon: '📈', label: 'Business Insights' },
     { id: 'history', icon: '📋', label: 'History' },
     { id: 'audit', icon: '🔒', label: 'Audit' },
   ];

@@ -12,7 +12,8 @@ import {
   mgToGrams,
   mgToOz,
   calculatePricingBreakdown,
-  getMatchedTier
+  getMatchedTier,
+  calculateBusinessInsights
 } from '../repository.js';
 
 test('gramsToMg and ozToMg convert accurately', () => {
@@ -488,3 +489,73 @@ test('Backup export/import structure preserves audit_log and reconciliation meta
   assert.equal(mockBackupData.stores.sales[0].reconciliation_status, 'AUTO_REPAIRED');
   assert.equal(mockBackupData.stores.audit_log[0].action, 'INTEGRITY_AUTO_REPAIR');
 });
+
+test('calculateBusinessInsights computes accurate KPIs, product rankings, and recommendations', () => {
+  const nowTs = new Date('2026-08-01T12:00:00Z').getTime();
+
+  const pigments = [
+    { pigment_id: 1, name: 'Emerald Sparkle', stock_mg: 2000, total_cost_cents: 1000, retail_price_per_gram_cents: 1000 },
+    { pigment_id: 2, name: 'Ruby Rush', stock_mg: 50000, total_cost_cents: 15000, retail_price_per_gram_cents: 800 },
+    { pigment_id: 3, name: 'Sapphire Glow', stock_mg: 30000, total_cost_cents: 9000, retail_price_per_gram_cents: 1200 }
+  ];
+
+  const sales = [
+    { sale_id: 101, customer_id: 1, created_at: nowTs - 3600000, status: 'COMPLETED', total_amount_cents: 5000, total_cogs_cents: 1500 },
+    { sale_id: 102, customer_id: 2, created_at: nowTs - 7200000, status: 'COMPLETED', total_amount_cents: 10000, total_cogs_cents: 3000 }
+  ];
+
+  const saleItems = [
+    { sale_id: 101, pigment_id: 1, weight_mg: 5000, price_charged_cents: 5000, cogs_cents: 1500 },
+    { sale_id: 102, pigment_id: 2, weight_mg: 12500, price_charged_cents: 10000, cogs_cents: 3000 }
+  ];
+
+  const customers = [
+    { customer_id: 1, name: 'Alice Smith', current_balance_cents: 2500 },
+    { customer_id: 2, name: 'Bob Jones', current_balance_cents: 0 }
+  ];
+
+  const shrinkageLogs = [
+    { pigment_id: 1, weight_mg: 500, cogs_loss_cents: 300, created_at: nowTs - 1800000 }
+  ];
+
+  const insights = calculateBusinessInsights({
+    sales,
+    saleItems,
+    pigments,
+    customers,
+    shrinkageLogs,
+    timeRange: 'TODAY',
+    nowTimestamp: nowTs
+  });
+
+  assert.equal(insights.completedCount, 2);
+  assert.equal(insights.grossRevenueCents, 15000);
+  assert.equal(insights.totalCogsCents, 4500);
+  assert.equal(insights.grossProfitCents, 10500);
+  assert.equal(insights.grossMarginPct, 70); // 10500 / 15000 = 70%
+  assert.equal(insights.averageOrderValueCents, 7500);
+  assert.equal(insights.totalWeightSoldMg, 17500);
+
+  // Top Sellers check
+  assert.equal(insights.topSellersByRevenue.length, 2);
+  assert.equal(insights.topSellersByRevenue[0].name, 'Ruby Rush'); // $100 vs $50
+
+  // Dead Stock check (Sapphire Glow had 0 sales)
+  assert.equal(insights.deadStock.length, 1);
+  assert.equal(insights.deadStock[0].name, 'Sapphire Glow');
+
+  // Low Stock check (Emerald Sparkle stock_mg = 2000 <= 5000)
+  assert.equal(insights.lowStockPigments.length, 1);
+  assert.equal(insights.lowStockPigments[0].name, 'Emerald Sparkle');
+
+  // AR exposure
+  assert.equal(insights.totalArCents, 2500);
+
+  // Recommendation flags generated
+  assert.ok(insights.recommendations.length > 0);
+  assert.ok(insights.recommendations.some(r => r.id === 'low_stock'));
+  assert.ok(insights.recommendations.some(r => r.id === 'dead_stock'));
+  assert.ok(insights.recommendations.some(r => r.id === 'ar_risk'));
+  assert.ok(insights.recommendations.some(r => r.id === 'star_product'));
+});
+
