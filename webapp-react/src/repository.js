@@ -71,7 +71,7 @@ export function validateCompletedSale({ sale, items = [], payments = [], custome
     }
   }
 
-  if (calculatedPaymentsTotal !== saleTotalCents) {
+  if (Math.abs(calculatedPaymentsTotal - saleTotalCents) > 1) {
     errors.push(`Payment total (${formatCents(calculatedPaymentsTotal)}) does not match sale total (${formatCents(saleTotalCents)}).`);
   }
 
@@ -86,7 +86,7 @@ export function validateCompletedSale({ sale, items = [], payments = [], custome
 
 export function formatMgToOz(mg) {
   const m = (mg === null || mg === undefined || isNaN(mg)) ? 0 : Number(mg);
-  return `${(m / 28349.5).toFixed(2)} oz`;
+  return `${(m / OZ_TO_MG).toFixed(2)} oz`;
 }
 
 export const GRAM_TO_MG = 1000;
@@ -257,155 +257,238 @@ export class PosRepository {
   }
 
   async restockPigment(pigmentId, receivedMg, totalCostCents, supplierName, paymentStatus = 'PAID', supplierId = null, paidDownCents = 0) {
-    const pigment = await this.db.getById('pigments', Number(pigmentId));
-    if (!pigment) throw new Error(`Pigment ${pigmentId} not found`);
+    const pId = Number(pigmentId);
+    return await this.db.runTransaction(
+      ['pigments', 'stock_receipts', 'suppliers', 'supplier_payments'],
+      'readwrite',
+      async (tx) => {
+        const pigmentsStore = tx.objectStore('pigments');
+        const receiptsStore = tx.objectStore('stock_receipts');
+        const suppliersStore = tx.objectStore('suppliers');
+        const suppPayStore = tx.objectStore('supplier_payments');
 
-    const newStockMg = pigment.stock_mg + receivedMg;
-    const newTotalCostCents = pigment.total_cost_cents + totalCostCents;
+        const pigment = await new Promise((resolve, reject) => {
+          const req = pigmentsStore.get(pId);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        if (!pigment) throw new Error(`Pigment ${pigmentId} not found`);
 
-    await this.db.updateStockAndCost(Number(pigmentId), newStockMg, newTotalCostCents);
+        pigment.stock_mg += receivedMg;
+        pigment.total_cost_cents += totalCostCents;
+        pigmentsStore.put(pigment);
 
-    let sId = supplierId ? Number(supplierId) : null;
-    if (!sId && supplierName && supplierName.trim()) {
-      const allSuppliers = await this.db.getAllSuppliers();
-      const existing = allSuppliers.find(s => s.name.toLowerCase() === supplierName.trim().toLowerCase());
-      if (existing) {
-        sId = existing.supplier_id;
+        // Resolve supplier ID
+        let sId = supplierId ? Number(supplierId) : null;
+        if (!sId && supplierName && supplierName.trim()) {
+          const allSuppliers = await new Promise((resolve, reject) => {
+            const req = suppliersStore.getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+          });
+          const existing = allSuppliers.find(s => s.name.toLowerCase() === supplierName.trim().toLowerCase());
+          if (existing) {
+            sId = existing.supplier_id;
+          }
+        }
+
+        const safePaidDown = paymentStatus === 'PAID'
+          ? totalCostCents
+          : Math.min(totalCostCents, Math.max(0, paidDownCents || 0));
+
+        const unpaidTabCents = paymentStatus === 'PAID' ? 0 : Math.max(0, totalCostCents - safePaidDown);
+
+        // Update supplier balance if unpaid tab
+        if (unpaidTabCents > 0 && sId) {
+          const supplier = await new Promise((resolve, reject) => {
+            const req = suppliersStore.get(sId);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          if (supplier) {
+            supplier.current_balance_cents = (supplier.current_balance_cents || 0) + unpaidTabCents;
+            suppliersStore.put(supplier);
+          }
+        }
+
+        const statusLabel = paymentStatus === 'PAID'
+          ? 'PAID'
+          : safePaidDown > 0
+            ? `PARTIAL ($${(safePaidDown / 100).toFixed(2)} Paid / $${(unpaidTabCents / 100).toFixed(2)} Owed)`
+            : 'UNPAID_TAB';
+
+        const receiptId = await new Promise((resolve, reject) => {
+          const req = receiptsStore.add({
+            pigment_id: pId,
+            received_mg: receivedMg,
+            total_cost_cents: totalCostCents,
+            paid_down_cents: safePaidDown,
+            unpaid_tab_cents: unpaidTabCents,
+            supplier_name: supplierName || '',
+            supplier_id: sId,
+            payment_status: statusLabel,
+            received_at: Date.now(),
+          });
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+
+        if (safePaidDown > 0 && sId && paymentStatus !== 'PAID') {
+          suppPayStore.add({
+            supplier_id: sId,
+            amount_cents: safePaidDown,
+            payment_type: 'DOWN_PAYMENT',
+            notes: `Restock down payment for receipt #${receiptId}`,
+            created_at: Date.now(),
+          });
+        }
+
+        return receiptId;
       }
-    }
-
-    const safePaidDown = paymentStatus === 'PAID'
-      ? totalCostCents
-      : Math.min(totalCostCents, Math.max(0, paidDownCents || 0));
-
-    const unpaidTabCents = paymentStatus === 'PAID' ? 0 : Math.max(0, totalCostCents - safePaidDown);
-
-    if (unpaidTabCents > 0 && sId) {
-      await this.db.updateSupplierBalance(sId, unpaidTabCents);
-    }
-
-    const statusLabel = paymentStatus === 'PAID'
-      ? 'PAID'
-      : safePaidDown > 0
-        ? `PARTIAL ($${(safePaidDown / 100).toFixed(2)} Paid / $${(unpaidTabCents / 100).toFixed(2)} Owed)`
-        : 'UNPAID_TAB';
-
-    const receiptId = await this.db.add('stock_receipts', {
-      pigment_id: Number(pigmentId),
-      received_mg: receivedMg,
-      total_cost_cents: totalCostCents,
-      paid_down_cents: safePaidDown,
-      unpaid_tab_cents: unpaidTabCents,
-      supplier_name: supplierName || '',
-      supplier_id: sId,
-      payment_status: statusLabel,
-      received_at: Date.now(),
-    });
-
-    if (safePaidDown > 0 && sId && paymentStatus !== 'PAID') {
-      await this.db.add('supplier_payments', {
-        supplier_id: sId,
-        amount_cents: safePaidDown,
-        payment_type: 'DOWN_PAYMENT',
-        notes: `Restock down payment for receipt #${receiptId}`,
-        created_at: Date.now(),
-      });
-    }
-
-    return receiptId;
+    );
   }
 
   async voidStockReceipt(receiptId, reason = 'Entry Error') {
     const receipt = await this.db.getById('stock_receipts', Number(receiptId));
     if (!receipt) throw new Error(`Stock receipt #${receiptId} not found`);
-    if (receipt.payment_status === 'VOIDED') throw new Error(`Receipt #${receiptId} is already voided`);
+    const rId = Number(receiptId);
+    return await this.db.runTransaction(
+      ['stock_receipts', 'pigments', 'suppliers', 'audit_log'],
+      'readwrite',
+      async (tx) => {
+        const receiptsStore = tx.objectStore('stock_receipts');
+        const pigmentsStore = tx.objectStore('pigments');
+        const suppliersStore = tx.objectStore('suppliers');
+        const auditStore = tx.objectStore('audit_log');
 
-    const pigment = await this.db.getById('pigments', Number(receipt.pigment_id));
-    if (pigment) {
-      const newStockMg = Math.max(0, pigment.stock_mg - (receipt.received_mg || 0));
-      const newTotalCostCents = Math.max(0, pigment.total_cost_cents - (receipt.total_cost_cents || 0));
-      await this.db.updateStockAndCost(Number(receipt.pigment_id), newStockMg, newTotalCostCents);
-    }
+        const receipt = await new Promise((resolve, reject) => {
+          const req = receiptsStore.get(rId);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        if (!receipt) throw new Error(`Stock receipt #${receiptId} not found`);
+        if (receipt.payment_status === 'VOIDED') throw new Error(`Receipt #${receiptId} is already voided`);
 
-    const unpaidTabCents = receipt.unpaid_tab_cents || (receipt.payment_status === 'UNPAID_TAB' ? receipt.total_cost_cents : 0);
-    if (unpaidTabCents > 0 && receipt.supplier_id) {
-      const supplier = await this.db.getById('suppliers', Number(receipt.supplier_id));
-      if (supplier) {
-        await this.db.updateSupplierBalance(Number(receipt.supplier_id), -unpaidTabCents);
+        // Reverse pigment stock and cost
+        if (receipt.pigment_id) {
+          const pigment = await new Promise((resolve, reject) => {
+            const req = pigmentsStore.get(Number(receipt.pigment_id));
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          if (pigment) {
+            pigment.stock_mg = Math.max(0, pigment.stock_mg - (receipt.received_mg || 0));
+            pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - (receipt.total_cost_cents || 0));
+            pigmentsStore.put(pigment);
+          }
+        }
+
+        // Reverse supplier tab
+        const unpaidTabCents = receipt.unpaid_tab_cents || (receipt.payment_status === 'UNPAID_TAB' ? receipt.total_cost_cents : 0);
+        if (unpaidTabCents > 0 && receipt.supplier_id) {
+          const supplier = await new Promise((resolve, reject) => {
+            const req = suppliersStore.get(Number(receipt.supplier_id));
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          if (supplier) {
+            supplier.current_balance_cents = (supplier.current_balance_cents || 0) - unpaidTabCents;
+            suppliersStore.put(supplier);
+          }
+        }
+
+        receipt.payment_status = 'VOIDED';
+        receipt.void_reason = reason;
+        receipt.voided_at = Date.now();
+        receiptsStore.put(receipt);
+
+        const now = Date.now();
+        auditStore.add({
+          entity_type: 'StockReceipt',
+          entity_id: rId,
+          action: 'VOID_STOCK_RECEIPT',
+          details_json: JSON.stringify({ receipt_id: rId, reason, pigment_id: receipt.pigment_id }),
+          created_at: now,
+          timestamp: now,
+        });
+
+        return true;
       }
-    }
-
-    receipt.payment_status = 'VOIDED';
-    receipt.void_reason = reason;
-    receipt.voided_at = Date.now();
-    await this.db.update('stock_receipts', receipt);
-
-    const now = Date.now();
-    await this.db.add('audit_log', {
-      entity_type: 'StockReceipt',
-      entity_id: Number(receiptId),
-      action: 'VOID_STOCK_RECEIPT',
-      details_json: JSON.stringify({ receipt_id: Number(receiptId), reason, pigment_id: receipt.pigment_id }),
-      created_at: now,
-      timestamp: now,
-    });
-
-    return true;
+    );
   }
 
   async updateRestockTerms(receiptId, paymentStatus, paidDownCents) {
-    const receipt = await this.db.getById('stock_receipts', Number(receiptId));
-    if (!receipt) throw new Error(`Stock receipt #${receiptId} not found`);
-    if (receipt.payment_status === 'VOIDED') throw new Error(`Cannot edit terms for a voided receipt`);
+    const rId = Number(receiptId);
+    return await this.db.runTransaction(
+      ['stock_receipts', 'suppliers', 'audit_log'],
+      'readwrite',
+      async (tx) => {
+        const receiptsStore = tx.objectStore('stock_receipts');
+        const suppliersStore = tx.objectStore('suppliers');
+        const auditStore = tx.objectStore('audit_log');
 
-    const totalCostCents = receipt.total_cost_cents || 0;
-    const safePaidDown = paymentStatus === 'PAID'
-      ? totalCostCents
-      : Math.min(totalCostCents, Math.max(0, paidDownCents || 0));
+        const receipt = await new Promise((resolve, reject) => {
+          const req = receiptsStore.get(rId);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        if (!receipt) throw new Error(`Stock receipt #${receiptId} not found`);
+        if (receipt.payment_status === 'VOIDED') throw new Error(`Cannot edit terms for a voided receipt`);
 
-    const newUnpaidTabCents = paymentStatus === 'PAID' ? 0 : Math.max(0, totalCostCents - safePaidDown);
-    const oldUnpaidTabCents = receipt.unpaid_tab_cents !== undefined
-      ? receipt.unpaid_tab_cents
-      : (receipt.payment_status === 'UNPAID_TAB' ? totalCostCents : 0);
+        const totalCostCents = receipt.total_cost_cents || 0;
+        const safePaidDown = paymentStatus === 'PAID'
+          ? totalCostCents
+          : Math.min(totalCostCents, Math.max(0, paidDownCents || 0));
 
-    const tabDiffCents = newUnpaidTabCents - oldUnpaidTabCents;
+        const newUnpaidTabCents = paymentStatus === 'PAID' ? 0 : Math.max(0, totalCostCents - safePaidDown);
+        const oldUnpaidTabCents = receipt.unpaid_tab_cents !== undefined
+          ? receipt.unpaid_tab_cents
+          : (receipt.payment_status === 'UNPAID_TAB' ? totalCostCents : 0);
 
-    if (tabDiffCents !== 0 && receipt.supplier_id) {
-      const supplier = await this.db.getById('suppliers', Number(receipt.supplier_id));
-      if (supplier) {
-        await this.db.updateSupplierBalance(Number(receipt.supplier_id), tabDiffCents);
+        const tabDiffCents = newUnpaidTabCents - oldUnpaidTabCents;
+
+        if (tabDiffCents !== 0 && receipt.supplier_id) {
+          const supplier = await new Promise((resolve, reject) => {
+            const req = suppliersStore.get(Number(receipt.supplier_id));
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          if (supplier) {
+            supplier.current_balance_cents = (supplier.current_balance_cents || 0) + tabDiffCents;
+            suppliersStore.put(supplier);
+          }
+        }
+
+        const statusLabel = paymentStatus === 'PAID'
+          ? 'PAID'
+          : safePaidDown > 0
+            ? `PARTIAL ($${(safePaidDown / 100).toFixed(2)} Paid / $${(newUnpaidTabCents / 100).toFixed(2)} Owed)`
+            : 'UNPAID_TAB';
+
+        receipt.paid_down_cents = safePaidDown;
+        receipt.unpaid_tab_cents = newUnpaidTabCents;
+        receipt.payment_status = statusLabel;
+        receipt.updated_at = Date.now();
+        receiptsStore.put(receipt);
+
+        const now = Date.now();
+        auditStore.add({
+          entity_type: 'StockReceipt',
+          entity_id: rId,
+          action: 'EDIT_RESTOCK_PURCHASE_TERMS',
+          details_json: JSON.stringify({
+            receipt_id: rId,
+            old_unpaid_cents: oldUnpaidTabCents,
+            new_unpaid_cents: newUnpaidTabCents,
+            tab_diff_cents: tabDiffCents
+          }),
+          created_at: now,
+          timestamp: now,
+        });
+
+        return receipt;
       }
-    }
-
-    const statusLabel = paymentStatus === 'PAID'
-      ? 'PAID'
-      : safePaidDown > 0
-        ? `PARTIAL ($${(safePaidDown / 100).toFixed(2)} Paid / $${(newUnpaidTabCents / 100).toFixed(2)} Owed)`
-        : 'UNPAID_TAB';
-
-    receipt.paid_down_cents = safePaidDown;
-    receipt.unpaid_tab_cents = newUnpaidTabCents;
-    receipt.payment_status = statusLabel;
-    receipt.updated_at = Date.now();
-
-    await this.db.update('stock_receipts', receipt);
-
-    const now = Date.now();
-    await this.db.add('audit_log', {
-      entity_type: 'StockReceipt',
-      entity_id: Number(receiptId),
-      action: 'EDIT_RESTOCK_PURCHASE_TERMS',
-      details_json: JSON.stringify({
-        receipt_id: Number(receiptId),
-        old_unpaid_cents: oldUnpaidTabCents,
-        new_unpaid_cents: newUnpaidTabCents,
-        tab_diff_cents: tabDiffCents
-      }),
-      created_at: now,
-      timestamp: now,
-    });
-
-    return receipt;
+    );
   }
 
   async resetAllInventoryStockAndCosts() {
@@ -466,24 +549,42 @@ export class PosRepository {
   }
 
   async logShrinkage(pigmentId, mgLost, reason) {
-    const pigment = await this.db.getById('pigments', Number(pigmentId));
-    if (!pigment) throw new Error(`Pigment ${pigmentId} not found`);
+    const pId = Number(pigmentId);
+    return await this.db.runTransaction(['pigments', 'shrinkage_logs'], 'readwrite', async (tx) => {
+      const pigmentsStore = tx.objectStore('pigments');
+      const shrinkageStore = tx.objectStore('shrinkage_logs');
 
-    const cogsLossCents = pigment.stock_mg > 0
-      ? Math.floor((pigment.total_cost_cents / pigment.stock_mg) * mgLost)
-      : 0;
+      const pigment = await new Promise((resolve, reject) => {
+        const req = pigmentsStore.get(pId);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      if (!pigment) throw new Error(`Pigment ${pigmentId} not found`);
 
-    const newStockMg = pigment.stock_mg - mgLost;
-    const newCostCents = pigment.total_cost_cents - cogsLossCents;
+      if (mgLost > pigment.stock_mg) {
+        throw new Error(`Cannot log shrinkage of ${mgLost}mg — only ${pigment.stock_mg}mg in stock`);
+      }
 
-    await this.db.updateStockAndCost(Number(pigmentId), newStockMg, newCostCents);
+      const cogsLossCents = pigment.stock_mg > 0
+        ? Math.floor((pigment.total_cost_cents / pigment.stock_mg) * mgLost)
+        : 0;
 
-    return await this.db.add('shrinkage_logs', {
-      pigment_id: Number(pigmentId),
-      mg_lost: mgLost,
-      cogs_loss_cents: cogsLossCents,
-      reason,
-      created_at: Date.now(),
+      pigment.stock_mg = Math.max(0, pigment.stock_mg - mgLost);
+      pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - cogsLossCents);
+      pigmentsStore.put(pigment);
+
+      const logId = await new Promise((resolve, reject) => {
+        const req = shrinkageStore.add({
+          pigment_id: pId,
+          mg_lost: mgLost,
+          cogs_loss_cents: cogsLossCents,
+          reason,
+          created_at: Date.now(),
+        });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      return logId;
     });
   }
 
@@ -647,94 +748,203 @@ export class PosRepository {
     if (!mgReturned || isNaN(mgReturned) || mgReturned <= 0) {
       throw new Error('Return weight must be greater than zero');
     }
-    const saleItem = await this.db.getById('sale_items', Number(saleItemId));
-    if (!saleItem) throw new Error(`SaleItem ${saleItemId} not found`);
+    const siId = Number(saleItemId);
+    return await this.db.runTransaction(['sale_items', 'returns', 'pigments'], 'readwrite', async (tx) => {
+      const saleItemsStore = tx.objectStore('sale_items');
+      const returnsStore = tx.objectStore('returns');
+      const pigmentsStore = tx.objectStore('pigments');
 
-    const alreadyReturnedMg = await this.db.getTotalReturnedMgForSaleItem(Number(saleItemId));
-    const maxEligible = saleItem.weight_mg - alreadyReturnedMg;
+      const saleItem = await new Promise((resolve, reject) => {
+        const req = saleItemsStore.get(siId);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      if (!saleItem) throw new Error(`SaleItem ${saleItemId} not found`);
 
-    if (mgReturned > maxEligible) {
-      throw new Error(`Cannot return ${formatMgToGrams(mgReturned)} — max eligible is ${formatMgToGrams(maxEligible)}`);
-    }
+      const existingReturns = await new Promise((resolve, reject) => {
+        const req = returnsStore.index('sale_item_id').getAll(siId);
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+      const alreadyReturnedMg = existingReturns.reduce((sum, r) => sum + r.mg_returned, 0);
+      const maxEligible = saleItem.weight_mg - alreadyReturnedMg;
 
-    const proportionalRefundCents = saleItem.weight_mg > 0
-      ? Math.round((saleItem.price_charged_cents / saleItem.weight_mg) * mgReturned)
-      : 0;
-
-    const returnId = await this.db.add('returns', {
-      sale_item_id: Number(saleItemId),
-      mg_returned: mgReturned,
-      refund_amount_cents: proportionalRefundCents,
-      restock_to_inventory: restockToInventory,
-      reason,
-      created_at: Date.now(),
-    });
-
-    if (restockToInventory) {
-      const pigment = await this.db.getById('pigments', Number(saleItem.pigment_id));
-      if (pigment) {
-        const proportionalCogs = saleItem.weight_mg > 0
-          ? Math.floor((saleItem.unit_cogs_cents / saleItem.weight_mg) * mgReturned)
-          : 0;
-        await this.db.updateStockAndCost(
-          Number(saleItem.pigment_id),
-          pigment.stock_mg + mgReturned,
-          pigment.total_cost_cents + proportionalCogs
-        );
+      if (mgReturned > maxEligible) {
+        throw new Error(`Cannot return ${formatMgToGrams(mgReturned)} — max eligible is ${formatMgToGrams(maxEligible)}`);
       }
-    }
 
-    return returnId;
+      const proportionalRefundCents = saleItem.weight_mg > 0
+        ? Math.round((saleItem.price_charged_cents / saleItem.weight_mg) * mgReturned)
+        : 0;
+
+      const returnId = await new Promise((resolve, reject) => {
+        const req = returnsStore.add({
+          sale_item_id: siId,
+          mg_returned: mgReturned,
+          refund_amount_cents: proportionalRefundCents,
+          restock_to_inventory: restockToInventory,
+          reason,
+          created_at: Date.now(),
+        });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+
+      if (restockToInventory && saleItem.pigment_id > 0) {
+        const pigment = await new Promise((resolve, reject) => {
+          const req = pigmentsStore.get(Number(saleItem.pigment_id));
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        if (pigment) {
+          const proportionalCogs = saleItem.weight_mg > 0
+            ? Math.floor((saleItem.unit_cogs_cents / saleItem.weight_mg) * mgReturned)
+            : 0;
+          pigment.stock_mg += mgReturned;
+          pigment.total_cost_cents += proportionalCogs;
+          pigmentsStore.put(pigment);
+        }
+      }
+
+      return returnId;
+    });
   }
 
   async voidSale(saleId, reason) {
     const sId = Number(saleId);
-    const sale = await this.db.getById('sales', sId);
-    if (!sale) throw new Error(`Sale ${saleId} not found`);
-    if (sale.status === 'VOIDED') throw new Error(`Sale ${saleId} is already voided`);
+    await this.db.runTransaction(
+      ['sales', 'sale_items', 'sale_payments', 'pigments', 'customers', 'returns', 'audit_log'],
+      'readwrite',
+      async (tx) => {
+        const salesStore = tx.objectStore('sales');
+        const saleItemsStore = tx.objectStore('sale_items');
+        const salePaymentsStore = tx.objectStore('sale_payments');
+        const pigmentsStore = tx.objectStore('pigments');
+        const customersStore = tx.objectStore('customers');
+        const returnsStore = tx.objectStore('returns');
+        const auditStore = tx.objectStore('audit_log');
 
-    const items = await this.db.getAllByIndex('sale_items', 'sale_id', sId);
-    for (const item of items) {
-      const pigment = await this.db.getById('pigments', Number(item.pigment_id));
-      if (pigment) {
-        await this.db.updateStockAndCost(
-          Number(item.pigment_id),
-          pigment.stock_mg + item.weight_mg,
-          pigment.total_cost_cents + item.unit_cogs_cents
-        );
+        const sale = await new Promise((resolve, reject) => {
+          const req = salesStore.get(sId);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        if (!sale) throw new Error(`Sale ${saleId} not found`);
+        if (sale.status === 'VOIDED') throw new Error(`Sale ${saleId} is already voided`);
+
+        // Read all sale items
+        const items = await new Promise((resolve, reject) => {
+          const req = saleItemsStore.index('sale_id').getAll(sId);
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+
+        // Restock only net weight (sold − already returned) for each item
+        for (const item of items) {
+          if (!item.pigment_id || item.pigment_id <= 0) continue;
+
+          const itemReturns = await new Promise((resolve, reject) => {
+            const req = returnsStore.index('sale_item_id').getAll(item.sale_item_id);
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+          });
+          const alreadyReturnedMg = itemReturns.reduce((sum, r) => sum + (r.mg_returned || 0), 0);
+          const netMg = item.weight_mg - alreadyReturnedMg;
+
+          if (netMg < 0) {
+            throw new Error(`Cannot void sale #${saleId}: item #${item.sale_item_id} has more returns (${alreadyReturnedMg}mg) than original weight (${item.weight_mg}mg)`);
+          }
+
+          if (netMg > 0) {
+            const netCogs = item.weight_mg > 0
+              ? Math.round((item.unit_cogs_cents / item.weight_mg) * netMg)
+              : 0;
+
+            const pigment = await new Promise((resolve, reject) => {
+              const req = pigmentsStore.get(Number(item.pigment_id));
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => reject(req.error);
+            });
+            if (pigment) {
+              pigment.stock_mg += netMg;
+              pigment.total_cost_cents += netCogs;
+              pigmentsStore.put(pigment);
+            }
+          }
+        }
+
+        // Reverse customer tab charges
+        const payments = await new Promise((resolve, reject) => {
+          const req = salePaymentsStore.index('sale_id').getAll(sId);
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+
+        if (sale.customer_id) {
+          const tabTotal = payments
+            .filter(p => p.payment_type === 'HOUSE_TAB')
+            .reduce((sum, p) => sum + p.amount_cents, 0);
+
+          if (tabTotal > 0) {
+            const customer = await new Promise((resolve, reject) => {
+              const req = customersStore.get(Number(sale.customer_id));
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => reject(req.error);
+            });
+            if (customer) {
+              customer.current_balance_cents -= tabTotal;
+              customersStore.put(customer);
+            }
+          }
+        }
+
+        // Mark sale as voided
+        sale.status = 'VOIDED';
+        sale.void_reason = reason;
+        salesStore.put(sale);
+
+        const now = Date.now();
+        auditStore.add({
+          entity_type: 'Sale',
+          entity_id: sId,
+          action: 'VOID_SALE',
+          details_json: JSON.stringify({ sale_id: sId, reason }),
+          created_at: now,
+          timestamp: now,
+        });
       }
-    }
-
-    const payments = await this.db.getAllByIndex('sale_payments', 'sale_id', sId);
-    for (const payment of payments) {
-      if (payment.payment_type === 'HOUSE_TAB' && sale.customer_id) {
-        await this.db.updateCustomerBalance(Number(sale.customer_id), -payment.amount_cents);
-      }
-    }
-
-    await this.db.updateSaleStatus(sId, 'VOIDED');
-
-    await this.db.add('audit_log', {
-      entity_type: 'Sale',
-      entity_id: sId,
-      action: 'VOID_SALE',
-      details_json: JSON.stringify({ sale_id: sId, reason }),
-      created_at: Date.now(),
-    });
+    );
   }
 
   async settleTabPayment(customerId, amountPaidCents, paymentType, digitalProvider = null) {
     const cId = Number(customerId);
-    const id = await this.db.add('tab_payments', {
-      customer_id: cId,
-      amount_paid_cents: amountPaidCents,
-      payment_type: paymentType,
-      digital_provider: digitalProvider,
-      created_at: Date.now(),
-    });
+    return await this.db.runTransaction(['tab_payments', 'customers'], 'readwrite', async (tx) => {
+      const tabStore = tx.objectStore('tab_payments');
+      const custStore = tx.objectStore('customers');
 
-    await this.db.updateCustomerBalance(cId, -amountPaidCents);
-    return id;
+      const customer = await new Promise((resolve, reject) => {
+        const req = custStore.get(cId);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      if (!customer) throw new Error(`Customer ${customerId} not found`);
+
+      const id = await new Promise((resolve, reject) => {
+        const req = tabStore.add({
+          customer_id: cId,
+          amount_paid_cents: amountPaidCents,
+          payment_type: paymentType,
+          digital_provider: digitalProvider,
+          created_at: Date.now(),
+        });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+
+      customer.current_balance_cents -= amountPaidCents;
+      custStore.put(customer);
+      return id;
+    });
   }
 
   async updatePigmentPricing(pigmentId, retailPricePerGramCents, wholesalePricePerGramCents) {
@@ -912,97 +1122,126 @@ export class PosRepository {
   }
 
   async fulfillCustomerPrepayment(prepaymentId, notes = '') {
-    const item = await this.db.getById('customer_prepayments', Number(prepaymentId));
-    if (!item) throw new Error(`Prepayment #${prepaymentId} not found`);
-    if (item.status === 'FULFILLED') return item;
+    const prepId = Number(prepaymentId);
+    return await this.db.runTransaction(
+      ['customer_prepayments', 'pigments', 'sales', 'sale_items', 'sale_payments', 'audit_log'],
+      'readwrite',
+      async (tx) => {
+        const prepStore = tx.objectStore('customer_prepayments');
+        const pigmentsStore = tx.objectStore('pigments');
+        const salesStore = tx.objectStore('sales');
+        const itemsStore = tx.objectStore('sale_items');
+        const paymentsStore = tx.objectStore('sale_payments');
+        const auditStore = tx.objectStore('audit_log');
 
-    const now = Date.now();
+        const item = await new Promise((resolve, reject) => {
+          const req = prepStore.get(prepId);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        if (!item) throw new Error(`Prepayment #${prepaymentId} not found`);
+        if (item.status === 'FULFILLED') return item;
 
-    // 1. If pigment & weight reserved, deduct inventory stock & WAC cost basis
-    if (item.pigment_id && item.weight_mg > 0) {
-      const pigment = await this.db.getById('pigments', Number(item.pigment_id));
-      if (pigment) {
-        const unitCogsCents = pigment.stock_mg > 0
-          ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * item.weight_mg)
-          : 0;
+        const now = Date.now();
 
-        const newStock = Math.max(0, pigment.stock_mg - item.weight_mg);
-        const newCost = Math.max(0, pigment.total_cost_cents - unitCogsCents);
+        // 1. If pigment & weight reserved, deduct inventory stock & WAC cost basis
+        if (item.pigment_id && item.weight_mg > 0) {
+          const pigment = await new Promise((resolve, reject) => {
+            const req = pigmentsStore.get(Number(item.pigment_id));
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          if (pigment) {
+            const unitCogsCents = pigment.stock_mg > 0
+              ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * item.weight_mg)
+              : 0;
 
-        await this.db.updateStockAndCost(Number(item.pigment_id), newStock, newCost);
+            pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
+            pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - unitCogsCents);
+            pigmentsStore.put(pigment);
 
-        // 2. Create Completed Sale record in Sales History
-        const saleId = await this.db.add('sales', {
-          customer_id: item.customer_id ? Number(item.customer_id) : null,
-          sale_type: (item.sale_type || item.pricing_mode || 'RETAIL').toUpperCase(),
-          pricing_mode: (item.pricing_mode || item.sale_type || 'RETAIL').toUpperCase(),
-          total_amount_cents: item.amount_cents || 0,
-          total_cogs_cents: unitCogsCents,
-          status: 'COMPLETED',
+            // 2. Create Completed Sale record in Sales History
+            const saleId = await new Promise((resolve, reject) => {
+              const req = salesStore.add({
+                customer_id: item.customer_id ? Number(item.customer_id) : null,
+                sale_type: (item.sale_type || item.pricing_mode || 'RETAIL').toUpperCase(),
+                pricing_mode: (item.pricing_mode || item.sale_type || 'RETAIL').toUpperCase(),
+                total_amount_cents: item.amount_cents || 0,
+                total_cogs_cents: unitCogsCents,
+                status: 'COMPLETED',
+                created_at: now,
+              });
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => reject(req.error);
+            });
+
+            itemsStore.add({
+              sale_id: saleId,
+              pigment_id: Number(item.pigment_id),
+              weight_mg: item.weight_mg,
+              price_charged_cents: item.amount_cents || 0,
+              unit_cogs_cents: unitCogsCents,
+            });
+
+            paymentsStore.add({
+              sale_id: saleId,
+              payment_type: 'PREPAID_DELIVERY',
+              digital_provider: null,
+              amount_cents: item.amount_cents || 0,
+              merchant_fee_cents: 0,
+            });
+          }
+        } else if (item.amount_cents > 0) {
+          // General credit store fulfillment
+          const saleId = await new Promise((resolve, reject) => {
+            const req = salesStore.add({
+              customer_id: item.customer_id ? Number(item.customer_id) : null,
+              sale_type: (item.sale_type || item.pricing_mode || 'RETAIL').toUpperCase(),
+              pricing_mode: (item.pricing_mode || item.sale_type || 'RETAIL').toUpperCase(),
+              total_amount_cents: item.amount_cents,
+              total_cogs_cents: 0,
+              status: 'COMPLETED',
+              created_at: now,
+            });
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+
+          itemsStore.add({
+            sale_id: saleId,
+            pigment_id: 0,
+            weight_mg: 0,
+            price_charged_cents: item.amount_cents,
+            unit_cogs_cents: 0,
+          });
+
+          paymentsStore.add({
+            sale_id: saleId,
+            payment_type: 'PREPAID_DELIVERY',
+            digital_provider: null,
+            amount_cents: item.amount_cents,
+            merchant_fee_cents: 0,
+          });
+        }
+
+        // 3. Mark prepayment status as FULFILLED
+        item.status = 'FULFILLED';
+        item.fulfilled_at = now;
+        if (notes) item.fulfillment_notes = notes;
+        prepStore.put(item);
+
+        auditStore.add({
+          entity_type: 'CustomerPrepayment',
+          entity_id: prepId,
+          action: 'FULFILL_PREPAYMENT',
+          details_json: JSON.stringify({ prepayment_id: prepId, weight_mg: item.weight_mg, amount_cents: item.amount_cents }),
           created_at: now,
+          timestamp: now,
         });
 
-        await this.db.add('sale_items', {
-          sale_id: saleId,
-          pigment_id: Number(item.pigment_id),
-          weight_mg: item.weight_mg,
-          price_charged_cents: item.amount_cents || 0,
-          unit_cogs_cents: unitCogsCents,
-        });
-
-        await this.db.add('sale_payments', {
-          sale_id: saleId,
-          payment_type: 'PREPAID_DELIVERY',
-          digital_provider: null,
-          amount_cents: item.amount_cents || 0,
-          merchant_fee_cents: 0,
-        });
+        return item;
       }
-    } else if (item.amount_cents > 0) {
-      // General credit store fulfillment
-      const saleId = await this.db.add('sales', {
-        customer_id: item.customer_id ? Number(item.customer_id) : null,
-        sale_type: (item.sale_type || item.pricing_mode || 'RETAIL').toUpperCase(),
-        pricing_mode: (item.pricing_mode || item.sale_type || 'RETAIL').toUpperCase(),
-        total_amount_cents: item.amount_cents,
-        total_cogs_cents: 0,
-        status: 'COMPLETED',
-        created_at: now,
-      });
-
-      await this.db.add('sale_items', {
-        sale_id: saleId,
-        pigment_id: 0,
-        weight_mg: 0,
-        price_charged_cents: item.amount_cents,
-        unit_cogs_cents: 0,
-      });
-
-      await this.db.add('sale_payments', {
-        sale_id: saleId,
-        payment_type: 'PREPAID_DELIVERY',
-        digital_provider: null,
-        amount_cents: item.amount_cents,
-        merchant_fee_cents: 0,
-      });
-    }
-
-    // 3. Mark prepayment status as FULFILLED
-    item.status = 'FULFILLED';
-    item.fulfilled_at = now;
-    if (notes) item.fulfillment_notes = notes;
-    await this.db.put('customer_prepayments', item);
-
-    await this.db.add('audit_log', {
-      entity_type: 'CustomerPrepayment',
-      entity_id: Number(prepaymentId),
-      action: 'FULFILL_PREPAYMENT',
-      details_json: JSON.stringify({ prepayment_id: Number(prepaymentId), weight_mg: item.weight_mg, amount_cents: item.amount_cents }),
-      created_at: now,
-      timestamp: now,
-    });
-
-    return item;
+    );
   }
 
   async getAllCustomerPrepayments() {
@@ -1030,36 +1269,52 @@ export class PosRepository {
     if (isNaN(amountPaidCents) || amountPaidCents <= 0) {
       throw new Error('Payment amount must be greater than zero');
     }
-    const supplier = await this.db.getById('suppliers', sId);
-    if (!supplier) throw new Error(`Supplier ${supplierId} not found`);
 
-    const now = Date.now();
-    const paymentId = await this.db.add('supplier_payments', {
-      supplier_id: sId,
-      amount_paid_cents: amountPaidCents,
-      payment_type: paymentType,
-      notes,
-      created_at: now,
+    return await this.db.runTransaction(['suppliers', 'supplier_payments', 'audit_log'], 'readwrite', async (tx) => {
+      const suppStore = tx.objectStore('suppliers');
+      const payStore = tx.objectStore('supplier_payments');
+      const auditStore = tx.objectStore('audit_log');
+
+      const supplier = await new Promise((resolve, reject) => {
+        const req = suppStore.get(sId);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      if (!supplier) throw new Error(`Supplier ${supplierId} not found`);
+
+      const now = Date.now();
+      const paymentId = await new Promise((resolve, reject) => {
+        const req = payStore.add({
+          supplier_id: sId,
+          amount_paid_cents: amountPaidCents,
+          payment_type: paymentType,
+          notes,
+          created_at: now,
+        });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+
+      supplier.current_balance_cents = (supplier.current_balance_cents || 0) - amountPaidCents;
+      suppStore.put(supplier);
+
+      auditStore.add({
+        entity_type: 'Supplier',
+        entity_id: sId,
+        action: 'SUPPLIER_PAYMENT',
+        details_json: JSON.stringify({
+          supplier_id: sId,
+          supplier_name: supplier.name,
+          amount_paid_cents: amountPaidCents,
+          payment_type: paymentType,
+          notes
+        }),
+        created_at: now,
+        timestamp: now,
+      });
+
+      return paymentId;
     });
-
-    await this.db.updateSupplierBalance(sId, -amountPaidCents);
-
-    await this.db.add('audit_log', {
-      entity_type: 'Supplier',
-      entity_id: sId,
-      action: 'SUPPLIER_PAYMENT',
-      details_json: JSON.stringify({
-        supplier_id: sId,
-        supplier_name: supplier.name,
-        amount_paid_cents: amountPaidCents,
-        payment_type: paymentType,
-        notes
-      }),
-      created_at: now,
-      timestamp: now,
-    });
-
-    return paymentId;
   }
 
   async exportData() {
@@ -1100,7 +1355,7 @@ export class PosRepository {
       const saleTotal = sale.total_amount_cents !== undefined ? sale.total_amount_cents : itemsTotal;
 
       const diff = Math.abs(saleTotal - paymentsTotal);
-      if (diff !== 0 || sale.needs_reconciliation) {
+      if (diff > 1 || sale.needs_reconciliation) {
         mismatches.push({
           sale_id: saleId,
           sale,
