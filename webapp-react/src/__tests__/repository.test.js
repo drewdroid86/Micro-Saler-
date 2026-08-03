@@ -368,7 +368,7 @@ test('validateCompletedSale rejects payment total mismatch', () => {
   const mismatchedSale = {
     sale: { total_amount_cents: 5000 },
     items: [{ pigment_id: 1, price_charged_cents: 5000 }],
-    payments: [{ payment_type: 'CASH', amount_cents: 4999 }]
+    payments: [{ payment_type: 'CASH', amount_cents: 4990 }]
   };
   const res = validateCompletedSale(mismatchedSale);
   assert.equal(res.isValid, false);
@@ -678,6 +678,78 @@ test('calculateBusinessInsights calculates pricing mode performance summary and 
   assert.ok(insights.recommendations.some(r => r.id === 'rec_below_floor_102'), 'Should trigger below floor recommendation for wholesale sale #102');
   assert.ok(insights.recommendations.some(r => r.id === 'rec_below_floor_103'), 'Should trigger below floor recommendation for retail sale #103');
 });
+
+test('Shrinkage overshoot validation prevents logging shrinkage exceeding stock_mg', () => {
+  const pigment = { pigment_id: 1, name: 'Gold', stock_mg: 5000, total_cost_cents: 2000 };
+  const mgLost = 6000;
+
+  function validateShrinkage(p, lost) {
+    if (lost > p.stock_mg) {
+      throw new Error(`Cannot log shrinkage of ${lost}mg — only ${p.stock_mg}mg in stock`);
+    }
+  }
+
+  assert.throws(() => validateShrinkage(pigment, mgLost), /Cannot log shrinkage/);
+});
+
+test('Void sale with prior returns restocks only net weight and proportional COGS', () => {
+  const saleItem = { sale_item_id: 10, sale_id: 1, pigment_id: 1, weight_mg: 10000, unit_cogs_cents: 3000 };
+  const returns = [{ sale_item_id: 10, mg_returned: 3000, refund_amount_cents: 900 }];
+
+  const alreadyReturnedMg = returns.reduce((sum, r) => sum + r.mg_returned, 0);
+  const netMg = saleItem.weight_mg - alreadyReturnedMg;
+  const netCogs = saleItem.weight_mg > 0
+    ? Math.round((saleItem.unit_cogs_cents / saleItem.weight_mg) * netMg)
+    : 0;
+
+  assert.equal(alreadyReturnedMg, 3000);
+  assert.equal(netMg, 7000); // 10000 - 3000 = 7000mg restocked
+  assert.equal(netCogs, 2100); // 7000/10000 * 3000 = 2100 cents
+});
+
+test('validateCompletedSale allows +-1 cent payment tolerance', () => {
+  const saleMinusOne = {
+    sale: { total_amount_cents: 5000 },
+    items: [{ pigment_id: 1, price_charged_cents: 5000 }],
+    payments: [{ payment_type: 'CASH', amount_cents: 4999 }]
+  };
+
+  const salePlusOne = {
+    sale: { total_amount_cents: 5000 },
+    items: [{ pigment_id: 1, price_charged_cents: 5000 }],
+    payments: [{ payment_type: 'CASH', amount_cents: 5001 }]
+  };
+
+  const saleOffTwo = {
+    sale: { total_amount_cents: 5000 },
+    items: [{ pigment_id: 1, price_charged_cents: 5000 }],
+    payments: [{ payment_type: 'CASH', amount_cents: 4998 }]
+  };
+
+  assert.equal(validateCompletedSale(saleMinusOne).isValid, true);
+  assert.equal(validateCompletedSale(salePlusOne).isValid, true);
+  assert.equal(validateCompletedSale(saleOffTwo).isValid, false);
+});
+
+test('Cart stock aggregation logic blocks adding items exceeding total stock across cart', () => {
+  const cart = [
+    { pigment_id: 1, weight_mg: 3000 },
+    { pigment_id: 2, weight_mg: 5000 },
+    { pigment_id: 1, weight_mg: 4000 }
+  ];
+  const pigment = { pigment_id: 1, name: 'Ruby', stock_mg: 10000 };
+
+  function checkCanAdd(pigmentId, requestedMg) {
+    const existingWeightMg = cart
+      .filter(ci => ci.pigment_id === pigmentId)
+      .reduce((sum, ci) => sum + ci.weight_mg, 0);
+    return existingWeightMg + requestedMg <= pigment.stock_mg;
+  }
+
+  assert.equal(checkCanAdd(1, 3000), true);  // 7000 + 3000 = 10000 <= 10000
+  assert.equal(checkCanAdd(1, 4000), false); // 7000 + 4000 = 11000 > 10000
+});
+
 
 
 

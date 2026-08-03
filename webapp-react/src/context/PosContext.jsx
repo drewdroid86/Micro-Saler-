@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import MicroSalerDB from '../db.js';
-import { PosRepository, getEffectivePricePerGramCents } from '../repository.js';
+import { PosRepository, getEffectivePricePerGramCents, formatMgToGrams } from '../repository.js';
 
 const PosContext = createContext(null);
 
@@ -194,6 +194,14 @@ export const PosProvider = ({ children }) => {
       return;
     }
 
+    const existingCartWeightMg = cart
+      .filter(ci => ci.pigment_id === pigment.pigment_id)
+      .reduce((sum, ci) => sum + ci.weight_mg, 0);
+    if (existingCartWeightMg + weightMg > pigment.stock_mg) {
+      showToast(`Insufficient stock for ${pigment.name}. Available: ${formatMgToGrams(pigment.stock_mg)}, In cart: ${formatMgToGrams(existingCartWeightMg)}, Requested: ${formatMgToGrams(weightMg)}`, 'error');
+      return;
+    }
+
     let priceChargedCents = null;
 
     if (customPriceCents !== null) {
@@ -246,6 +254,14 @@ export const PosProvider = ({ children }) => {
       if (i !== index) return item;
       const validWeightMg = Math.max(0, weightMg);
       const pigment = item.pigment;
+
+      const otherCartWeightMg = prev
+        .filter((ci, idx) => idx !== i && ci.pigment_id === item.pigment_id)
+        .reduce((sum, ci) => sum + ci.weight_mg, 0);
+      if (otherCartWeightMg + validWeightMg > pigment.stock_mg) {
+        // Can't update — return item unchanged
+        return item;
+      }
 
       let priceChargedCents = null;
 
@@ -472,6 +488,7 @@ export const PosProvider = ({ children }) => {
     isHandshakeOverride,
     setIsHandshakeOverride,
     isSubmitting,
+    setIsSubmitting,
     toasts,
     showToast,
     modal,
@@ -497,7 +514,7 @@ export const PosProvider = ({ children }) => {
     db, repo, loading, loadingError, isDbBlocked, currentTab, pigments, priceTiers,
     customers, suppliers, supplierPayments, stockReceipts, customerPrepayments, sales, saleItems, auditLogs,
     shrinkageLogs, cart, selectedCustomer, selectedPigment, pricingMode, isHandshakeOverride,
-    isSubmitting, toasts, modal, integrityMismatches
+    isSubmitting, setIsSubmitting, toasts, modal, integrityMismatches
   ]);
 
   return (

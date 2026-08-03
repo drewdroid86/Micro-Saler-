@@ -41,7 +41,9 @@ export const ModalManager = () => {
     repo,
     refreshAllData,
     showToast,
-    customerPrepayments
+    customerPrepayments,
+    isSubmitting,
+    setIsSubmitting
   } = usePos();
 
   // Local form states
@@ -668,12 +670,14 @@ export const ModalManager = () => {
   };
 
   const handleDigitalPayment = async () => {
+    if (isSubmitting) return;
     if (!digitalProvider) return;
-    const feeCents = Math.round((totalAmountCents * 0.029) + 30);
-    const customerId = selectedCustomer?.customer_id || null;
-    const payments = [{ payment_type: 'DIGITAL', digital_provider: digitalProvider, amount_cents: totalAmountCents, merchant_fee_cents: feeCents }];
-
+    setIsSubmitting(true);
     try {
+      const feeCents = Math.round((totalAmountCents * 0.029) + 30);
+      const customerId = selectedCustomer?.customer_id || null;
+      const payments = [{ payment_type: 'DIGITAL', digital_provider: digitalProvider, amount_cents: totalAmountCents, merchant_fee_cents: feeCents }];
+
       await repo.completeSale(customerId, cart, payments, false, pricingMode);
       setCart([]);
       setSelectedCustomer(null);
@@ -683,67 +687,71 @@ export const ModalManager = () => {
       showToast('Digital sale completed!', 'success');
     } catch (error) {
       showToast('Checkout failed: ' + error.message, 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleTabPayment = async () => {
+    if (isSubmitting) return;
     if (!selectedCustomer) {
       showToast('Please select a customer for house tab payment', 'error');
       return;
     }
-    const customerId = selectedCustomer.customer_id;
-    const payments = [];
+    setIsSubmitting(true);
+    try {
+      const customerId = selectedCustomer.customer_id;
+      const payments = [];
 
-    if (tabPayMode === 'FULL') {
-      payments.push({
-        payment_type: 'HOUSE_TAB',
-        digital_provider: null,
-        amount_cents: totalAmountCents,
-        merchant_fee_cents: 0
-      });
-    } else {
-      const paidNowCents = Math.round((parseFloat(tabPaidNowInput) || 0) * 100);
-      if (paidNowCents < 0 || paidNowCents > totalAmountCents) {
-        showToast('Paid now amount must be between $0.00 and transaction total', 'error');
-        return;
-      }
-      const tabAmountCents = Math.max(0, totalAmountCents - paidNowCents);
+      if (tabPayMode === 'FULL') {
+        payments.push({
+          payment_type: 'HOUSE_TAB',
+          digital_provider: null,
+          amount_cents: totalAmountCents,
+          merchant_fee_cents: 0
+        });
+      } else {
+        const paidNowCents = Math.round((parseFloat(tabPaidNowInput) || 0) * 100);
+        if (paidNowCents < 0 || paidNowCents > totalAmountCents) {
+          showToast('Paid now amount must be between $0.00 and transaction total', 'error');
+          return;
+        }
+        const tabAmountCents = Math.max(0, totalAmountCents - paidNowCents);
 
-      if (paidNowCents > 0) {
-        if (tabPaidType === 'DIGITAL') {
-          const feeCents = Math.round((paidNowCents * 0.029) + 30);
+        if (paidNowCents > 0) {
+          if (tabPaidType === 'DIGITAL') {
+            const feeCents = Math.round((paidNowCents * 0.029) + 30);
+            payments.push({
+              payment_type: 'DIGITAL',
+              digital_provider: tabDigitalProvider,
+              amount_cents: paidNowCents,
+              merchant_fee_cents: feeCents
+            });
+          } else {
+            payments.push({
+              payment_type: 'CASH',
+              digital_provider: null,
+              amount_cents: paidNowCents,
+              merchant_fee_cents: 0
+            });
+          }
+        }
+
+        if (tabAmountCents > 0) {
           payments.push({
-            payment_type: 'DIGITAL',
-            digital_provider: tabDigitalProvider,
-            amount_cents: paidNowCents,
-            merchant_fee_cents: feeCents
-          });
-        } else {
-          payments.push({
-            payment_type: 'CASH',
+            payment_type: 'HOUSE_TAB',
             digital_provider: null,
-            amount_cents: paidNowCents,
+            amount_cents: tabAmountCents,
             merchant_fee_cents: 0
           });
         }
       }
 
-      if (tabAmountCents > 0) {
-        payments.push({
-          payment_type: 'HOUSE_TAB',
-          digital_provider: null,
-          amount_cents: tabAmountCents,
-          merchant_fee_cents: 0
-        });
+      if (payments.length === 0) {
+        showToast('No payment specified', 'error');
+        return;
       }
-    }
 
-    if (payments.length === 0) {
-      showToast('No payment specified', 'error');
-      return;
-    }
-
-    try {
       await repo.completeSale(customerId, cart, payments, isHandshakeOverride, pricingMode);
       setCart([]);
       setSelectedCustomer(null);
@@ -753,45 +761,49 @@ export const ModalManager = () => {
       showToast('Sale completed & tab updated!', 'success');
     } catch (error) {
       showToast('Tab charge failed: ' + error.message, 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleSplitPayment = async () => {
-    const cashD = parseFloat(splitCashInput) || 0;
-    const digitalD = parseFloat(splitDigitalInput) || 0;
-    const tabD = parseFloat(splitTabInput) || 0;
-
-    const cashCents = Math.round(cashD * 100);
-    const digitalCents = Math.round(digitalD * 100);
-    const tabCents = Math.round(tabD * 100);
-
-    const totalTenderedCents = cashCents + digitalCents + tabCents;
-
-    if (totalTenderedCents !== totalAmountCents) {
-      showToast(`Split total (${formatCents(totalTenderedCents)}) must equal sale total (${formatCents(totalAmountCents)})`, 'error');
-      return;
-    }
-
-    if (tabCents > 0 && !selectedCustomer) {
-      showToast('Please select a customer first for the house tab split portion', 'error');
-      return;
-    }
-
-    const payments = [];
-    if (cashCents > 0) {
-      payments.push({ payment_type: 'CASH', digital_provider: null, amount_cents: cashCents, merchant_fee_cents: 0 });
-    }
-    if (digitalCents > 0) {
-      const feeCents = Math.round((digitalCents * 0.029) + 30);
-      payments.push({ payment_type: 'DIGITAL', digital_provider: splitDigitalProvider, amount_cents: digitalCents, merchant_fee_cents: feeCents });
-    }
-    if (tabCents > 0) {
-      payments.push({ payment_type: 'HOUSE_TAB', digital_provider: null, amount_cents: tabCents, merchant_fee_cents: 0 });
-    }
-
-    const customerId = selectedCustomer?.customer_id || null;
-
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
+      const cashD = parseFloat(splitCashInput) || 0;
+      const digitalD = parseFloat(splitDigitalInput) || 0;
+      const tabD = parseFloat(splitTabInput) || 0;
+
+      const cashCents = Math.round(cashD * 100);
+      const digitalCents = Math.round(digitalD * 100);
+      const tabCents = Math.round(tabD * 100);
+
+      const totalTenderedCents = cashCents + digitalCents + tabCents;
+
+      if (totalTenderedCents !== totalAmountCents) {
+        showToast(`Split total (${formatCents(totalTenderedCents)}) must equal sale total (${formatCents(totalAmountCents)})`, 'error');
+        return;
+      }
+
+      if (tabCents > 0 && !selectedCustomer) {
+        showToast('Please select a customer first for the house tab split portion', 'error');
+        return;
+      }
+
+      const payments = [];
+      if (cashCents > 0) {
+        payments.push({ payment_type: 'CASH', digital_provider: null, amount_cents: cashCents, merchant_fee_cents: 0 });
+      }
+      if (digitalCents > 0) {
+        const feeCents = Math.round((digitalCents * 0.029) + 30);
+        payments.push({ payment_type: 'DIGITAL', digital_provider: splitDigitalProvider, amount_cents: digitalCents, merchant_fee_cents: feeCents });
+      }
+      if (tabCents > 0) {
+        payments.push({ payment_type: 'HOUSE_TAB', digital_provider: null, amount_cents: tabCents, merchant_fee_cents: 0 });
+      }
+
+      const customerId = selectedCustomer?.customer_id || null;
+
       await repo.completeSale(customerId, cart, payments, isHandshakeOverride, pricingMode);
       setCart([]);
       setSelectedCustomer(null);
@@ -801,6 +813,8 @@ export const ModalManager = () => {
       showToast('Split payment sale completed successfully!', 'success');
     } catch (error) {
       showToast('Split payment failed: ' + error.message, 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -863,7 +877,7 @@ export const ModalManager = () => {
               <button
                 className="btn btn-primary btn-block"
                 onClick={handleDigitalPayment}
-                disabled={!digitalProvider}
+                disabled={!digitalProvider || isSubmitting}
               >
                 Charge Digital
               </button>
@@ -1106,7 +1120,7 @@ export const ModalManager = () => {
                     </label>
                   </div>
 
-                  <button className="btn btn-warning btn-block" onClick={handleTabPayment}>
+                  <button className="btn btn-warning btn-block" onClick={handleTabPayment} disabled={isSubmitting}>
                     {tabPayMode === 'FULL'
                       ? `Charge ${formatCents(totalAmountCents)} to Tab`
                       : `Complete Sale (Pay ${formatCents(Math.round((parseFloat(tabPaidNowInput) || 0) * 100))} + Charge ${formatCents(Math.max(0, totalAmountCents - Math.round((parseFloat(tabPaidNowInput) || 0) * 100)))} to Tab)`}
@@ -1195,7 +1209,7 @@ export const ModalManager = () => {
                 <button
                   className="btn btn-primary btn-block"
                   onClick={handleSplitPayment}
-                  disabled={diffC !== 0}
+                  disabled={diffC !== 0 || isSubmitting}
                 >
                   Complete Split Sale ({formatCents(totalAmountCents)})
                 </button>
