@@ -449,22 +449,45 @@ export default class MicroSalerDB {
     return new Promise((resolve, reject) => {
       if (!this.db) return reject(new Error('Database not initialized'));
       const tx = this.db.transaction(storeNames, mode);
-      tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
-      tx.onerror = () => reject(tx.error);
+      let txCompleted = false;
+      let txError = null;
+      let resolvedResult;
+      let isResultResolved = false;
+
+      tx.onabort = () => {
+        const err = tx.error || txError || new Error('Transaction aborted');
+        reject(err);
+      };
+      tx.onerror = () => {
+        const err = tx.error || txError || new Error('Transaction error');
+        reject(err);
+      };
+      tx.oncomplete = () => {
+        txCompleted = true;
+        if (isResultResolved) {
+          resolve(resolvedResult);
+        }
+      };
 
       let callbackResult;
       try {
         callbackResult = callback(tx);
       } catch (err) {
-        tx.abort();
+        txError = err;
+        try { tx.abort(); } catch (e) {}
         return reject(err);
       }
 
       Promise.resolve(callbackResult)
         .then(res => {
-          tx.oncomplete = () => resolve(res);
+          resolvedResult = res;
+          isResultResolved = true;
+          if (txCompleted) {
+            resolve(res);
+          }
         })
         .catch(err => {
+          txError = err;
           try { tx.abort(); } catch (e) {}
           reject(err);
         });

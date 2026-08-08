@@ -76,7 +76,7 @@ export const HistoryScreen = () => {
       </div>
 
       <div>
-        {sales.map(s => {
+        {safeSales.map(s => {
           const cust = customers.find(c => Number(c.customer_id) === Number(s.customer_id));
           const custName = cust ? cust.name : 'Walk-in';
           const items = saleItems.filter(si => Number(si.sale_id) === Number(s.sale_id));

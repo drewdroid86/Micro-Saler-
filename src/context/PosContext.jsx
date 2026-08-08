@@ -173,7 +173,7 @@ export const PosProvider = ({ children }) => {
       setRepo(repository);
 
       await refreshAllData(repository, database);
-      await checkStartupIntegrity(database);
+      await checkStartupIntegrity(database, repository);
 
       const activeP = await database.getActivePigments();
       if (activeP.length > 0) {
@@ -302,9 +302,22 @@ export const PosProvider = ({ children }) => {
   };
 
   const editCartItem = (index, newWeightMg, newPriceCents) => {
+    const validWeightMg = Math.max(0, newWeightMg);
+    const itemToEdit = cart[index];
+    if (itemToEdit && itemToEdit.pigment) {
+      const otherCartWeight = cart
+        .filter((_, i) => i !== index)
+        .filter(it => it.pigment_id === itemToEdit.pigment_id)
+        .reduce((sum, it) => sum + (it.weight_mg || 0), 0);
+      const totalRequestedMg = otherCartWeight + validWeightMg;
+      if (totalRequestedMg > itemToEdit.pigment.stock_mg) {
+        showToast(`Cannot set weight to ${(validWeightMg / 1000).toFixed(2)}g — only ${((itemToEdit.pigment.stock_mg - otherCartWeight) / 1000).toFixed(2)}g available for ${itemToEdit.pigment.name}.`, 'error');
+        return false;
+      }
+    }
+
     setCart(prev => prev.map((item, i) => {
       if (i !== index) return item;
-      const validWeightMg = Math.max(0, newWeightMg);
       const pigment = item.pigment;
       const unitCogsCents = (pigment && pigment.stock_mg > 0)
         ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * validWeightMg)
@@ -317,6 +330,7 @@ export const PosProvider = ({ children }) => {
         unit_cogs_cents: unitCogsCents
       };
     }));
+    return true;
   };
 
   const overrideCartTotal = (newTotalCents) => {

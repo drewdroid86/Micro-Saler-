@@ -4,7 +4,7 @@ import { formatCents, formatMgToGrams } from '../repository';
 
 export const PricingCalculatorScreen = () => {
   const { pigments, addToCart, showToast } = usePos();
-  const activePigments = (pigments || []).filter(p => p.is_active !== false);
+  const activePigments = (pigments || []).filter(p => !p.is_archived && p.is_active !== false);
 
   // Input states
   const [selectedPigmentId, setSelectedPigmentId] = useState('');
@@ -22,8 +22,8 @@ export const PricingCalculatorScreen = () => {
     if (!id) return;
     const p = activePigments.find(pig => Number(pig.pigment_id) === Number(id));
     if (p) {
-      const wacPerGram = p.stock_mg > 0 ? (p.total_cost_cents / p.stock_mg) : 0;
-      const dollarsPerGram = (wacPerGram).toFixed(2);
+      const wacDollarsPerGram = p.stock_mg > 0 ? (p.total_cost_cents / p.stock_mg) * 10 : 0;
+      const dollarsPerGram = wacDollarsPerGram.toFixed(2);
       setCostPerGramInput(dollarsPerGram);
     }
   };

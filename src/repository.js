@@ -151,6 +151,7 @@ export function calculatePricingBreakdown({
   let matchedTier = null;
   let totalPriceCents = 0;
 
+  let priceCalculated = false;
   if (pigment) {
     matchedTier = getMatchedTier(pigment, safeWeightMg);
     const presetTier = priceTiers?.find(
@@ -158,23 +159,25 @@ export function calculatePricingBreakdown({
     );
 
     if (customPriceCents !== null && customPriceCents !== undefined && !isNaN(customPriceCents)) {
-      totalPriceCents = Math.round(Number(customPriceCents));
+      totalPriceCents = Math.max(0, Math.round(Number(customPriceCents)));
       effectiveRatePerGramCents = weightGrams > 0 ? Math.round((totalPriceCents - pkgCents) / weightGrams) : 0;
+      priceCalculated = true;
     } else if (presetTier) {
       const presetPrice = pricingMode === 'RETAIL' ? presetTier.retail_price_cents : presetTier.wholesale_price_cents;
       if (presetPrice !== null && presetPrice !== undefined && !isNaN(presetPrice) && Number(presetPrice) > 0) {
         totalPriceCents = Number(presetPrice);
         effectiveRatePerGramCents = weightGrams > 0 ? Math.round((totalPriceCents - pkgCents) / weightGrams) : 0;
+        priceCalculated = true;
       }
     }
 
-    if (totalPriceCents === 0 && safeWeightMg > 0) {
+    if (!priceCalculated && safeWeightMg > 0) {
       effectiveRatePerGramCents = getEffectivePricePerGramCents(pigment, safeWeightMg, pricingMode);
       const rawPkg = pkgCents || (pigment.default_pkg_cents || 0);
       totalPriceCents = Math.round(weightGrams * effectiveRatePerGramCents) + rawPkg;
     }
   } else if (customPriceCents !== null && customPriceCents !== undefined) {
-    totalPriceCents = Math.round(Number(customPriceCents));
+    totalPriceCents = Math.max(0, Math.round(Number(customPriceCents)));
     effectiveRatePerGramCents = weightGrams > 0 ? Math.round(totalPriceCents / weightGrams) : 0;
   }
 
@@ -281,14 +284,27 @@ export class PosRepository {
         // Resolve supplier ID
         let sId = supplierId ? Number(supplierId) : null;
         if (!sId && supplierName && supplierName.trim()) {
+          const trimmedName = supplierName.trim();
           const allSuppliers = await new Promise((resolve, reject) => {
             const req = suppliersStore.getAll();
             req.onsuccess = () => resolve(req.result || []);
             req.onerror = () => reject(req.error);
           });
-          const existing = allSuppliers.find(s => s.name.toLowerCase() === supplierName.trim().toLowerCase());
+          const existing = allSuppliers.find(s => s.name.toLowerCase() === trimmedName.toLowerCase());
           if (existing) {
             sId = existing.supplier_id;
+          } else {
+            // Auto-create new supplier to capture supplier debt and ledger tracking
+            sId = await new Promise((resolve, reject) => {
+              const req = suppliersStore.add({
+                name: trimmedName,
+                contact_info: '',
+                current_balance_cents: 0,
+                created_at: new Date().toISOString()
+              });
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => reject(req.error);
+            });
           }
         }
 
@@ -577,6 +593,7 @@ export class PosRepository {
         const req = shrinkageStore.add({
           pigment_id: pId,
           mg_lost: mgLost,
+          weight_mg: mgLost,
           cogs_loss_cents: cogsLossCents,
           reason,
           created_at: Date.now(),
@@ -1568,6 +1585,23 @@ export class PosRepository {
         });
       }
 
+      // Rebalance customer house tab balance if HOUSE_TAB tender amount changed
+      const oldTabTotalCents = oldPayments
+        .filter(p => p.payment_type === 'HOUSE_TAB')
+        .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+      const newTabTotalCents = payments
+        .filter(p => p.payment_type === 'HOUSE_TAB')
+        .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+      const tabDeltaCents = newTabTotalCents - oldTabTotalCents;
+
+      if (tabDeltaCents !== 0 && sale.customer_id) {
+        const customer = await this.db.getById('customers', Number(sale.customer_id));
+        if (customer) {
+          customer.current_balance_cents = Math.max(0, (customer.current_balance_cents || 0) + tabDeltaCents);
+          await this.db.put('customers', customer);
+        }
+      }
+
       sale.needs_reconciliation = false;
       sale.reconciliation_status = 'RECONCILED';
       await this.db.put('sales', sale);
@@ -1576,7 +1610,7 @@ export class PosRepository {
         entity_type: 'Sale',
         entity_id: sId,
         action: 'MANUAL_RECONCILIATION_CORRECT_PAYMENT',
-        details_json: JSON.stringify({ sale_id: sId, corrected_payments: payments }),
+        details_json: JSON.stringify({ sale_id: sId, corrected_payments: payments, tab_delta_cents: tabDeltaCents }),
         created_at: now,
         timestamp: now
       });
@@ -1970,7 +2004,7 @@ export function calculateBusinessInsights({
       };
       shrinkageMap.set(pId, entry);
     }
-    entry.weightLostMg += (log.weight_mg || 0);
+    entry.weightLostMg += (log.mg_lost || log.weight_mg || 0);
     entry.cogsLossCents += (log.cogs_loss_cents || log.cogs_cents || 0);
     entry.incidentCount += 1;
   });

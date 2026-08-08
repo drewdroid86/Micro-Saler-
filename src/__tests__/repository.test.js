@@ -747,11 +747,32 @@ test('Cart stock aggregation logic blocks adding items exceeding total stock acr
   }
 
   assert.equal(checkCanAdd(1, 3000), true);  // 7000 + 3000 = 10000 <= 10000
-  assert.equal(checkCanAdd(1, 4000), false); // 7000 + 4000 = 11000 > 10000
+  assert.equal(checkCanAdd(1, 3001), false); // 7000 + 3001 = 10001 > 10000
 });
 
+test('calculatePricingBreakdown respects custom $0.00 price without fallback override', () => {
+  const pigment = {
+    pigment_id: 1,
+    retail_price_per_gram_cents: 500,
+    default_pkg_cents: 50,
+    stock_mg: 10000,
+    total_cost_cents: 2000
+  };
 
+  // Custom price of 0 cents (complimentary sample)
+  const breakdown = calculatePricingBreakdown({ pigment, weightMg: 2000, pricingMode: 'RETAIL', customPriceCents: 0, packagingCents: 0 });
+  assert.equal(breakdown.totalPriceCents, 0);
+  assert.equal(breakdown.cogsCents, 400); // (2000 / 10000) * 2000mg = 400 cents
+  assert.equal(breakdown.grossProfitCents, -400);
+});
 
-
-
+test('Pricing calculator WAC formula correctly converts cents/mg to dollars/gram', () => {
+  // 100g of pigment with $300 total cost basis:
+  // total_cost_cents = 30000 cents ($300)
+  // stock_mg = 100000 mg (100g)
+  // Dollars per gram should be $3.00/g:
+  const pigment = { total_cost_cents: 30000, stock_mg: 100000 };
+  const wacDollarsPerGram = pigment.stock_mg > 0 ? (pigment.total_cost_cents / pigment.stock_mg) * 10 : 0;
+  assert.equal(wacDollarsPerGram.toFixed(2), '3.00');
+});
 
