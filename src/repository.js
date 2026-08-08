@@ -633,28 +633,38 @@ export class PosRepository {
       const customersStore = tx.objectStore('customers');
       const auditStore = tx.objectStore('audit_log');
 
-      // 1. Read & validate all pigments inside the transaction lock
-      const pigmentUpdates = [];
+      // 1. Read & validate all pigments inside the transaction lock.
+      // Aggregate requested weight per pigment FIRST so that multiple cart
+      // lines referencing the same pigment are validated and deducted
+      // against one shared running total, not independent snapshots
+      // (independent reads would let a later put() silently clobber an
+      // earlier one — the "last write wins" duplicate-pigment bug).
+      const requestedByPigment = new Map(); // pId -> total weight_mg requested
       for (const item of items) {
         const pId = Number(item.pigment_id);
         if (pId > 0) {
-          const pigment = await new Promise((resolve, reject) => {
-            const req = pigmentsStore.get(pId);
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
-          });
-
-          if (!pigment) {
-            tx.abort();
-            throw new Error(`Pigment #${pId} not found in database.`);
-          }
-          if (pigment.stock_mg < item.weight_mg) {
-            tx.abort();
-            throw new Error(`Insufficient stock for ${pigment.name}. Available: ${formatMgToGrams(pigment.stock_mg)}, Requested: ${formatMgToGrams(item.weight_mg)}.`);
-          }
-
-          pigmentUpdates.push({ pigment, item });
+          requestedByPigment.set(pId, (requestedByPigment.get(pId) || 0) + item.weight_mg);
         }
+      }
+
+      const pigmentCache = new Map(); // pId -> pigment record (single shared instance)
+      for (const [pId, totalRequested] of requestedByPigment.entries()) {
+        const pigment = await new Promise((resolve, reject) => {
+          const req = pigmentsStore.get(pId);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+
+        if (!pigment) {
+          tx.abort();
+          throw new Error(`Pigment #${pId} not found in database.`);
+        }
+        if (pigment.stock_mg < totalRequested) {
+          tx.abort();
+          throw new Error(`Insufficient stock for ${pigment.name}. Available: ${formatMgToGrams(pigment.stock_mg)}, Requested: ${formatMgToGrams(totalRequested)}.`);
+        }
+
+        pigmentCache.set(pId, pigment);
       }
 
       // 2. Read customer inside transaction lock if customerId present
@@ -685,18 +695,28 @@ export class PosRepository {
         req.onerror = () => reject(req.error);
       });
 
-      // 4. Write sale_items and update pigment stock
-      for (const { pigment, item } of pigmentUpdates) {
-        saleItemsStore.add({
-          sale_id: createdSaleId,
-          pigment_id: Number(item.pigment_id),
-          weight_mg: item.weight_mg,
-          price_charged_cents: item.price_charged_cents,
-          unit_cogs_cents: item.unit_cogs_cents,
-        });
+      // 4. Write sale_items and accumulate pigment stock deductions against
+      // the single shared pigment instance for that pigment_id.
+      for (const item of items) {
+        const pId = Number(item.pigment_id);
+        if (pId > 0) {
+          saleItemsStore.add({
+            sale_id: createdSaleId,
+            pigment_id: pId,
+            weight_mg: item.weight_mg,
+            price_charged_cents: item.price_charged_cents,
+            unit_cogs_cents: item.unit_cogs_cents,
+          });
 
-        pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
-        pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - item.unit_cogs_cents);
+          const pigment = pigmentCache.get(pId);
+          pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
+          pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - item.unit_cogs_cents);
+        }
+      }
+
+      // Persist each pigment exactly once, after all its cart lines have
+      // been folded into the shared instance.
+      for (const pigment of pigmentCache.values()) {
         pigmentsStore.put(pigment);
       }
 
@@ -1144,53 +1164,63 @@ export class PosRepository {
 
         const now = Date.now();
 
-        // 1. If pigment & weight reserved, deduct inventory stock & WAC cost basis
+        // 1. If pigment & weight reserved, deduct inventory stock & WAC cost basis.
+        // A missing pigment or insufficient stock must abort the whole
+        // fulfillment — never fall through to marking it FULFILLED with no
+        // sale/payment record created (that was the ledger-hole bug).
         if (item.pigment_id && item.weight_mg > 0) {
           const pigment = await new Promise((resolve, reject) => {
             const req = pigmentsStore.get(Number(item.pigment_id));
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
           });
-          if (pigment) {
-            const unitCogsCents = pigment.stock_mg > 0
-              ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * item.weight_mg)
-              : 0;
-
-            pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
-            pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - unitCogsCents);
-            pigmentsStore.put(pigment);
-
-            // 2. Create Completed Sale record in Sales History
-            const saleId = await new Promise((resolve, reject) => {
-              const req = salesStore.add({
-                customer_id: item.customer_id ? Number(item.customer_id) : null,
-                sale_type: (item.sale_type || item.pricing_mode || 'RETAIL').toUpperCase(),
-                pricing_mode: (item.pricing_mode || item.sale_type || 'RETAIL').toUpperCase(),
-                total_amount_cents: item.amount_cents || 0,
-                total_cogs_cents: unitCogsCents,
-                status: 'COMPLETED',
-                created_at: now,
-              });
-              req.onsuccess = () => resolve(req.result);
-              req.onerror = () => reject(req.error);
-            });
-
-            itemsStore.add({
-              sale_id: saleId,
-              pigment_id: Number(item.pigment_id),
-              weight_mg: item.weight_mg,
-              price_charged_cents: item.amount_cents || 0,
-              unit_cogs_cents: unitCogsCents,
-            });
-
-            paymentsStore.add({
-              sale_id: saleId,
-              payment_type: 'PREPAID_DELIVERY',
-              digital_provider: null,
-              amount_cents: item.amount_cents || 0,
-              merchant_fee_cents: 0,
-            });
+          if (!pigment) {
+            tx.abort();
+            throw new Error(`Pigment #${item.pigment_id} not found — cannot fulfill prepayment #${prepId}.`);
           }
+          if (pigment.stock_mg < item.weight_mg) {
+            tx.abort();
+            throw new Error(`Insufficient stock for ${pigment.name}. Available: ${formatMgToGrams(pigment.stock_mg)}, Required: ${formatMgToGrams(item.weight_mg)}.`);
+          }
+
+          const unitCogsCents = pigment.stock_mg > 0
+            ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * item.weight_mg)
+            : 0;
+
+          pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
+          pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - unitCogsCents);
+          pigmentsStore.put(pigment);
+
+          // 2. Create Completed Sale record in Sales History
+          const saleId = await new Promise((resolve, reject) => {
+            const req = salesStore.add({
+              customer_id: item.customer_id ? Number(item.customer_id) : null,
+              sale_type: (item.sale_type || item.pricing_mode || 'RETAIL').toUpperCase(),
+              pricing_mode: (item.pricing_mode || item.sale_type || 'RETAIL').toUpperCase(),
+              total_amount_cents: item.amount_cents || 0,
+              total_cogs_cents: unitCogsCents,
+              status: 'COMPLETED',
+              created_at: now,
+            });
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+
+          itemsStore.add({
+            sale_id: saleId,
+            pigment_id: Number(item.pigment_id),
+            weight_mg: item.weight_mg,
+            price_charged_cents: item.amount_cents || 0,
+            unit_cogs_cents: unitCogsCents,
+          });
+
+          paymentsStore.add({
+            sale_id: saleId,
+            payment_type: 'PREPAID_DELIVERY',
+            digital_provider: null,
+            amount_cents: item.amount_cents || 0,
+            merchant_fee_cents: 0,
+          });
         } else if (item.amount_cents > 0) {
           // General credit store fulfillment
           const saleId = await new Promise((resolve, reject) => {
