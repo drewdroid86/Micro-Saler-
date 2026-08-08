@@ -112,6 +112,7 @@ body {
 .main-content {
   flex-grow: 1;
   overflow-y: auto;
+  min-height: 0;
   padding: var(--spacing-md);
   position: relative;
 }
@@ -509,6 +510,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .modal-header h2 {
@@ -544,6 +546,7 @@ body {
   gap: var(--spacing-sm);
   background: var(--market-background);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  flex-shrink: 0;
 }
 
 /* =========================================
