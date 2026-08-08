@@ -490,6 +490,7 @@ body {
   width: 90%;
   max-width: 500px;
   max-height: 90dvh;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-lg);
@@ -532,6 +533,7 @@ body {
 .modal-body {
   padding: var(--spacing-md);
   overflow-y: auto;
+  min-height: 0;
 }
 
 .modal-footer {
