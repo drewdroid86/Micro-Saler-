@@ -19,7 +19,7 @@ export function App() {
 
   if (loadingError || isDbBlocked) {
     return (
-      <div className="flex-center" style={{ height: '100vh', flexDirection: 'column', padding: '24px', textAlign: 'center', backgroundColor: 'var(--market-bg, #121212)', color: 'var(--market-text, #ffffff)' }}>
+      <div className="flex-center" style={{ height: '100dvh', flexDirection: 'column', padding: '24px', textAlign: 'center', backgroundColor: 'var(--market-bg, #121212)', color: 'var(--market-text, #ffffff)' }}>
         <h2 style={{ color: 'var(--market-error, #ef4444)', marginBottom: '12px' }}>Database Upgrade Notice</h2>
         <p style={{ maxWidth: '440px', marginBottom: '24px', color: 'var(--market-text-secondary, #9e9e9e)', lineHeight: '1.5', fontSize: '0.95rem' }}>
           {isDbBlocked
@@ -51,7 +51,7 @@ export function App() {
 
   if (loading) {
     return (
-      <div className="flex-center" style={{ height: '100vh', fontSize: '1.2em', fontWeight: 'bold' }}>
+      <div className="flex-center" style={{ height: '100dvh', fontSize: '1.2em', fontWeight: 'bold' }}>
         Loading Micro Saler POS...
       </div>
     );
