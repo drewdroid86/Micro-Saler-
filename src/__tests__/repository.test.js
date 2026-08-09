@@ -1189,7 +1189,7 @@ test('Customer balance always strictly equals the sum of ledger entries', async 
   assert.equal(ledger[3].running_balance_cents, -5000); // initial running balance
 });
 
-test('createCustomer records opening balance in customers store and creates corresponding ledger entry', async () => {
+test('createCustomer records opening balance in customers store and creates corresponding opening_balance ledger entry', async () => {
   const customerStore = [];
   const ledgerStore = [];
   const auditStore = [];
@@ -1218,11 +1218,11 @@ test('createCustomer records opening balance in customers store and creates corr
 
   const repo = new PosRepository(mockDb);
 
-  // 1. Create customer with positive opening balance ($25.00 credit)
+  // 1. Create customer with positive starting balance ($25.00 credit)
   const cust1Id = await repo.createCustomer({
     name: 'Credit Customer',
     phone_number: '555-0101',
-    balance: 2500,
+    starting_balance: 2500,
     credit_limit_cents: 5000
   });
 
@@ -1231,13 +1231,13 @@ test('createCustomer records opening balance in customers store and creates corr
   assert.equal(ledgerStore.length, 1);
   assert.equal(ledgerStore[0].customer_id, 1);
   assert.equal(ledgerStore[0].amount_cents, 2500);
-  assert.equal(ledgerStore[0].type, 'BALANCE_ADJUSTMENT');
+  assert.equal(ledgerStore[0].type, 'opening_balance');
 
-  // 2. Create customer with negative opening balance (-$15.00 debt)
+  // 2. Create customer with negative starting balance (-$15.00 debt)
   const cust2Id = await repo.createCustomer({
     name: 'Debt Customer',
     phone_number: '555-0102',
-    balance: -1500,
+    starting_balance: -1500,
     credit_limit_cents: 2500
   });
 
@@ -1246,13 +1246,17 @@ test('createCustomer records opening balance in customers store and creates corr
   assert.equal(ledgerStore.length, 2);
   assert.equal(ledgerStore[1].customer_id, 2);
   assert.equal(ledgerStore[1].amount_cents, -1500);
+  assert.equal(ledgerStore[1].type, 'opening_balance');
 });
 
-test('updateCustomer adjusts customer balance and records signed ledger entry when balance is modified', async () => {
+test('updateCustomer allows setting starting balance once if no prior ledger entries, and rejects if entries exist', async () => {
   const customerStore = [
-    { customer_id: 1, name: 'Charlie', phone_number: '555-1234', balance: 0, credit_limit_cents: 2500, trust_status: 'GOOD_STANDING' }
+    { customer_id: 1, name: 'Alice', phone_number: '555-1234', balance: 0, credit_limit_cents: 2500, trust_status: 'GOOD_STANDING' },
+    { customer_id: 2, name: 'Bob', phone_number: '555-5678', balance: -1000, credit_limit_cents: 2500, trust_status: 'GOOD_STANDING' }
   ];
-  const ledgerStore = [];
+  const ledgerStore = [
+    { entry_id: 1, customer_id: 2, amount_cents: -1000, type: 'SALE_DEBT', created_at: 1000 }
+  ];
   const auditStore = [];
 
   const mockDb = {
@@ -1260,6 +1264,19 @@ test('updateCustomer adjusts customer balance and records signed ledger entry wh
       const tx = {
         objectStore(name) {
           return {
+            index(idxName) {
+              return {
+                getAll(val) {
+                  const req = { onsuccess: null, onerror: null, result: null };
+                  setTimeout(() => {
+                    req.result = ledgerStore.filter(e => e.customer_id === val);
+                    if (req.onsuccess) req.onsuccess();
+                  }, 0);
+                  return req;
+                }
+              };
+            },
+            indexNames: { contains: (n) => n === 'customer_id' },
             get(id) {
               const req = { onsuccess: null, onerror: null, result: null };
               setTimeout(() => {
@@ -1303,20 +1320,58 @@ test('updateCustomer adjusts customer balance and records signed ledger entry wh
 
   const repo = new PosRepository(mockDb);
 
-  // Update Charlie's balance from $0 to -$20.00 debt
+  // 1. Setting starting balance on Alice (no prior ledger entries) succeeds
   await repo.updateCustomer({
     customer_id: 1,
-    name: 'Charlie Updated',
-    balance: -2000,
-    balance_notes: 'Initial tab migration',
-    balance_reason: 'Opening Balance Setup'
+    name: 'Alice Updated',
+    starting_balance: 3000 // has $30.00 credit
   });
 
-  assert.equal(customerStore[0].name, 'Charlie Updated');
-  assert.equal(customerStore[0].balance, -2000);
-  assert.equal(ledgerStore.length, 1);
-  assert.equal(ledgerStore[0].customer_id, 1);
-  assert.equal(ledgerStore[0].amount_cents, -2000); // delta 0 -> -2000
-  assert.equal(ledgerStore[0].type, 'BALANCE_ADJUSTMENT');
+  assert.equal(customerStore[0].balance, 3000);
+  const aliceLedger = ledgerStore.filter(e => e.customer_id === 1);
+  assert.equal(aliceLedger.length, 1);
+  assert.equal(aliceLedger[0].type, 'opening_balance');
+  assert.equal(aliceLedger[0].amount_cents, 3000);
+
+  // 2. Setting starting balance on Bob (already has ledger entries) throws error
+  let errorCaught = null;
+  try {
+    await repo.updateCustomer({
+      customer_id: 2,
+      name: 'Bob Updated',
+      starting_balance: -5000
+    });
+  } catch (err) {
+    errorCaught = err;
+  }
+  assert.ok(errorCaught);
+  assert.match(errorCaught.message, /already has existing ledger transactions/i);
+});
+
+test('getCustomerLedger formats and labels opening_balance entry as Opening balance', async () => {
+  const customer = { customer_id: 1, name: 'Alice Smith', balance: 5000 };
+  const ledgerEntries = [
+    { entry_id: 1, customer_id: 1, amount_cents: 5000, type: 'opening_balance', created_at: 1000 }
+  ];
+
+  const mockDb = {
+    async getById(store, id) {
+      if (store === 'customers' && id === 1) return customer;
+      return null;
+    },
+    async getAllByIndex(store, indexName, value) {
+      if (store === 'customer_ledger') return ledgerEntries.filter(e => e.customer_id === value);
+      return [];
+    }
+  };
+
+  const repo = new PosRepository(mockDb);
+  const ledger = await repo.getCustomerLedger(1);
+
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0].title, 'Opening balance');
+  assert.equal(ledger[0].amount_cents, 5000);
+  assert.equal(ledger[0].running_balance_cents, 5000);
+  assert.equal(ledger[0].formatted_amount, '+$50.00');
 });
 

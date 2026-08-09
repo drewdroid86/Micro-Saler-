@@ -87,15 +87,12 @@ export const ModalManager = () => {
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
   const [custLimit, setCustLimit] = useState('');
-  const [initialCustBalance, setInitialCustBalance] = useState('');
-  const [custOpeningBalAmt, setCustOpeningBalAmt] = useState('');
-  const [custOpeningBalType, setCustOpeningBalType] = useState('ZERO');
-  const [custOpeningBalNotes, setCustOpeningBalNotes] = useState('');
+  const [custStartingBalAmt, setCustStartingBalAmt] = useState('');
+  const [custStartingBalType, setCustStartingBalType] = useState('CREDIT');
 
-  const [editCustBalAmt, setEditCustBalAmt] = useState('');
-  const [editCustBalType, setEditCustBalType] = useState('ZERO');
-  const [editCustBalNotes, setEditCustBalNotes] = useState('');
-  const [editCustEnableBalAdjust, setEditCustEnableBalAdjust] = useState(false);
+  const [editCustHasLedgerEntries, setEditCustHasLedgerEntries] = useState(false);
+  const [editCustStartingBalAmt, setEditCustStartingBalAmt] = useState('');
+  const [editCustStartingBalType, setEditCustStartingBalType] = useState('CREDIT');
 
   const [customerPickerSearch, setCustomerPickerSearch] = useState('');
 
@@ -313,9 +310,8 @@ export const ModalManager = () => {
       setCustPhone('');
       setCustLimit('25');
       setCustStatus('GOOD_STANDING');
-      setCustOpeningBalAmt('');
-      setCustOpeningBalType('ZERO');
-      setCustOpeningBalNotes('');
+      setCustStartingBalAmt('');
+      setCustStartingBalType('CREDIT');
     }
 
     if (modal.name === 'editCustomer' && modal.payload) {
@@ -323,22 +319,20 @@ export const ModalManager = () => {
       setCustPhone(modal.payload.phone_number || modal.payload.phone || '');
       setCustLimit(modal.payload.credit_limit_cents !== undefined && modal.payload.credit_limit_cents !== null ? (modal.payload.credit_limit_cents / 100).toString() : '25');
       setCustStatus(modal.payload.trust_status || 'GOOD_STANDING');
-      
-      const bal = modal.payload.balance !== undefined
-        ? Number(modal.payload.balance)
-        : (modal.payload.current_balance_cents !== undefined ? -Number(modal.payload.current_balance_cents) : 0);
-      if (bal > 0) {
-        setEditCustBalType('CREDIT');
-        setEditCustBalAmt((bal / 100).toFixed(2));
-      } else if (bal < 0) {
-        setEditCustBalType('DEBT');
-        setEditCustBalAmt((Math.abs(bal) / 100).toFixed(2));
+      setEditCustStartingBalAmt('');
+      setEditCustStartingBalType('CREDIT');
+
+      if (repo && modal.payload.customer_id) {
+        repo.getCustomerLedger(modal.payload.customer_id)
+          .then(entries => {
+            setEditCustHasLedgerEntries(entries && entries.length > 0);
+          })
+          .catch(() => {
+            setEditCustHasLedgerEntries(false);
+          });
       } else {
-        setEditCustBalType('ZERO');
-        setEditCustBalAmt('');
+        setEditCustHasLedgerEntries(false);
       }
-      setEditCustBalNotes('');
-      setEditCustEnableBalAdjust(false);
     }
   }, [modal.name, modal.payload, resetAllFormStates, repo]);
 
@@ -582,12 +576,10 @@ export const ModalManager = () => {
       return;
     }
     const limitD = parseFloat(custLimit || 0);
-    const amtD = parseFloat(custOpeningBalAmt || 0);
-    let signedBalCents = 0;
-    if (custOpeningBalType === 'CREDIT' && amtD > 0) {
-      signedBalCents = Math.round(amtD * 100);
-    } else if (custOpeningBalType === 'DEBT' && amtD > 0) {
-      signedBalCents = -Math.round(amtD * 100);
+    const amtD = parseFloat(custStartingBalAmt || 0);
+    let signedStartingBal = 0;
+    if (amtD > 0) {
+      signedStartingBal = custStartingBalType === 'CREDIT' ? Math.round(amtD * 100) : -Math.round(amtD * 100);
     }
 
     try {
@@ -595,9 +587,8 @@ export const ModalManager = () => {
         name: custName.trim(),
         phone_number: custPhone || '',
         credit_limit_cents: Math.round(limitD * 100),
-        balance: signedBalCents,
-        trust_status: custStatus,
-        notes: custOpeningBalNotes || ''
+        starting_balance: signedStartingBal,
+        trust_status: custStatus
       });
       await refreshAllData();
       if (modal.payload && modal.payload.autoSelect) {
@@ -606,7 +597,7 @@ export const ModalManager = () => {
           name: custName.trim(),
           phone_number: custPhone || '',
           credit_limit_cents: Math.round(limitD * 100),
-          balance: signedBalCents,
+          balance: signedStartingBal,
           trust_status: custStatus
         });
       }
@@ -623,7 +614,6 @@ export const ModalManager = () => {
       return;
     }
     const limitD = parseFloat(custLimit || 0);
-    
     const updatePayload = {
       ...modal.payload,
       name: custName.trim(),
@@ -632,17 +622,11 @@ export const ModalManager = () => {
       trust_status: custStatus
     };
 
-    if (editCustEnableBalAdjust) {
-      const amtD = parseFloat(editCustBalAmt || 0);
-      let targetBalCents = 0;
-      if (editCustBalType === 'CREDIT' && amtD > 0) {
-        targetBalCents = Math.round(amtD * 100);
-      } else if (editCustBalType === 'DEBT' && amtD > 0) {
-        targetBalCents = -Math.round(amtD * 100);
+    if (!editCustHasLedgerEntries) {
+      const amtD = parseFloat(editCustStartingBalAmt || 0);
+      if (amtD > 0) {
+        updatePayload.starting_balance = editCustStartingBalType === 'CREDIT' ? Math.round(amtD * 100) : -Math.round(amtD * 100);
       }
-      updatePayload.balance = targetBalCents;
-      updatePayload.balance_notes = editCustBalNotes || 'Opening balance update via customer edit';
-      updatePayload.balance_reason = 'Profile Edit Opening Balance';
     }
 
     try {
@@ -2001,62 +1985,33 @@ export const ModalManager = () => {
                 <input type="number" className="form-input" placeholder="Credit Limit ($)" value={custLimit} onChange={e => setCustLimit(e.target.value)} min="0" step="1" />
               </div>
 
-              {/* Opening Balance Group */}
+              {/* Starting Balance Group */}
               <div className="card p-sm mb-sm" style={{ background: 'var(--market-surface-variant)', border: '1px solid var(--market-border-light)', borderRadius: '8px' }}>
-                <label className="form-label mb-xs font-weight-bold">💰 Opening Balance (Optional)</label>
-                <div className="flex-center gap-xs mb-xs" style={{ flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className={`btn btn-sm ${custOpeningBalType === 'ZERO' ? 'btn-primary' : 'btn-ghost'}`}
-                    onClick={() => { setCustOpeningBalType('ZERO'); setCustOpeningBalAmt(''); }}
+                <label className="form-label mb-xs font-weight-bold">Starting balance (optional)</label>
+                <div className="flex-center gap-xs mb-xs">
+                  <input
+                    type="number"
+                    className="form-input"
+                    placeholder="0.00"
+                    value={custStartingBalAmt}
+                    onChange={e => setCustStartingBalAmt(e.target.value)}
+                    step="0.01"
+                    min="0"
+                    style={{ flex: 1 }}
+                  />
+                  <select
+                    className="form-select"
+                    value={custStartingBalType}
+                    onChange={e => setCustStartingBalType(e.target.value)}
+                    style={{ width: '140px' }}
                   >
-                    ⚪ Settled ($0.00)
-                  </button>
-                  <button
-                    type="button"
-                    className={`btn btn-sm ${custOpeningBalType === 'CREDIT' ? 'btn-success' : 'btn-ghost'}`}
-                    onClick={() => setCustOpeningBalType('CREDIT')}
-                  >
-                    🟢 Prepaid Credit (+)
-                  </button>
-                  <button
-                    type="button"
-                    className={`btn btn-sm ${custOpeningBalType === 'DEBT' ? 'btn-danger' : 'btn-ghost'}`}
-                    onClick={() => setCustOpeningBalType('DEBT')}
-                  >
-                    🔴 Debt Owed (-)
-                  </button>
+                    <option value="CREDIT">has credit (+)</option>
+                    <option value="DEBIT">owes me (-)</option>
+                  </select>
                 </div>
-
-                {custOpeningBalType !== 'ZERO' && (
-                  <div className="mt-xs">
-                    <div className="form-group mb-xs">
-                      <label className="form-label" style={{ fontSize: '11px' }}>
-                        {custOpeningBalType === 'CREDIT' ? 'Prepaid Store Credit Amount ($) *' : 'Outstanding Tab Debt Amount ($) *'}
-                      </label>
-                      <input
-                        type="number"
-                        className="form-input"
-                        placeholder="0.00"
-                        value={custOpeningBalAmt}
-                        onChange={e => setCustOpeningBalAmt(e.target.value)}
-                        step="0.01"
-                        min="0.01"
-                        autoFocus
-                      />
-                    </div>
-                    <div className="form-group mb-xs">
-                      <label className="form-label" style={{ fontSize: '11px' }}>Opening Balance Note (Optional)</label>
-                      <input
-                        type="text"
-                        className="form-input"
-                        placeholder="e.g. Migration from old ledger, advance deposit"
-                        value={custOpeningBalNotes}
-                        onChange={e => setCustOpeningBalNotes(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
+                <p className="body-small text-muted mb-0" style={{ fontSize: '11px' }}>
+                  Creates a single <code>opening_balance</code> ledger entry as the verified starting baseline.
+                </p>
               </div>
 
               <div className="form-group mb-sm">
@@ -2128,80 +2083,40 @@ export const ModalManager = () => {
                   <input type="number" className="form-input" placeholder="Credit Limit ($)" value={custLimit} onChange={e => setCustLimit(e.target.value)} min="0" step="1" />
                 </div>
 
-                {/* Opening / Current Balance Edit Section */}
-                <div className="card p-sm mb-sm" style={{ background: 'var(--market-surface-variant)', border: '1px solid var(--market-border-light)', borderRadius: '8px' }}>
-                  <div className="flex-between mb-xs">
-                    <label className="form-label mb-0 font-weight-bold" style={{ margin: 0 }}>💰 Customer Balance</label>
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${editCustEnableBalAdjust ? 'btn-warning' : 'btn-secondary'}`}
-                      style={{ padding: '2px 8px', fontSize: '11px' }}
-                      onClick={() => setEditCustEnableBalAdjust(!editCustEnableBalAdjust)}
-                    >
-                      {editCustEnableBalAdjust ? 'Cancel Edit' : '✏️ Set / Correct Balance'}
-                    </button>
+                {/* Starting Balance Section (Only allowed if no prior ledger entries) */}
+                {!editCustHasLedgerEntries ? (
+                  <div className="card p-sm mb-sm" style={{ background: 'var(--market-surface-variant)', border: '1px solid var(--market-border-light)', borderRadius: '8px' }}>
+                    <label className="form-label mb-xs font-weight-bold">Starting balance (optional)</label>
+                    <div className="flex-center gap-xs mb-xs">
+                      <input
+                        type="number"
+                        className="form-input"
+                        placeholder="0.00"
+                        value={editCustStartingBalAmt}
+                        onChange={e => setEditCustStartingBalAmt(e.target.value)}
+                        step="0.01"
+                        min="0"
+                        style={{ flex: 1 }}
+                      />
+                      <select
+                        className="form-select"
+                        value={editCustStartingBalType}
+                        onChange={e => setEditCustStartingBalType(e.target.value)}
+                        style={{ width: '140px' }}
+                      >
+                        <option value="CREDIT">has credit (+)</option>
+                        <option value="DEBIT">owes me (-)</option>
+                      </select>
+                    </div>
+                    <p className="body-small text-muted mb-0" style={{ fontSize: '11px' }}>
+                      No ledger entries exist yet. Setting this creates a permanent <code>opening_balance</code> entry.
+                    </p>
                   </div>
-
-                  {!editCustEnableBalAdjust ? (
-                    <div className="body-small text-muted" style={{ fontSize: '12px' }}>
-                      Balance is managed automatically via sales, payments, and ledger. Click 'Set / Correct Balance' above to record an opening balance or direct correction.
-                    </div>
-                  ) : (
-                    <div className="mt-xs">
-                      <div className="flex-center gap-xs mb-xs" style={{ flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          className={`btn btn-sm ${editCustBalType === 'ZERO' ? 'btn-primary' : 'btn-ghost'}`}
-                          onClick={() => { setEditCustBalType('ZERO'); setEditCustBalAmt(''); }}
-                        >
-                          ⚪ Settled ($0.00)
-                        </button>
-                        <button
-                          type="button"
-                          className={`btn btn-sm ${editCustBalType === 'CREDIT' ? 'btn-success' : 'btn-ghost'}`}
-                          onClick={() => setEditCustBalType('CREDIT')}
-                        >
-                          🟢 Store Credit (+)
-                        </button>
-                        <button
-                          type="button"
-                          className={`btn btn-sm ${editCustBalType === 'DEBT' ? 'btn-danger' : 'btn-ghost'}`}
-                          onClick={() => setEditCustBalType('DEBT')}
-                        >
-                          🔴 Debt Owed (-)
-                        </button>
-                      </div>
-
-                      {editCustBalType !== 'ZERO' && (
-                        <div className="form-group mb-xs">
-                          <label className="form-label" style={{ fontSize: '11px' }}>
-                            {editCustBalType === 'CREDIT' ? 'Target Store Credit ($) *' : 'Target Debt Owed ($) *'}
-                          </label>
-                          <input
-                            type="number"
-                            className="form-input"
-                            placeholder="0.00"
-                            value={editCustBalAmt}
-                            onChange={e => setEditCustBalAmt(e.target.value)}
-                            step="0.01"
-                            min="0.01"
-                          />
-                        </div>
-                      )}
-
-                      <div className="form-group mb-xs">
-                        <label className="form-label" style={{ fontSize: '11px' }}>Correction Reason / Notes</label>
-                        <input
-                          type="text"
-                          className="form-input"
-                          placeholder="e.g. Opening balance correction, bookkeeping adjustment"
-                          value={editCustBalNotes}
-                          onChange={e => setEditCustBalNotes(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
+                ) : (
+                  <div className="card p-xs mb-sm body-small text-muted" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px', fontSize: '11px' }}>
+                    🔒 Starting balance is locked because this customer already has transaction history. Use <strong>Adjust Balance</strong> to make changes.
+                  </div>
+                )}
 
                 <div className="form-group mb-sm">
                   <label className="form-label">Trust Status</label>

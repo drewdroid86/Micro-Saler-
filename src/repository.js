@@ -1290,7 +1290,9 @@ export class PosRepository {
           is_credit: isCredit,
           is_debt: isDebt,
           direction: isCredit ? 'CREDIT' : 'DEBIT',
-          title: entry.type === 'SALE_DEBT' || entry.type === 'HOUSE_TAB_CHARGE'
+          title: (entry.type === 'opening_balance' || entry.type === 'OPENING_BALANCE')
+            ? `Opening balance`
+            : entry.type === 'SALE_DEBT' || entry.type === 'HOUSE_TAB_CHARGE'
             ? `Sale #${String(entry.sale_id || '').substring(0, 6)} Tab Charge`
             : entry.type === 'PAYMENT_RECEIVED' || entry.type === 'TAB_PAYMENT'
             ? `Payment Received`
@@ -1366,7 +1368,7 @@ export class PosRepository {
     }
 
     for (const audit of customerAudits || []) {
-      if (audit.action === 'CUSTOMER_BALANCE_ADJUSTMENT') {
+      if (audit.action === 'CUSTOMER_BALANCE_ADJUSTMENT' || audit.action === 'CUSTOMER_OPENING_BALANCE') {
         let details = {};
         try {
           details = typeof audit.details_json === 'string' ? JSON.parse(audit.details_json) : audit.details_json || {};
@@ -1378,11 +1380,13 @@ export class PosRepository {
             ? (details.new_balance_cents - details.previous_balance_cents)
             : (details.adjustment_type === 'CREDIT' ? (details.amount_cents || 0) : -(details.amount_cents || 0)));
 
+        const isOpening = audit.action === 'CUSTOMER_OPENING_BALANCE' || details.reason === 'Initial Account Balance';
+
         ledgerEvents.push({
           id: `audit_adj_${audit.audit_id}`,
           timestamp: audit.created_at || audit.timestamp || Date.now(),
-          type: 'BALANCE_ADJUSTMENT',
-          title: `Balance Adjustment: ${details.reason || details.adjustment_type || 'Manual'}`,
+          type: isOpening ? 'opening_balance' : 'BALANCE_ADJUSTMENT',
+          title: isOpening ? 'Opening balance' : `Balance Adjustment: ${details.reason || details.adjustment_type || 'Manual'}`,
           amount_cents: delta,
           direction: delta > 0 ? 'CREDIT' : 'DEBIT',
           description: details.notes
@@ -1419,16 +1423,20 @@ export class PosRepository {
     const customer = await this.db.getById('customers', cId);
     if (!customer) throw new Error(`Customer #${cId} not found`);
 
-    const storedEntries = await this.db.getAllByIndex('customer_ledger', 'customer_id', cId);
-    const calculatedSum = (storedEntries || []).reduce((sum, entry) => sum + (Number(entry.amount_cents) || 0), 0);
-    const currentBalance = Number(customer.balance) || 0;
+    const entries = await this.db.getAllByIndex('customer_ledger', 'customer_id', cId);
+    const ledgerSum = (entries || []).reduce((sum, e) => sum + (Number(e.amount_cents) || 0), 0);
+    const customerBal = customer.balance !== undefined
+      ? Number(customer.balance)
+      : (customer.current_balance_cents !== undefined ? -Number(customer.current_balance_cents) : 0);
 
     return {
       customer_id: cId,
-      current_balance: currentBalance,
-      ledger_sum: calculatedSum,
-      is_valid: currentBalance === calculatedSum,
-      discrepancy: currentBalance - calculatedSum
+      customer_name: customer.name,
+      current_balance: customerBal,
+      ledger_sum: ledgerSum,
+      is_valid: customerBal === ledgerSum,
+      discrepancy: customerBal - ledgerSum,
+      entries_count: (entries || []).length
     };
   }
 
@@ -1436,9 +1444,8 @@ export class PosRepository {
    * Derives customer balance directly from the ledger.
    */
   async deriveCustomerBalance(customerId) {
-    const cId = Number(customerId);
-    const storedEntries = await this.db.getAllByIndex('customer_ledger', 'customer_id', cId);
-    return (storedEntries || []).reduce((sum, entry) => sum + (Number(entry.amount_cents) || 0), 0);
+    const verification = await this.verifyCustomerBalance(customerId);
+    return verification.ledger_sum;
   }
 
   async updatePigmentPricing(pigmentId, retailPricePerGramCents, wholesalePricePerGramCents) {
@@ -1575,11 +1582,13 @@ export class PosRepository {
   }
 
   async createCustomer(data) {
-    const initialBal = data.balance !== undefined
-      ? Number(data.balance)
-      : (data.initial_balance_cents !== undefined
-        ? Number(data.initial_balance_cents)
-        : (data.current_balance_cents !== undefined ? -Number(data.current_balance_cents) : 0));
+    const initialBal = data.starting_balance !== undefined
+      ? Number(data.starting_balance)
+      : (data.balance !== undefined
+        ? Number(data.balance)
+        : (data.initial_balance_cents !== undefined
+          ? Number(data.initial_balance_cents)
+          : (data.current_balance_cents !== undefined ? -Number(data.current_balance_cents) : 0)));
 
     const customerId = await this.db.add('customers', {
       name: data.name,
@@ -1596,8 +1605,8 @@ export class PosRepository {
       await this.db.add('customer_ledger', {
         customer_id: Number(customerId),
         amount_cents: initialBal,
-        type: 'BALANCE_ADJUSTMENT',
-        description: initialBal > 0 ? 'Opening store credit balance' : 'Opening debt balance',
+        type: 'opening_balance',
+        description: data.starting_balance_notes || data.notes || (initialBal > 0 ? 'Opening credit balance' : 'Opening debt balance'),
         sale_id: null,
         created_at: now,
         timestamp: now
@@ -1606,7 +1615,7 @@ export class PosRepository {
       await this.db.add('audit_log', {
         entity_type: 'Customer',
         entity_id: Number(customerId),
-        action: 'CUSTOMER_BALANCE_ADJUSTMENT',
+        action: 'CUSTOMER_OPENING_BALANCE',
         details_json: JSON.stringify({
           customer_id: customerId,
           customer_name: data.name,
@@ -1614,8 +1623,8 @@ export class PosRepository {
           amount_cents: Math.abs(initialBal),
           previous_balance_cents: 0,
           new_balance_cents: initialBal,
-          reason: 'Initial Account Balance',
-          notes: data.notes || ''
+          reason: 'Opening Balance',
+          notes: data.starting_balance_notes || data.notes || ''
         }),
         created_at: now,
         timestamp: now,
@@ -1658,27 +1667,42 @@ export class PosRepository {
         : (existing.current_balance_cents !== undefined ? -Number(existing.current_balance_cents) : 0);
 
       let targetBal = prevBal;
-      if (data.balance !== undefined) {
-        targetBal = Number(data.balance) || 0;
-      } else if (data.current_balance_cents !== undefined) {
-        targetBal = -Number(data.current_balance_cents) || 0;
-      }
 
-      const delta = targetBal - prevBal;
-      const now = Date.now();
+      // Handle starting balance setting on edit (Allowed ONLY if customer has no existing ledger entries)
+      const startingBal = data.starting_balance !== undefined
+        ? Number(data.starting_balance)
+        : (data.balance !== undefined && data.is_opening_balance ? Number(data.balance) : undefined);
 
-      if (delta !== 0) {
+      if (startingBal !== undefined && startingBal !== 0) {
+        let existingEntries = [];
+        try {
+          if (ledgerStore.indexNames && ledgerStore.indexNames.contains('customer_id')) {
+            const index = ledgerStore.index('customer_id');
+            existingEntries = await new Promise((resolve, reject) => {
+              const req = index.getAll(cId);
+              req.onsuccess = () => resolve(req.result || []);
+              req.onerror = () => reject(req.error);
+            });
+          }
+        } catch (err) {
+          // fallback
+        }
+
+        if (existingEntries.length > 0) {
+          throw new Error('Cannot set opening balance: Customer already has existing ledger transactions. Use Adjust Balance instead.');
+        }
+
+        const now = Date.now();
         const ledgerRecord = {
           customer_id: cId,
-          amount_cents: delta,
-          type: 'BALANCE_ADJUSTMENT',
-          description: data.balance_notes
-            ? `Balance adjustment: ${data.balance_notes}`
-            : (data.balance_reason ? `Balance adjustment (${data.balance_reason})` : 'Balance updated via customer edit'),
+          amount_cents: startingBal,
+          type: 'opening_balance',
+          description: data.starting_balance_notes || data.notes || (startingBal > 0 ? 'Opening credit balance' : 'Opening debt balance'),
           sale_id: null,
           created_at: now,
           timestamp: now
         };
+
         await new Promise((resolve, reject) => {
           const req = ledgerStore.add(ledgerRecord);
           req.onsuccess = () => resolve(req.result);
@@ -1689,17 +1713,13 @@ export class PosRepository {
           const req = auditStore.add({
             entity_type: 'Customer',
             entity_id: cId,
-            action: 'CUSTOMER_BALANCE_ADJUSTMENT',
+            action: 'CUSTOMER_OPENING_BALANCE',
             details_json: JSON.stringify({
               customer_id: cId,
               customer_name: data.name || existing.name,
-              adjustment_type: delta > 0 ? 'CREDIT' : 'DEBIT',
-              amount_cents: Math.abs(delta),
-              delta_cents: delta,
-              previous_balance_cents: prevBal,
-              new_balance_cents: targetBal,
-              reason: data.balance_reason || 'Customer Profile Edit Balance Update',
-              notes: data.balance_notes || ''
+              amount_cents: startingBal,
+              adjustment_type: startingBal > 0 ? 'CREDIT' : 'DEBIT',
+              notes: data.starting_balance_notes || data.notes || ''
             }),
             created_at: now,
             timestamp: now
@@ -1707,6 +1727,53 @@ export class PosRepository {
           req.onsuccess = () => resolve(req.result);
           req.onerror = () => reject(req.error);
         });
+
+        targetBal = startingBal;
+      } else if (data.balance !== undefined && !data.is_opening_balance) {
+        targetBal = Number(data.balance) || 0;
+        const delta = targetBal - prevBal;
+        if (delta !== 0) {
+          const now = Date.now();
+          const ledgerRecord = {
+            customer_id: cId,
+            amount_cents: delta,
+            type: 'BALANCE_ADJUSTMENT',
+            description: data.balance_notes
+              ? `Balance adjustment: ${data.balance_notes}`
+              : (data.balance_reason ? `Balance adjustment (${data.balance_reason})` : 'Balance updated via customer edit'),
+            sale_id: null,
+            created_at: now,
+            timestamp: now
+          };
+          await new Promise((resolve, reject) => {
+            const req = ledgerStore.add(ledgerRecord);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+
+          await new Promise((resolve, reject) => {
+            const req = auditStore.add({
+              entity_type: 'Customer',
+              entity_id: cId,
+              action: 'CUSTOMER_BALANCE_ADJUSTMENT',
+              details_json: JSON.stringify({
+                customer_id: cId,
+                customer_name: data.name || existing.name,
+                adjustment_type: delta > 0 ? 'CREDIT' : 'DEBIT',
+                amount_cents: Math.abs(delta),
+                delta_cents: delta,
+                previous_balance_cents: prevBal,
+                new_balance_cents: targetBal,
+                reason: data.balance_reason || 'Customer Profile Edit Balance Update',
+                notes: data.balance_notes || ''
+              }),
+              created_at: now,
+              timestamp: now
+            });
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+        }
       }
 
       const updated = {
