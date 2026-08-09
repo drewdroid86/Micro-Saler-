@@ -1189,3 +1189,134 @@ test('Customer balance always strictly equals the sum of ledger entries', async 
   assert.equal(ledger[3].running_balance_cents, -5000); // initial running balance
 });
 
+test('createCustomer records opening balance in customers store and creates corresponding ledger entry', async () => {
+  const customerStore = [];
+  const ledgerStore = [];
+  const auditStore = [];
+
+  const mockDb = {
+    async add(store, record) {
+      if (store === 'customers') {
+        const id = customerStore.length + 1;
+        const saved = { ...record, customer_id: id };
+        customerStore.push(saved);
+        return id;
+      }
+      if (store === 'customer_ledger') {
+        const id = ledgerStore.length + 1;
+        ledgerStore.push({ ...record, entry_id: id });
+        return id;
+      }
+      if (store === 'audit_log') {
+        const id = auditStore.length + 1;
+        auditStore.push({ ...record, audit_id: id });
+        return id;
+      }
+      return 1;
+    }
+  };
+
+  const repo = new PosRepository(mockDb);
+
+  // 1. Create customer with positive opening balance ($25.00 credit)
+  const cust1Id = await repo.createCustomer({
+    name: 'Credit Customer',
+    phone_number: '555-0101',
+    balance: 2500,
+    credit_limit_cents: 5000
+  });
+
+  assert.equal(cust1Id, 1);
+  assert.equal(customerStore[0].balance, 2500);
+  assert.equal(ledgerStore.length, 1);
+  assert.equal(ledgerStore[0].customer_id, 1);
+  assert.equal(ledgerStore[0].amount_cents, 2500);
+  assert.equal(ledgerStore[0].type, 'BALANCE_ADJUSTMENT');
+
+  // 2. Create customer with negative opening balance (-$15.00 debt)
+  const cust2Id = await repo.createCustomer({
+    name: 'Debt Customer',
+    phone_number: '555-0102',
+    balance: -1500,
+    credit_limit_cents: 2500
+  });
+
+  assert.equal(cust2Id, 2);
+  assert.equal(customerStore[1].balance, -1500);
+  assert.equal(ledgerStore.length, 2);
+  assert.equal(ledgerStore[1].customer_id, 2);
+  assert.equal(ledgerStore[1].amount_cents, -1500);
+});
+
+test('updateCustomer adjusts customer balance and records signed ledger entry when balance is modified', async () => {
+  const customerStore = [
+    { customer_id: 1, name: 'Charlie', phone_number: '555-1234', balance: 0, credit_limit_cents: 2500, trust_status: 'GOOD_STANDING' }
+  ];
+  const ledgerStore = [];
+  const auditStore = [];
+
+  const mockDb = {
+    async runTransaction(storeNames, mode, callback) {
+      const tx = {
+        objectStore(name) {
+          return {
+            get(id) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              setTimeout(() => {
+                req.result = customerStore.find(c => c.customer_id === id) || null;
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            },
+            add(record) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              setTimeout(() => {
+                if (name === 'customer_ledger') {
+                  const id = ledgerStore.length + 1;
+                  ledgerStore.push({ ...record, entry_id: id });
+                  req.result = id;
+                } else if (name === 'audit_log') {
+                  const id = auditStore.length + 1;
+                  auditStore.push({ ...record, audit_id: id });
+                  req.result = id;
+                }
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            },
+            put(record) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              setTimeout(() => {
+                const idx = customerStore.findIndex(c => c.customer_id === record.customer_id);
+                if (idx >= 0) customerStore[idx] = record;
+                req.result = record.customer_id;
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            }
+          };
+        }
+      };
+      return await callback(tx);
+    }
+  };
+
+  const repo = new PosRepository(mockDb);
+
+  // Update Charlie's balance from $0 to -$20.00 debt
+  await repo.updateCustomer({
+    customer_id: 1,
+    name: 'Charlie Updated',
+    balance: -2000,
+    balance_notes: 'Initial tab migration',
+    balance_reason: 'Opening Balance Setup'
+  });
+
+  assert.equal(customerStore[0].name, 'Charlie Updated');
+  assert.equal(customerStore[0].balance, -2000);
+  assert.equal(ledgerStore.length, 1);
+  assert.equal(ledgerStore[0].customer_id, 1);
+  assert.equal(ledgerStore[0].amount_cents, -2000); // delta 0 -> -2000
+  assert.equal(ledgerStore[0].type, 'BALANCE_ADJUSTMENT');
+});
+

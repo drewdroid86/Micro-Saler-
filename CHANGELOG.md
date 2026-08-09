@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Comprehensive customer financial balance engine tracking House Tab debt (`current_balance_cents > 0`), Store Credit balances (`current_balance_cents < 0`), active prepayments/backorders, available credit line, and utilization percentage.
   - New `calculateCustomerBalance` helper function returning structured debt, store credit, prepaid credit, available credit line, utilization, and formatted currency.
   - **Customer Balance Adjustments (`adjustCustomerBalance`)**: Issue store credit, charge tab debt, or set exact target balances with structured reason categories and audit logging.
+  - **Customer Opening Balance & Direct Balance Setup**:
+    - Add opening balance configuration when creating a new customer (Settled `$0.00`, Prepaid Credit `+`, or Debt Owed `-`) with optional audit memo, automatically generating opening `customer_ledger` and `audit_log` entries.
+    - Added inline customer balance editor inside Edit Customer Profile modal with atomic multi-store ledger reconciliation.
   - **Full Financial Customer Ledger (`customerLedger`)**: Chronological audit trail aggregating sales with tab charges, tab settlements, prepayments, and manual adjustments with real-time running debt/credit calculations.
   - **Upgraded Customer Screen**: Top financial summary KPI metrics (Total Receivables / Debt, Store Credit Held, Pending Prepayments, Net Account Position), search and filter chips (`All`, `Owes Debt`, `Store Credit`, `Prepayments`, `Settled`), rich customer cards with visual balance boxes and available credit indicators.
   - **Enhanced Settle Tab & Autocomplete**: Overpayment support automatically allocating excess settlement funds to Store Credit, and dual Debt/Credit pill indicators across checkout and autocomplete.

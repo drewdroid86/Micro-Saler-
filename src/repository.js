@@ -1639,19 +1639,95 @@ export class PosRepository {
 
   async updateCustomer(data) {
     if (!data || !data.customer_id) throw new Error('Customer ID required');
-    const existing = await this.db.getById('customers', Number(data.customer_id));
-    if (!existing) throw new Error(`Customer ${data.customer_id} not found`);
+    const cId = Number(data.customer_id);
 
-    const updated = {
-      ...existing,
-      name: data.name !== undefined ? data.name : existing.name,
-      phone_number: data.phone_number !== undefined ? data.phone_number : (data.phone !== undefined ? data.phone : existing.phone_number),
-      credit_limit_cents: data.credit_limit_cents !== undefined ? Number(data.credit_limit_cents) : existing.credit_limit_cents,
-      current_balance_cents: data.current_balance_cents !== undefined ? Number(data.current_balance_cents) : existing.current_balance_cents,
-      trust_status: data.trust_status !== undefined ? data.trust_status : existing.trust_status,
-      notes: data.notes !== undefined ? data.notes : (existing.notes || '')
-    };
-    await this.db.put('customers', updated);
+    return await this.db.runTransaction(['customers', 'customer_ledger', 'audit_log'], 'readwrite', async (tx) => {
+      const custStore = tx.objectStore('customers');
+      const ledgerStore = tx.objectStore('customer_ledger');
+      const auditStore = tx.objectStore('audit_log');
+
+      const existing = await new Promise((resolve, reject) => {
+        const req = custStore.get(cId);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      if (!existing) throw new Error(`Customer ${data.customer_id} not found`);
+
+      const prevBal = existing.balance !== undefined
+        ? Number(existing.balance)
+        : (existing.current_balance_cents !== undefined ? -Number(existing.current_balance_cents) : 0);
+
+      let targetBal = prevBal;
+      if (data.balance !== undefined) {
+        targetBal = Number(data.balance) || 0;
+      } else if (data.current_balance_cents !== undefined) {
+        targetBal = -Number(data.current_balance_cents) || 0;
+      }
+
+      const delta = targetBal - prevBal;
+      const now = Date.now();
+
+      if (delta !== 0) {
+        const ledgerRecord = {
+          customer_id: cId,
+          amount_cents: delta,
+          type: 'BALANCE_ADJUSTMENT',
+          description: data.balance_notes
+            ? `Balance adjustment: ${data.balance_notes}`
+            : (data.balance_reason ? `Balance adjustment (${data.balance_reason})` : 'Balance updated via customer edit'),
+          sale_id: null,
+          created_at: now,
+          timestamp: now
+        };
+        await new Promise((resolve, reject) => {
+          const req = ledgerStore.add(ledgerRecord);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+
+        await new Promise((resolve, reject) => {
+          const req = auditStore.add({
+            entity_type: 'Customer',
+            entity_id: cId,
+            action: 'CUSTOMER_BALANCE_ADJUSTMENT',
+            details_json: JSON.stringify({
+              customer_id: cId,
+              customer_name: data.name || existing.name,
+              adjustment_type: delta > 0 ? 'CREDIT' : 'DEBIT',
+              amount_cents: Math.abs(delta),
+              delta_cents: delta,
+              previous_balance_cents: prevBal,
+              new_balance_cents: targetBal,
+              reason: data.balance_reason || 'Customer Profile Edit Balance Update',
+              notes: data.balance_notes || ''
+            }),
+            created_at: now,
+            timestamp: now
+          });
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+      }
+
+      const updated = {
+        ...existing,
+        name: data.name !== undefined ? data.name : existing.name,
+        phone_number: data.phone_number !== undefined ? data.phone_number : (data.phone !== undefined ? data.phone : existing.phone_number),
+        credit_limit_cents: data.credit_limit_cents !== undefined ? Number(data.credit_limit_cents) : existing.credit_limit_cents,
+        balance: targetBal,
+        current_balance_cents: -targetBal, // Legacy compatibility
+        trust_status: data.trust_status !== undefined ? data.trust_status : existing.trust_status,
+        notes: data.notes !== undefined ? data.notes : (existing.notes || '')
+      };
+
+      await new Promise((resolve, reject) => {
+        const req = custStore.put(updated);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+
+      return updated;
+    });
   }
 
   async createCustomerPrepayment(data) {
