@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.3.0] - 2026-07-30
 
 ### 🚀 Added
+- **Customer Name Autocomplete on Sale/Checkout Screen**: Inline reactive customer name & phone autocomplete dropdown with substring highlighting, tab balances, prepaid badges, keyboard navigation (Arrow Up/Down/Enter/Escape), quick Walk-in customer reset, and new customer quick-create.
 - **Functional Multi-Tender Split Payments**: Divide any transaction across Cash, Digital (Square, Venmo, Zelle), and House Tab with real-time balance calculations.
 - **PWA App Icon Assets**: Generated scale-icon PNG assets (`icon-192.png` and `icon-512.png`) in `webapp-react/public/` for 100% PWA home screen installation readiness.
 - **CSV Sales History Export**: Download sales history as timestamped `.csv` files for tax filing, accounting, and spreadsheet imports.

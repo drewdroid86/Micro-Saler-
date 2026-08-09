@@ -13,7 +13,11 @@ import {
   mgToOz,
   calculatePricingBreakdown,
   getMatchedTier,
-  calculateBusinessInsights
+  calculateBusinessInsights,
+  filterCustomers,
+  getAllCustomerNames,
+  filterCustomerSuggestions,
+  PosRepository
 } from '../repository.js';
 
 test('gramsToMg and ozToMg convert accurately', () => {
@@ -774,5 +778,129 @@ test('Pricing calculator WAC formula correctly converts cents/mg to dollars/gram
   const pigment = { total_cost_cents: 30000, stock_mg: 100000 };
   const wacDollarsPerGram = pigment.stock_mg > 0 ? (pigment.total_cost_cents / pigment.stock_mg) * 10 : 0;
   assert.equal(wacDollarsPerGram.toFixed(2), '3.00');
+});
+
+test('filterCustomers filters and prioritizes customer name and phone autocomplete matches', () => {
+  const sampleCustomers = [
+    { customer_id: 1, name: 'Alice Smith', phone_number: '555-1234' },
+    { customer_id: 2, name: 'Bob Jones', phone_number: '555-5678' },
+    { customer_id: 3, name: 'Charlie Brown', phone_number: '555-9012' },
+    { customer_id: 4, name: 'Alicia Keys', phone_number: '555-3456' },
+    { customer_id: 5, name: 'Dan Brown', phone_number: '555-7890' }
+  ];
+
+  // 1. Empty or whitespace query returns all customers
+  assert.equal(filterCustomers(sampleCustomers, '').length, 5);
+  assert.equal(filterCustomers(sampleCustomers, '   ').length, 5);
+  assert.equal(filterCustomers(null, 'test').length, 0);
+
+  // 2. Exact match gets top priority
+  const exactMatches = filterCustomers(sampleCustomers, 'Alice Smith');
+  assert.equal(exactMatches.length, 1);
+  assert.equal(exactMatches[0].customer_id, 1);
+
+  // 3. Prefix match
+  const aliMatches = filterCustomers(sampleCustomers, 'Ali');
+  assert.equal(aliMatches.length, 2);
+  assert.deepEqual(aliMatches.map(c => c.name), ['Alice Smith', 'Alicia Keys']);
+
+  // 4. Substring match in name
+  const brownMatches = filterCustomers(sampleCustomers, 'brown');
+  assert.equal(brownMatches.length, 2);
+  assert.deepEqual(brownMatches.map(c => c.name), ['Charlie Brown', 'Dan Brown']);
+
+  // 5. Phone number match
+  const phoneMatches = filterCustomers(sampleCustomers, '9012');
+  assert.equal(phoneMatches.length, 1);
+  assert.equal(phoneMatches[0].name, 'Charlie Brown');
+
+  // 6. Case-insensitivity and trimming
+  const caseTrimMatches = filterCustomers(sampleCustomers, '  bOB  ');
+  assert.equal(caseTrimMatches.length, 1);
+  assert.equal(caseTrimMatches[0].name, 'Bob Jones');
+
+  // 7. No match
+  const noMatches = filterCustomers(sampleCustomers, 'Zebra');
+  assert.equal(noMatches.length, 0);
+});
+
+test('getAllCustomerNames pulls distinct sorted customer names from the customers store', async () => {
+  const mockCustomerStore = [
+    { customer_id: 1, name: 'Charlie Davis', credit_limit_cents: 5000 },
+    { customer_id: 2, name: 'Alice Smith', credit_limit_cents: 2500 },
+    { customer_id: 3, name: 'Bob Jones', credit_limit_cents: 3000 },
+    { customer_id: 4, name: 'Alice Smith', credit_limit_cents: 2500 }, // duplicate name
+    { customer_id: 5, name: '  Dana Scully  ', credit_limit_cents: 1000 }, // leading/trailing spaces
+    { customer_id: 6, name: '', credit_limit_cents: 0 }, // empty name
+    { customer_id: 7, name: null, credit_limit_cents: 0 } // null name
+  ];
+
+  const mockDb = {
+    getAll: async (storeName) => {
+      if (storeName === 'customers') {
+        return mockCustomerStore;
+      }
+      return [];
+    }
+  };
+
+  // 1. Standalone helper function
+  const names = await getAllCustomerNames(mockDb);
+  assert.deepEqual(names, ['Alice Smith', 'Bob Jones', 'Charlie Davis', 'Dana Scully']);
+
+  // 2. PosRepository method
+  const repo = new PosRepository(mockDb);
+  const repoNames = await repo.getAllCustomerNames();
+  assert.deepEqual(repoNames, ['Alice Smith', 'Bob Jones', 'Charlie Davis', 'Dana Scully']);
+
+  // 3. Null / empty safety
+  const emptyNames = await getAllCustomerNames(null);
+  assert.deepEqual(emptyNames, []);
+});
+
+test('filterCustomerSuggestions (CustomerNameInput filtering) applies startsWith, >= 2 chars, and max 5 limits', () => {
+  const sampleCustomers = [
+    { customer_id: 1, name: 'Alexander Great' },
+    { customer_id: 2, name: 'Alex Smith' },
+    { customer_id: 3, name: 'Alexa Bliss' },
+    { customer_id: 4, name: 'Alexis Sanchez' },
+    { customer_id: 5, name: 'Alexandre Dumas' },
+    { customer_id: 6, name: 'Alexei Navalny' },
+    { customer_id: 7, name: 'Bob Ross' },
+    { customer_id: 8, name: 'Charlie Brown' }
+  ];
+
+  // 1. Inputs under 2 characters return empty array
+  assert.deepEqual(filterCustomerSuggestions(sampleCustomers, ''), []);
+  assert.deepEqual(filterCustomerSuggestions(sampleCustomers, 'a'), []);
+  assert.deepEqual(filterCustomerSuggestions(sampleCustomers, ' A '), []);
+  assert.deepEqual(filterCustomerSuggestions(null, 'Al'), []);
+  assert.deepEqual(filterCustomerSuggestions(sampleCustomers, null), []);
+
+  // 2. Case-insensitive startsWith matching
+  const alMatches = filterCustomerSuggestions(sampleCustomers, 'al');
+  // There are 6 matching 'Alex...', but max limit is 5
+  assert.equal(alMatches.length, 5);
+  assert.deepEqual(alMatches.map(c => c.name), [
+    'Alexander Great',
+    'Alex Smith',
+    'Alexa Bliss',
+    'Alexis Sanchez',
+    'Alexandre Dumas'
+  ]);
+
+  // 3. Trimming and case insensitivity
+  const bobMatches = filterCustomerSuggestions(sampleCustomers, '  bOB  ');
+  assert.equal(bobMatches.length, 1);
+  assert.equal(bobMatches[0].name, 'Bob Ross');
+
+  // 4. Substring in middle does NOT match startsWith
+  const rossMatches = filterCustomerSuggestions(sampleCustomers, 'Ross');
+  assert.equal(rossMatches.length, 0);
+
+  // 5. Exact prefix match with exactly 2 chars
+  const chMatches = filterCustomerSuggestions(sampleCustomers, 'Ch');
+  assert.equal(chMatches.length, 1);
+  assert.equal(chMatches[0].name, 'Charlie Brown');
 });
 

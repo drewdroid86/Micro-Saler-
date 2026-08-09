@@ -851,6 +851,473 @@ body {
   border-color: var(--market-border);
 }
 
+/* =========================================
+   14.1 Customer Autocomplete Component
+========================================= */
+.customer-autocomplete-container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  max-width: 380px;
+  flex: 1;
+}
+
+.customer-pill-selected {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  padding: 4px 8px 4px 12px;
+  border-radius: var(--radius-full);
+  background: var(--market-green-light);
+  color: var(--market-green-dark);
+  border: 1.5px solid var(--market-green-primary);
+  font-size: 13px;
+  box-shadow: var(--shadow-sm);
+  transition: all var(--transition-fast);
+  width: 100%;
+}
+
+.customer-pill-info {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  cursor: pointer;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.customer-pill-name {
+  font-weight: 700;
+  color: var(--market-green-dark);
+}
+
+.customer-pill-bal {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.customer-pill-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.customer-pill-action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--market-green-dark);
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition-fast);
+}
+
+.customer-pill-action-btn:hover {
+  background: rgba(56, 107, 31, 0.18);
+}
+
+.customer-pill-action-btn.clear {
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--market-error);
+}
+
+.customer-pill-action-btn.clear:hover {
+  background: rgba(186, 26, 26, 0.15);
+}
+
+.customer-autocomplete-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.customer-autocomplete-search-icon {
+  position: absolute;
+  left: 10px;
+  font-size: 13px;
+  pointer-events: none;
+  color: var(--market-text-secondary);
+}
+
+.customer-autocomplete-input {
+  width: 100%;
+  height: 36px;
+  padding: 6px 58px 6px 30px;
+  border: 1.5px solid var(--market-border);
+  border-radius: var(--radius-full);
+  background: var(--market-surface);
+  color: var(--market-text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.customer-autocomplete-input:focus {
+  border-color: var(--market-green-primary);
+  box-shadow: 0 0 0 3px rgba(56, 107, 31, 0.15);
+}
+
+.customer-autocomplete-clear-btn {
+  position: absolute;
+  right: 32px;
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: var(--market-text-secondary);
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+  border-radius: var(--radius-full);
+}
+
+.customer-autocomplete-clear-btn:hover {
+  color: var(--market-error);
+}
+
+.customer-autocomplete-browse-btn {
+  position: absolute;
+  right: 8px;
+  background: none;
+  border: none;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+  color: var(--market-text-secondary);
+  border-radius: var(--radius-sm);
+}
+
+.customer-autocomplete-browse-btn:hover {
+  background: var(--market-surface-variant);
+}
+
+.customer-autocomplete-cancel-btn {
+  margin-left: var(--spacing-xs);
+  background: none;
+  border: 1px solid var(--market-border);
+  border-radius: var(--radius-full);
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--market-text-secondary);
+  white-space: nowrap;
+}
+
+.customer-autocomplete-cancel-btn:hover {
+  background: var(--market-surface-variant);
+}
+
+.customer-autocomplete-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  min-width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--market-surface);
+  border: 1px solid var(--market-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 1050;
+  padding: 4px 0;
+}
+
+.customer-autocomplete-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  gap: var(--spacing-sm);
+  border-bottom: 1px solid var(--market-surface-variant);
+}
+
+.customer-autocomplete-item:last-child {
+  border-bottom: none;
+}
+
+.customer-autocomplete-item.highlighted,
+.customer-autocomplete-item:hover {
+  background: var(--market-green-light);
+}
+
+.customer-autocomplete-item.walk-in {
+  background: var(--market-surface-variant);
+}
+
+.customer-autocomplete-item.walk-in.highlighted,
+.customer-autocomplete-item.walk-in:hover {
+  background: #e5e4dc;
+}
+
+.customer-autocomplete-item.add-new {
+  background: rgba(56, 107, 31, 0.06);
+  border-top: 1px dashed var(--market-green-primary);
+}
+
+.customer-autocomplete-item.add-new.highlighted,
+.customer-autocomplete-item.add-new:hover {
+  background: var(--market-green-light);
+}
+
+.customer-autocomplete-item-main {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex: 1;
+  min-width: 0;
+}
+
+.customer-item-icon {
+  font-size: 16px;
+}
+
+.customer-item-name {
+  font-size: 13px;
+  color: var(--market-text-primary);
+}
+
+.customer-item-sub {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.customer-item-balance-col {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.customer-item-active-tag {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  background: var(--market-surface-variant);
+  border-radius: var(--radius-sm);
+  color: var(--market-text-secondary);
+}
+
+.autocomplete-highlight {
+  background: #fff59d;
+  color: inherit;
+  padding: 0 1px;
+  border-radius: 2px;
+  font-weight: 700;
+}
+
+.customer-autocomplete-empty {
+  padding: 14px;
+  text-align: center;
+  font-size: 12px;
+}
+
+/* =========================================
+   14.2 Customer Name Input Component
+========================================= */
+.customer-name-input-container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  max-width: 400px;
+  flex: 1;
+}
+
+.customer-name-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.customer-name-input-icon {
+  position: absolute;
+  left: 10px;
+  font-size: 15px;
+  pointer-events: none;
+  color: var(--market-text-secondary);
+  z-index: 2;
+}
+
+.customer-name-input-field {
+  width: 100%;
+  height: 38px;
+  padding: 6px 64px 6px 34px;
+  border: 1px solid var(--market-border);
+  border-radius: var(--radius-md);
+  background-color: var(--market-surface);
+  color: var(--market-text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.customer-name-input-field:focus {
+  border-color: var(--market-green-primary);
+  box-shadow: 0 0 0 3px rgba(56, 107, 31, 0.2);
+}
+
+.customer-name-input-field.has-customer {
+  border-color: var(--market-green-primary);
+  background-color: var(--market-green-light);
+  color: var(--market-green-dark);
+  font-weight: 600;
+}
+
+.customer-name-badge-group {
+  position: absolute;
+  right: 56px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: 2;
+}
+
+.customer-name-clear-btn {
+  position: absolute;
+  right: 30px;
+  background: none;
+  border: none;
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--market-text-secondary);
+  cursor: pointer;
+  padding: 2px 6px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  z-index: 2;
+}
+
+.customer-name-clear-btn:hover {
+  color: var(--market-error);
+}
+
+.customer-name-browse-btn {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 2px 6px;
+  line-height: 1;
+  color: var(--market-text-secondary);
+  border-radius: var(--radius-sm);
+  z-index: 2;
+}
+
+.customer-name-browse-btn:hover {
+  background: var(--market-surface-variant);
+}
+
+.customer-name-suggestions-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  min-width: 280px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--market-surface);
+  border: 1px solid var(--market-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 1050;
+  padding: 4px 0;
+}
+
+.customer-name-suggestions-header {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--market-text-secondary);
+  border-bottom: 1px solid var(--market-border-light);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--market-surface-variant);
+}
+
+.customer-name-suggestion-item {
+  padding: 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  border-bottom: 1px solid var(--market-surface-variant);
+  gap: var(--spacing-sm);
+}
+
+.customer-name-suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.customer-name-suggestion-item.highlighted,
+.customer-name-suggestion-item:hover {
+  background: var(--market-green-light);
+}
+
+.customer-name-suggestion-item.selected {
+  border-left: 3px solid var(--market-green-primary);
+  background: rgba(56, 107, 31, 0.08);
+}
+
+.customer-suggestion-main {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex: 1;
+  min-width: 0;
+}
+
+.customer-suggestion-icon {
+  font-size: 16px;
+}
+
+.customer-suggestion-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.customer-suggestion-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--market-text-primary);
+}
+
+.customer-name-match {
+  font-weight: 800;
+  color: var(--market-green-dark);
+  text-decoration: underline;
+  text-decoration-color: var(--market-green-primary);
+}
+
+.customer-suggestion-sub {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.customer-suggestion-balance {
+  white-space: nowrap;
+}
+
 .pricing-toggle {
   display: inline-flex;
   background: var(--market-surface-variant);

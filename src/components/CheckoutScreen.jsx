@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePos } from '../context/PosContext';
 import { formatCents, formatMgToGrams } from '../repository';
+import { CustomerNameInput } from './CustomerNameInput';
 
 const CartItem = ({ item, index, onRemove, openModal }) => {
   return (
@@ -34,7 +35,9 @@ export const CheckoutScreen = () => {
   const {
     pigments,
     priceTiers,
+    customers,
     selectedCustomer,
+    setSelectedCustomer,
     selectedPigment,
     setSelectedPigment,
     pricingMode,
@@ -54,11 +57,17 @@ export const CheckoutScreen = () => {
   } = usePos();
 
   const safeCustomerPrepayments = customerPrepayments || [];
-  const selectedCustomerActivePrepayments = selectedCustomer
+  const selectedCustomerActivePrepayments = selectedCustomer && selectedCustomer.customer_id
     ? safeCustomerPrepayments.filter(p => Number(p.customer_id) === Number(selectedCustomer.customer_id) && p.status !== 'FULFILLED')
     : [];
   const customerPrepaymentWeightMg = selectedCustomerActivePrepayments.reduce((sum, p) => sum + (p.weight_mg || 0), 0);
   const customerPrepaymentCreditCents = selectedCustomerActivePrepayments.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
+
+  const [customerNameInput, setCustomerNameInput] = useState(selectedCustomer?.name || '');
+
+  useEffect(() => {
+    setCustomerNameInput(selectedCustomer ? selectedCustomer.name : '');
+  }, [selectedCustomer]);
 
   const presets = [
     { label: '¼g', mg: 250 },
@@ -127,13 +136,22 @@ export const CheckoutScreen = () => {
         </div>
       )}
 
-      <div className="flex-between mb-md">
-        <div
-          className={`customer-pill ${selectedCustomer ? '' : 'walk-in'}`}
-          onClick={() => openModal('customerPicker')}
-        >
-          {selectedCustomer ? `👤 ${selectedCustomer.name}` : '👤 Walk-in Customer'}
-        </div>
+      <div className="checkout-top-bar mb-md">
+        <CustomerNameInput
+          value={customerNameInput}
+          onChange={(text, customerRecord) => {
+            setCustomerNameInput(text);
+            setSelectedCustomer(customerRecord);
+          }}
+          customers={customers}
+          customerPrepayments={customerPrepayments}
+          selectedCustomer={selectedCustomer}
+          onSelectCustomer={(cust) => {
+            setSelectedCustomer(cust);
+            setCustomerNameInput(cust ? cust.name : '');
+          }}
+          onOpenCustomerPicker={() => openModal('customerPicker')}
+        />
 
         <div className="pricing-toggle">
           <button

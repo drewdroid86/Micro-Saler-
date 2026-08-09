@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { usePos } from '../context/PosContext';
-import { formatCents, formatMgToGrams } from '../repository';
+import { formatCents, formatMgToGrams, filterCustomers } from '../repository';
 import { CustomWeightModal } from './modals/CustomWeightModal';
 import { EditCartItemModal } from './modals/EditCartItemModal';
 import { BackupRestoreModal } from './modals/BackupRestoreModal';
@@ -87,6 +87,7 @@ export const ModalManager = () => {
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
   const [custLimit, setCustLimit] = useState('');
+  const [customerPickerSearch, setCustomerPickerSearch] = useState('');
 
   const [prepaymentCustomerId, setPrepaymentCustomerId] = useState('');
   const [prepaymentPigmentId, setPrepaymentPigmentId] = useState('');
@@ -162,6 +163,7 @@ export const ModalManager = () => {
     setCustPhone('');
     setCustLimit('');
     setCustStatus('GOOD_STANDING');
+    setCustomerPickerSearch('');
 
     setSettleAmt('');
     setSettleType('CASH');
@@ -246,6 +248,11 @@ export const ModalManager = () => {
 
     if (modal.name === 'returnItem' && modal.payload?.saleItem) {
       setReturnWeight((modal.payload.saleItem.weight_mg / 1000).toFixed(1));
+    }
+
+    if (modal.name === 'addCustomer' && modal.payload) {
+      const initial = typeof modal.payload === 'string' ? modal.payload : (modal.payload.name || '');
+      setCustName(initial);
     }
 
     if (modal.name === 'editCustomer' && modal.payload) {
@@ -491,19 +498,29 @@ export const ModalManager = () => {
 
 
   const handleAddCustomer = async () => {
-    const limitD = parseFloat(custLimit || 0);
-    if (!custName) {
+    if (!custName || !custName.trim()) {
       showToast('Name is required', 'error');
       return;
     }
+    const limitD = parseFloat(custLimit || 0);
     try {
-      await repo.createCustomer({
-        name: custName,
-        phone_number: custPhone,
+      const newCustId = await repo.createCustomer({
+        name: custName.trim(),
+        phone_number: custPhone || '',
         credit_limit_cents: Math.round(limitD * 100),
         trust_status: custStatus
       });
       await refreshAllData();
+      if (modal.payload && modal.payload.autoSelect) {
+        setSelectedCustomer({
+          customer_id: newCustId,
+          name: custName.trim(),
+          phone_number: custPhone || '',
+          credit_limit_cents: Math.round(limitD * 100),
+          current_balance_cents: 0,
+          trust_status: custStatus
+        });
+      }
       handleClose();
       showToast('Customer created', 'success');
     } catch (e) {
@@ -1232,7 +1249,17 @@ export const ModalManager = () => {
               <h2>Select Customer</h2>
               <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
-            <div className="modal-body flex-col gap-sm" style={{ maxHeight: '400px' }}>
+            <div className="modal-body flex-col gap-sm" style={{ maxHeight: '450px' }}>
+              <div className="form-group mb-xs">
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="🔍 Search customer by name or phone..."
+                  value={customerPickerSearch}
+                  onChange={e => setCustomerPickerSearch(e.target.value)}
+                  autoFocus
+                />
+              </div>
               <button
                 className="btn btn-ghost btn-block text-left"
                 onClick={() => { setSelectedCustomer(null); handleClose(); }}
@@ -1240,7 +1267,7 @@ export const ModalManager = () => {
               >
                 <strong>👤 Walk-in Customer</strong>
               </button>
-              {(customers || []).map(c => {
+              {filterCustomers(customers || [], customerPickerSearch).map(c => {
                 const safePrepayments = customerPrepayments || [];
                 const activePreps = safePrepayments.filter(p => Number(p.customer_id) === Number(c.customer_id) && p.status !== 'FULFILLED');
                 return (

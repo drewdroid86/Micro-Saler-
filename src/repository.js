@@ -1127,6 +1127,18 @@ export class PosRepository {
     });
   }
 
+  async getAllCustomerNames() {
+    const customers = await this.db.getAll('customers');
+    const names = new Set();
+    for (const c of (customers || [])) {
+      if (c && c.name && typeof c.name === 'string') {
+        const trimmed = c.name.trim();
+        if (trimmed) names.add(trimmed);
+      }
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }
+
   async updateCustomer(data) {
     await this.db.put('customers', data);
   }
@@ -2203,7 +2215,78 @@ export function calculateBusinessInsights({
   };
 }
 
+/**
+ * Filter and rank customers by name or phone number for autocomplete matching.
+ * @param {Array} customers - List of customer records
+ * @param {string} query - Search query
+ * @returns {Array} Filtered and ranked customer records
+ */
+export function filterCustomers(customers = [], query = '') {
+  if (!Array.isArray(customers)) return [];
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return [...customers];
 
+  const scored = [];
+  for (const c of customers) {
+    if (!c) continue;
+    const name = (c.name || '').toLowerCase();
+    const phone = (c.phone_number || c.phone || '').toLowerCase();
 
+    if (name === q) {
+      scored.push({ customer: c, score: 0 }); // exact match
+    } else if (name.startsWith(q)) {
+      scored.push({ customer: c, score: 1 }); // prefix match
+    } else if (name.includes(q)) {
+      scored.push({ customer: c, score: 2 }); // substring match in name
+    } else if (phone.includes(q)) {
+      scored.push({ customer: c, score: 3 }); // match in phone number
+    }
+  }
 
+  scored.sort((a, b) => {
+    if (a.score !== b.score) return a.score - b.score;
+    return (a.customer.name || '').localeCompare(b.customer.name || '');
+  });
 
+  return scored.map(s => s.customer);
+}
+
+/**
+ * Retrieve distinct customer names from the existing customers store (tied to prepayments/credit).
+ * @param {Object} dbOrRepo - Database instance or PosRepository instance
+ * @returns {Promise<string[]>} Array of distinct sorted customer names
+ */
+export async function getAllCustomerNames(dbOrRepo) {
+  if (!dbOrRepo) return [];
+  if (typeof dbOrRepo.getAllCustomerNames === 'function') {
+    return await dbOrRepo.getAllCustomerNames();
+  }
+  const db = dbOrRepo.db || dbOrRepo;
+  if (typeof db.getAll === 'function') {
+    const customers = await db.getAll('customers');
+    const names = new Set();
+    for (const c of (customers || [])) {
+      if (c && c.name && typeof c.name === 'string') {
+        const trimmed = c.name.trim();
+        if (trimmed) names.add(trimmed);
+      }
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }
+  return [];
+}
+
+/**
+ * Filter cached customer list for suggestions (case-insensitive startsWith, min length 2, up to 5 items).
+ * @param {Array} customers - Cached list of customer records
+ * @param {string} input - Customer name input string
+ * @returns {Array} Array of up to 5 matching customer records
+ */
+export function filterCustomerSuggestions(customers = [], input = '') {
+  if (!Array.isArray(customers) || !input || typeof input !== 'string') return [];
+  const q = input.trim().toLowerCase();
+  if (q.length < 2) return [];
+  return customers
+    .filter(c => c && typeof c.name === 'string' && c.name.trim().toLowerCase().startsWith(q))
+    .slice(0, 5);
+}
