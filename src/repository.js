@@ -4,7 +4,104 @@
 
 export function formatCents(cents) {
   const c = (cents === null || cents === undefined || isNaN(cents)) ? 0 : Number(cents);
+  if (c < 0) {
+    return `-$${(Math.abs(c) / 100).toFixed(2)}`;
+  }
   return `$${(c / 100).toFixed(2)}`;
+}
+
+export function calculateCustomerBalance(customer, prepayments = []) {
+  if (!customer) {
+    return {
+      balance: 0,
+      balanceCents: 0,
+      currentBalanceCents: 0,
+      debtCents: 0,
+      storeCreditCents: 0,
+      prepaidCreditCents: 0,
+      prepaidWeightMg: 0,
+      totalCreditCents: 0,
+      creditLimitCents: 0,
+      availableCreditCents: 0,
+      utilizationPercent: 0,
+      balanceType: 'ZERO',
+      hasDebt: false,
+      hasCredit: false,
+      hasStoreCredit: false,
+      hasPrepayments: false,
+      prepaymentCount: 0,
+      formattedBalance: '$0.00',
+      formattedNet: '$0.00',
+      formattedDebt: '$0.00',
+      formattedStoreCredit: '$0.00',
+      formattedAvailableCredit: '$0.00'
+    };
+  }
+
+  // Primary balance field: positive = credit, negative = debt
+  let balance = 0;
+  if (customer.balance !== undefined && customer.balance !== null) {
+    balance = Number(customer.balance) || 0;
+  } else if (customer.current_balance_cents !== undefined && customer.current_balance_cents !== null) {
+    balance = -Number(customer.current_balance_cents) || 0;
+  }
+
+  const debtCents = balance < 0 ? Math.abs(balance) : 0;
+  const storeCreditCents = balance > 0 ? balance : 0;
+
+  const custPrepayments = (prepayments || []).filter(
+    p => Number(p.customer_id) === Number(customer.customer_id) && p.status !== 'FULFILLED'
+  );
+  const prepaidCreditCents = custPrepayments.reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+  const prepaidWeightMg = custPrepayments.reduce((sum, p) => sum + (Number(p.weight_mg) || 0), 0);
+  const totalCreditCents = storeCreditCents + prepaidCreditCents;
+  const creditLimitCents = Number(customer.credit_limit_cents) || 0;
+
+  // Available credit: credit limit minus debt plus any store credit
+  const availableCreditCents = Math.max(0, creditLimitCents - debtCents) + storeCreditCents;
+  const utilizationPercent = creditLimitCents > 0
+    ? Math.min(100, Math.round((debtCents / creditLimitCents) * 100))
+    : 0;
+
+  let balanceType = 'ZERO';
+  if (balance < 0) {
+    balanceType = 'DEBT';
+  } else if (balance > 0) {
+    balanceType = 'STORE_CREDIT';
+  } else if (prepaidCreditCents > 0) {
+    balanceType = 'PREPAID_ONLY';
+  }
+
+  const formattedBalance = balance > 0
+    ? `+${formatCents(balance)}`
+    : balance < 0
+    ? formatCents(balance)
+    : '$0.00';
+
+  return {
+    balance,
+    balanceCents: balance,
+    currentBalanceCents: -balance, // Legacy compatibility
+    debtCents,
+    storeCreditCents,
+    prepaidCreditCents,
+    prepaidWeightMg,
+    totalCreditCents,
+    creditLimitCents,
+    availableCreditCents,
+    utilizationPercent,
+    balanceType,
+    hasDebt: balance < 0,
+    hasCredit: totalCreditCents > 0,
+    hasStoreCredit: balance > 0,
+    hasPrepayments: custPrepayments.length > 0,
+    prepaymentCount: custPrepayments.length,
+    formattedBalance,
+    formattedNet: formatCents(balance),
+    formattedDebt: formatCents(debtCents),
+    formattedStoreCredit: formatCents(storeCreditCents),
+    formattedAvailableCredit: formatCents(availableCreditCents)
+  };
 }
 
 export function formatMgToGrams(mg) {
@@ -549,6 +646,7 @@ export class PosRepository {
       'suppliers',
       'supplier_payments',
       'customers',
+      'customer_ledger',
       'customer_prepayments',
       'sales',
       'sale_payments',
@@ -638,7 +736,7 @@ export class PosRepository {
     }
 
     // Atomic IndexedDB multi-store transaction with in-transaction inventory reads & stock validation
-    const storeNames = ['sales', 'sale_items', 'sale_payments', 'pigments', 'customers', 'audit_log'];
+    const storeNames = ['sales', 'sale_items', 'sale_payments', 'pigments', 'customers', 'customer_ledger', 'audit_log'];
     const now = Date.now();
     let createdSaleId = null;
 
@@ -750,7 +848,7 @@ export class PosRepository {
         }
       }
 
-      // 5. Write payments and update customer balance
+      // 5. Write payments and update customer ledger/balance
       for (const payment of payments) {
         salePaymentsStore.add({
           sale_id: createdSaleId,
@@ -761,8 +859,23 @@ export class PosRepository {
         });
 
         if (payment.payment_type === 'HOUSE_TAB' && customerObj) {
-          customerObj.current_balance_cents += payment.amount_cents;
-          customersStore.put(customerObj);
+          await this._applyLedgerEntryInTx(tx, {
+            customerId: Number(customerId),
+            amountCents: -payment.amount_cents, // Negative signed amount = debt
+            type: 'SALE_DEBT',
+            description: `House tab charge for Sale #${createdSaleId}`,
+            saleId: createdSaleId,
+            timestamp: now
+          });
+        } else if ((payment.payment_type === 'STORE_CREDIT' || payment.payment_type === 'PREPAID_DELIVERY') && customerObj) {
+          await this._applyLedgerEntryInTx(tx, {
+            customerId: Number(customerId),
+            amountCents: -payment.amount_cents, // Negative signed amount = credit consumed
+            type: 'SALE_CREDIT_APPLIED',
+            description: `Store credit applied to Sale #${createdSaleId}`,
+            saleId: createdSaleId,
+            timestamp: now
+          });
         }
       }
 
@@ -849,8 +962,8 @@ export class PosRepository {
 
   async voidSale(saleId, reason) {
     const sId = Number(saleId);
-    await this.db.runTransaction(
-      ['sales', 'sale_items', 'sale_payments', 'pigments', 'customers', 'returns', 'audit_log'],
+    return await this.db.runTransaction(
+      ['sales', 'sale_items', 'sale_payments', 'pigments', 'customers', 'customer_ledger', 'returns', 'audit_log'],
       'readwrite',
       async (tx) => {
         const salesStore = tx.objectStore('sales');
@@ -867,7 +980,7 @@ export class PosRepository {
           req.onerror = () => reject(req.error);
         });
         if (!sale) throw new Error(`Sale ${saleId} not found`);
-        if (sale.status === 'VOIDED') throw new Error(`Sale ${saleId} is already voided`);
+        if (sale.status === 'VOIDED') return sale;
 
         // Read all sale items
         const items = await new Promise((resolve, reject) => {
@@ -910,12 +1023,14 @@ export class PosRepository {
           }
         }
 
-        // Reverse customer tab charges
+        // Reverse customer tab charges via customer_ledger
         const payments = await new Promise((resolve, reject) => {
           const req = salePaymentsStore.index('sale_id').getAll(sId);
           req.onsuccess = () => resolve(req.result || []);
           req.onerror = () => reject(req.error);
         });
+
+        const now = Date.now();
 
         if (sale.customer_id) {
           const tabTotal = payments
@@ -923,15 +1038,14 @@ export class PosRepository {
             .reduce((sum, p) => sum + p.amount_cents, 0);
 
           if (tabTotal > 0) {
-            const customer = await new Promise((resolve, reject) => {
-              const req = customersStore.get(Number(sale.customer_id));
-              req.onsuccess = () => resolve(req.result);
-              req.onerror = () => reject(req.error);
+            await this._applyLedgerEntryInTx(tx, {
+              customerId: Number(sale.customer_id),
+              amountCents: tabTotal, // Positive reversal of debt
+              type: 'SALE_VOID_REVERSAL',
+              description: `Reversal of tab charges from voided Sale #${sId}`,
+              saleId: sId,
+              timestamp: now
             });
-            if (customer) {
-              customer.current_balance_cents -= tabTotal;
-              customersStore.put(customer);
-            }
           }
         }
 
@@ -940,7 +1054,6 @@ export class PosRepository {
         sale.void_reason = reason;
         salesStore.put(sale);
 
-        const now = Date.now();
         auditStore.add({
           entity_type: 'Sale',
           entity_id: sId,
@@ -953,35 +1066,379 @@ export class PosRepository {
     );
   }
 
-  async settleTabPayment(customerId, amountPaidCents, paymentType, digitalProvider = null) {
+  /**
+   * Internal helper to synchronously write a ledger entry and update customer.balance
+   * inside an active database transaction.
+   */
+  async _applyLedgerEntryInTx(tx, { customerId, amountCents, type, description = '', saleId = null, tabPaymentId = null, prepaymentId = null, timestamp = null }) {
+    const ledgerStore = tx.objectStore('customer_ledger');
+    const custStore = tx.objectStore('customers');
     const cId = Number(customerId);
-    return await this.db.runTransaction(['tab_payments', 'customers'], 'readwrite', async (tx) => {
-      const tabStore = tx.objectStore('tab_payments');
+    const now = timestamp || Date.now();
+    const signedAmount = Math.round(Number(amountCents) || 0);
+
+    const ledgerRecord = {
+      customer_id: cId,
+      amount_cents: signedAmount,
+      type,
+      description: description || '',
+      sale_id: saleId ? Number(saleId) : null,
+      tab_payment_id: tabPaymentId ? Number(tabPaymentId) : null,
+      prepayment_id: prepaymentId ? Number(prepaymentId) : null,
+      created_at: now,
+      timestamp: now,
+    };
+
+    await new Promise((resolve, reject) => {
+      const req = ledgerStore.add(ledgerRecord);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+
+    return await new Promise((resolve, reject) => {
+      const req = custStore.get(cId);
+      req.onsuccess = () => {
+        const customer = req.result;
+        if (customer) {
+          customer.balance = (Number(customer.balance) || 0) + signedAmount;
+          customer.current_balance_cents = -customer.balance; // Legacy compatibility
+          custStore.put(customer);
+        }
+        resolve(customer);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  /**
+   * Records a payment received from a customer independent of a sale.
+   * Positive ledger entry: reduces debt or increases store credit.
+   */
+  async recordCustomerPayment(customerId, amountPaidCents, paymentType = 'CASH', digitalProvider = null, notes = '') {
+    const cId = Number(customerId);
+    const paidCents = Math.round(Number(amountPaidCents) || 0);
+    if (paidCents <= 0) throw new Error('Payment amount must be positive');
+    const now = Date.now();
+
+    return await this.db.runTransaction(['customers', 'customer_ledger', 'tab_payments', 'audit_log'], 'readwrite', async (tx) => {
       const custStore = tx.objectStore('customers');
+      const tabStore = tx.objectStore('tab_payments');
+      const auditStore = tx.objectStore('audit_log');
 
       const customer = await new Promise((resolve, reject) => {
         const req = custStore.get(cId);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
-      if (!customer) throw new Error(`Customer ${customerId} not found`);
+      if (!customer) throw new Error(`Customer #${cId} not found`);
 
-      const id = await new Promise((resolve, reject) => {
+      const prevBal = Number(customer.balance) || 0;
+      const newBal = prevBal + paidCents;
+
+      const tabPaymentId = await new Promise((resolve, reject) => {
         const req = tabStore.add({
           customer_id: cId,
-          amount_paid_cents: amountPaidCents,
+          amount_paid_cents: paidCents,
           payment_type: paymentType,
           digital_provider: digitalProvider,
-          created_at: Date.now(),
+          notes: notes || '',
+          created_at: now,
         });
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
 
-      customer.current_balance_cents -= amountPaidCents;
-      custStore.put(customer);
-      return id;
+      await this._applyLedgerEntryInTx(tx, {
+        customerId: cId,
+        amountCents: paidCents, // Positive amount reduces debt or adds credit
+        type: 'PAYMENT_RECEIVED',
+        description: notes ? `Payment (${paymentType}): ${notes}` : `Payment received via ${paymentType}${digitalProvider ? ` (${digitalProvider})` : ''}`,
+        tabPaymentId,
+        timestamp: now
+      });
+
+      await new Promise((resolve, reject) => {
+        const req = auditStore.add({
+          entity_type: 'Customer',
+          entity_id: cId,
+          action: 'RECORD_CUSTOMER_PAYMENT',
+          details_json: JSON.stringify({
+            tab_payment_id: tabPaymentId,
+            customer_id: cId,
+            amount_paid_cents: paidCents,
+            payment_type: paymentType,
+            digital_provider: digitalProvider,
+            previous_balance_cents: prevBal,
+            new_balance_cents: newBal,
+            notes: notes || ''
+          }),
+          created_at: now,
+          timestamp: now,
+        });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+
+      return tabPaymentId;
     });
+  }
+
+  // Alias for backward compatibility
+  async settleTabPayment(customerId, amountPaidCents, paymentType = 'CASH', digitalProvider = null, notes = '') {
+    return this.recordCustomerPayment(customerId, amountPaidCents, paymentType, digitalProvider, notes);
+  }
+
+  /**
+   * Adjusts customer balance manually with a signed ledger entry.
+   */
+  async adjustCustomerBalance(customerId, { amountCents, type = 'CREDIT', reason = '', notes = '' }) {
+    const cId = Number(customerId);
+    if (!amountCents && type !== 'SET_BALANCE') {
+      throw new Error('Adjustment amount is required');
+    }
+    const safeAmountCents = Math.round(Number(amountCents) || 0);
+    const now = Date.now();
+
+    return await this.db.runTransaction(['customers', 'customer_ledger', 'audit_log'], 'readwrite', async (tx) => {
+      const custStore = tx.objectStore('customers');
+      const auditStore = tx.objectStore('audit_log');
+
+      const customer = await new Promise((resolve, reject) => {
+        const req = custStore.get(cId);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      if (!customer) throw new Error(`Customer #${cId} not found`);
+
+      const prevBal = Number(customer.balance) || 0;
+      let deltaCents = 0;
+
+      if (type === 'CREDIT' || type === 'ADD_CREDIT') {
+        deltaCents = Math.abs(safeAmountCents); // Positive credit
+      } else if (type === 'DEBIT' || type === 'ADD_DEBT') {
+        deltaCents = -Math.abs(safeAmountCents); // Negative debt
+      } else if (type === 'SET_BALANCE') {
+        deltaCents = safeAmountCents - prevBal;
+      } else {
+        throw new Error(`Invalid adjustment type: ${type}`);
+      }
+
+      await this._applyLedgerEntryInTx(tx, {
+        customerId: cId,
+        amountCents: deltaCents,
+        type: 'BALANCE_ADJUSTMENT',
+        description: reason ? `${reason}${notes ? ` - ${notes}` : ''}` : (notes || 'Manual balance adjustment'),
+        timestamp: now
+      });
+
+      const newBal = prevBal + deltaCents;
+
+      const auditId = await new Promise((resolve, reject) => {
+        const req = auditStore.add({
+          entity_type: 'Customer',
+          entity_id: cId,
+          action: 'CUSTOMER_BALANCE_ADJUSTMENT',
+          details_json: JSON.stringify({
+            customer_id: cId,
+            customer_name: customer.name,
+            adjustment_type: type,
+            amount_cents: safeAmountCents,
+            delta_cents: deltaCents,
+            previous_balance_cents: prevBal,
+            new_balance_cents: newBal,
+            reason: reason || 'Manual Balance Adjustment',
+            notes: notes || ''
+          }),
+          created_at: now,
+          timestamp: now,
+        });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+
+      return {
+        customer_id: cId,
+        previous_balance_cents: prevBal,
+        new_balance_cents: newBal,
+        audit_id: auditId
+      };
+    });
+  }
+
+  /**
+   * Retrieves full chronological transaction ledger for a customer with verified running balance.
+   */
+  async getCustomerLedger(customerId) {
+    const cId = Number(customerId);
+    const customer = await this.db.getById('customers', cId);
+    if (!customer) throw new Error(`Customer #${cId} not found`);
+
+    const storedEntries = await this.db.getAllByIndex('customer_ledger', 'customer_id', cId);
+
+    if (storedEntries && storedEntries.length > 0) {
+      const sorted = [...storedEntries].sort((a, b) => (a.created_at || a.timestamp || 0) - (b.created_at || b.timestamp || 0));
+      let runningBalance = 0;
+      const withRunning = sorted.map(entry => {
+        runningBalance += entry.amount_cents;
+        const isCredit = entry.amount_cents > 0;
+        const isDebt = entry.amount_cents < 0;
+        return {
+          ...entry,
+          id: entry.entry_id,
+          timestamp: entry.created_at || entry.timestamp || Date.now(),
+          running_balance_cents: runningBalance,
+          is_credit: isCredit,
+          is_debt: isDebt,
+          direction: isCredit ? 'CREDIT' : 'DEBIT',
+          title: entry.type === 'SALE_DEBT' || entry.type === 'HOUSE_TAB_CHARGE'
+            ? `Sale #${String(entry.sale_id || '').substring(0, 6)} Tab Charge`
+            : entry.type === 'PAYMENT_RECEIVED' || entry.type === 'TAB_PAYMENT'
+            ? `Payment Received`
+            : entry.type === 'PREPAYMENT_CREDIT' || entry.type === 'PREPAYMENT_DEPOSIT'
+            ? `Prepayment Deposit`
+            : entry.type === 'SALE_VOID_REVERSAL'
+            ? `Void Sale Reversal`
+            : `Balance Adjustment`,
+          formatted_amount: isCredit ? `+${formatCents(entry.amount_cents)}` : formatCents(entry.amount_cents)
+        };
+      });
+      return withRunning.reverse();
+    }
+
+    // Fallback: derive from sales and tab payments if customer_ledger is empty (e.g. pre-migration)
+    const allSales = await this.db.getAllByIndex('sales', 'customer_id', cId);
+    const allTabPayments = await this.db.getAllByIndex('tab_payments', 'customer_id', cId);
+    const allPrepayments = await this.db.getAllByIndex('customer_prepayments', 'customer_id', cId);
+    const allAudit = await this.db.getAll('audit_log');
+
+    const customerAudits = (allAudit || []).filter(
+      a => a.entity_type === 'Customer' && Number(a.entity_id) === cId
+    );
+
+    const ledgerEvents = [];
+
+    for (const sale of allSales || []) {
+      if (sale.status === 'COMPLETED' || !sale.status || sale.status === 'PAID') {
+        const payments = await this.db.getAllByIndex('sale_payments', 'sale_id', sale.sale_id);
+        const tabPayments = (payments || []).filter(p => p.payment_type === 'HOUSE_TAB');
+        const tabTotal = tabPayments.reduce((sum, p) => sum + p.amount_cents, 0);
+
+        if (tabTotal > 0) {
+          ledgerEvents.push({
+            id: `sale_tab_${sale.sale_id}`,
+            timestamp: sale.created_at || Date.now(),
+            type: 'SALE_DEBT',
+            title: `Sale #${String(sale.sale_id).substring(0, 6)} Tab Charge`,
+            amount_cents: -tabTotal,
+            direction: 'DEBIT',
+            description: `Charged to House Tab (${formatCents(tabTotal)})`,
+            sale_id: sale.sale_id,
+            reference_id: sale.sale_id
+          });
+        }
+      }
+    }
+
+    for (const tp of allTabPayments || []) {
+      ledgerEvents.push({
+        id: `tab_pay_${tp.payment_id}`,
+        timestamp: tp.created_at || Date.now(),
+        type: 'PAYMENT_RECEIVED',
+        title: `Payment Received (${tp.payment_type || 'CASH'})`,
+        amount_cents: tp.amount_paid_cents,
+        direction: 'CREDIT',
+        description: tp.notes ? tp.notes : `Payment received (${tp.payment_type})`,
+        reference_id: tp.payment_id
+      });
+    }
+
+    for (const prep of allPrepayments || []) {
+      ledgerEvents.push({
+        id: `prep_${prep.prepayment_id}`,
+        timestamp: prep.created_at || Date.now(),
+        type: 'PREPAYMENT_CREDIT',
+        title: `Prepayment: ${prep.pigment_name || 'Store Credit'}`,
+        amount_cents: prep.amount_cents || 0,
+        direction: 'CREDIT',
+        description: `Status: ${prep.status} ${prep.notes ? `• ${prep.notes}` : ''}`,
+        reference_id: prep.prepayment_id
+      });
+    }
+
+    for (const audit of customerAudits || []) {
+      if (audit.action === 'CUSTOMER_BALANCE_ADJUSTMENT') {
+        let details = {};
+        try {
+          details = typeof audit.details_json === 'string' ? JSON.parse(audit.details_json) : audit.details_json || {};
+        } catch (e) {}
+
+        const delta = (details.delta_cents !== undefined)
+          ? details.delta_cents
+          : ((details.new_balance_cents !== undefined && details.previous_balance_cents !== undefined)
+            ? (details.new_balance_cents - details.previous_balance_cents)
+            : (details.adjustment_type === 'CREDIT' ? (details.amount_cents || 0) : -(details.amount_cents || 0)));
+
+        ledgerEvents.push({
+          id: `audit_adj_${audit.audit_id}`,
+          timestamp: audit.created_at || audit.timestamp || Date.now(),
+          type: 'BALANCE_ADJUSTMENT',
+          title: `Balance Adjustment: ${details.reason || details.adjustment_type || 'Manual'}`,
+          amount_cents: delta,
+          direction: delta > 0 ? 'CREDIT' : 'DEBIT',
+          description: details.notes
+            ? `${details.notes} (${formatCents(details.previous_balance_cents)} ➔ ${formatCents(details.new_balance_cents)})`
+            : `Balance: ${formatCents(details.previous_balance_cents)} ➔ ${formatCents(details.new_balance_cents)}`,
+          reference_id: audit.audit_id
+        });
+      }
+    }
+
+    ledgerEvents.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+    let runningBal = 0;
+    const withRunning = ledgerEvents.map(event => {
+      runningBal += event.amount_cents;
+      const isCredit = event.amount_cents > 0;
+      return {
+        ...event,
+        running_balance_cents: runningBal,
+        is_credit: isCredit,
+        is_debt: event.amount_cents < 0,
+        formatted_amount: isCredit ? `+${formatCents(event.amount_cents)}` : formatCents(event.amount_cents)
+      };
+    });
+
+    return withRunning.reverse();
+  }
+
+  /**
+   * Verifies that customer.balance strictly matches the sum of customer_ledger entries.
+   */
+  async verifyCustomerBalance(customerId) {
+    const cId = Number(customerId);
+    const customer = await this.db.getById('customers', cId);
+    if (!customer) throw new Error(`Customer #${cId} not found`);
+
+    const storedEntries = await this.db.getAllByIndex('customer_ledger', 'customer_id', cId);
+    const calculatedSum = (storedEntries || []).reduce((sum, entry) => sum + (Number(entry.amount_cents) || 0), 0);
+    const currentBalance = Number(customer.balance) || 0;
+
+    return {
+      customer_id: cId,
+      current_balance: currentBalance,
+      ledger_sum: calculatedSum,
+      is_valid: currentBalance === calculatedSum,
+      discrepancy: currentBalance - calculatedSum
+    };
+  }
+
+  /**
+   * Derives customer balance directly from the ledger.
+   */
+  async deriveCustomerBalance(customerId) {
+    const cId = Number(customerId);
+    const storedEntries = await this.db.getAllByIndex('customer_ledger', 'customer_id', cId);
+    return (storedEntries || []).reduce((sum, entry) => sum + (Number(entry.amount_cents) || 0), 0);
   }
 
   async updatePigmentPricing(pigmentId, retailPricePerGramCents, wholesalePricePerGramCents) {
@@ -1118,13 +1575,54 @@ export class PosRepository {
   }
 
   async createCustomer(data) {
-    return await this.db.add('customers', {
+    const initialBal = data.balance !== undefined
+      ? Number(data.balance)
+      : (data.initial_balance_cents !== undefined
+        ? Number(data.initial_balance_cents)
+        : (data.current_balance_cents !== undefined ? -Number(data.current_balance_cents) : 0));
+
+    const customerId = await this.db.add('customers', {
       name: data.name,
       phone_number: data.phone_number || data.phone || '',
-      credit_limit_cents: data.credit_limit_cents || 2500,
-      current_balance_cents: 0,
+      balance: initialBal,
+      current_balance_cents: -initialBal, // Legacy compatibility
+      credit_limit_cents: data.credit_limit_cents !== undefined ? Number(data.credit_limit_cents) : 2500,
       trust_status: data.trust_status || 'GOOD_STANDING',
+      notes: data.notes || '',
     });
+
+    if (initialBal !== 0) {
+      const now = Date.now();
+      await this.db.add('customer_ledger', {
+        customer_id: Number(customerId),
+        amount_cents: initialBal,
+        type: 'BALANCE_ADJUSTMENT',
+        description: initialBal > 0 ? 'Opening store credit balance' : 'Opening debt balance',
+        sale_id: null,
+        created_at: now,
+        timestamp: now
+      });
+
+      await this.db.add('audit_log', {
+        entity_type: 'Customer',
+        entity_id: Number(customerId),
+        action: 'CUSTOMER_BALANCE_ADJUSTMENT',
+        details_json: JSON.stringify({
+          customer_id: customerId,
+          customer_name: data.name,
+          adjustment_type: initialBal > 0 ? 'CREDIT' : 'DEBIT',
+          amount_cents: Math.abs(initialBal),
+          previous_balance_cents: 0,
+          new_balance_cents: initialBal,
+          reason: 'Initial Account Balance',
+          notes: data.notes || ''
+        }),
+        created_at: now,
+        timestamp: now,
+      });
+    }
+
+    return customerId;
   }
 
   async getAllCustomerNames() {
@@ -1140,7 +1638,20 @@ export class PosRepository {
   }
 
   async updateCustomer(data) {
-    await this.db.put('customers', data);
+    if (!data || !data.customer_id) throw new Error('Customer ID required');
+    const existing = await this.db.getById('customers', Number(data.customer_id));
+    if (!existing) throw new Error(`Customer ${data.customer_id} not found`);
+
+    const updated = {
+      ...existing,
+      name: data.name !== undefined ? data.name : existing.name,
+      phone_number: data.phone_number !== undefined ? data.phone_number : (data.phone !== undefined ? data.phone : existing.phone_number),
+      credit_limit_cents: data.credit_limit_cents !== undefined ? Number(data.credit_limit_cents) : existing.credit_limit_cents,
+      current_balance_cents: data.current_balance_cents !== undefined ? Number(data.current_balance_cents) : existing.current_balance_cents,
+      trust_status: data.trust_status !== undefined ? data.trust_status : existing.trust_status,
+      notes: data.notes !== undefined ? data.notes : (existing.notes || '')
+    };
+    await this.db.put('customers', updated);
   }
 
   async createCustomerPrepayment(data) {

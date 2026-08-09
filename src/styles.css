@@ -376,10 +376,20 @@ body {
   color: var(--market-text-primary);
 }
 
+.btn-xs {
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+}
+
 .btn-sm {
   padding: 6px 12px;
   font-size: 12px;
   border-radius: var(--radius-sm);
+}
+
+.flex-1 {
+  flex: 1;
 }
 
 .btn-lg {
@@ -607,6 +617,12 @@ body {
 }
 
 .grid-3col {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--spacing-md);
+}
+
+.grid-4col {
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--spacing-md);
@@ -1935,6 +1951,10 @@ body {
   .grid-2col {
     grid-template-columns: repeat(2, 1fr);
   }
+
+  .grid-4col {
+    grid-template-columns: repeat(2, 1fr);
+  }
   
   .modal {
     max-width: 600px;
@@ -1961,6 +1981,10 @@ body {
 
   .grid-3col {
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  .grid-4col {
+    grid-template-columns: repeat(4, 1fr);
   }
 
   .main-content {

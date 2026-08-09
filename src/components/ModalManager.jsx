@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { usePos } from '../context/PosContext';
-import { formatCents, formatMgToGrams, filterCustomers } from '../repository';
+import { formatCents, formatMgToGrams, filterCustomers, calculateCustomerBalance } from '../repository';
 import { CustomWeightModal } from './modals/CustomWeightModal';
 import { EditCartItemModal } from './modals/EditCartItemModal';
 import { BackupRestoreModal } from './modals/BackupRestoreModal';
@@ -87,7 +87,17 @@ export const ModalManager = () => {
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
   const [custLimit, setCustLimit] = useState('');
+  const [initialCustBalance, setInitialCustBalance] = useState('');
   const [customerPickerSearch, setCustomerPickerSearch] = useState('');
+
+  const [adjAmount, setAdjAmount] = useState('');
+  const [adjType, setAdjType] = useState('CREDIT');
+  const [adjReason, setAdjReason] = useState('Store Credit / Refund');
+  const [adjNotes, setAdjNotes] = useState('');
+
+  const [customerLedgerEntries, setCustomerLedgerEntries] = useState([]);
+  const [customerLedgerLoading, setCustomerLedgerLoading] = useState(false);
+  const [customerLedgerFilter, setCustomerLedgerFilter] = useState('ALL');
 
   const [prepaymentCustomerId, setPrepaymentCustomerId] = useState('');
   const [prepaymentPigmentId, setPrepaymentPigmentId] = useState('');
@@ -100,6 +110,7 @@ export const ModalManager = () => {
   const [settleAmt, setSettleAmt] = useState('');
   const [settleType, setSettleType] = useState('CASH');
   const [settleProvider, setSettleProvider] = useState('Square');
+  const [settleNotes, setSettleNotes] = useState('');
 
   const [voidReason, setVoidReason] = useState('');
 
@@ -162,12 +173,23 @@ export const ModalManager = () => {
     setCustName('');
     setCustPhone('');
     setCustLimit('');
+    setInitialCustBalance('');
     setCustStatus('GOOD_STANDING');
     setCustomerPickerSearch('');
+
+    setAdjAmount('');
+    setAdjType('CREDIT');
+    setAdjReason('Store Credit / Refund');
+    setAdjNotes('');
+
+    setCustomerLedgerEntries([]);
+    setCustomerLedgerLoading(false);
+    setCustomerLedgerFilter('ALL');
 
     setSettleAmt('');
     setSettleType('CASH');
     setSettleProvider('Square');
+    setSettleNotes('');
 
     setVoidReason('');
 
@@ -241,9 +263,35 @@ export const ModalManager = () => {
     }
 
     if (modal.name === 'settleTab' && modal.payload) {
-      setSettleAmt(modal.payload.current_balance_cents ? (modal.payload.current_balance_cents / 100).toFixed(2) : '');
+      const debt = Number(modal.payload.current_balance_cents) || 0;
+      setSettleAmt(debt > 0 ? (debt / 100).toFixed(2) : '');
       setSettleType('CASH');
       setSettleProvider('Square');
+      setSettleNotes('');
+    }
+
+    if (modal.name === 'adjustCustomerBalance' && modal.payload) {
+      setAdjAmount('');
+      setAdjType('CREDIT');
+      setAdjReason('Store Credit / Refund');
+      setAdjNotes('');
+    }
+
+    if (modal.name === 'customerLedger' && modal.payload) {
+      setCustomerLedgerLoading(true);
+      setCustomerLedgerFilter('ALL');
+      if (repo && modal.payload.customer_id) {
+        repo.getCustomerLedger(modal.payload.customer_id)
+          .then(entries => {
+            setCustomerLedgerEntries(entries || []);
+            setCustomerLedgerLoading(false);
+          })
+          .catch(err => {
+            console.error('Failed to load customer ledger:', err);
+            setCustomerLedgerEntries([]);
+            setCustomerLedgerLoading(false);
+          });
+      }
     }
 
     if (modal.name === 'returnItem' && modal.payload?.saleItem) {
@@ -253,6 +301,7 @@ export const ModalManager = () => {
     if (modal.name === 'addCustomer' && modal.payload) {
       const initial = typeof modal.payload === 'string' ? modal.payload : (modal.payload.name || '');
       setCustName(initial);
+      setInitialCustBalance('');
     }
 
     if (modal.name === 'editCustomer' && modal.payload) {
@@ -261,7 +310,7 @@ export const ModalManager = () => {
       setCustLimit(modal.payload.credit_limit_cents !== undefined && modal.payload.credit_limit_cents !== null ? (modal.payload.credit_limit_cents / 100).toString() : '25');
       setCustStatus(modal.payload.trust_status || 'GOOD_STANDING');
     }
-  }, [modal.name, modal.payload, resetAllFormStates]);
+  }, [modal.name, modal.payload, resetAllFormStates, repo]);
 
   if (!modal.name) return null;
 
@@ -503,11 +552,15 @@ export const ModalManager = () => {
       return;
     }
     const limitD = parseFloat(custLimit || 0);
+    const initialBalD = parseFloat(initialCustBalance || 0);
+    const initialBalCents = isNaN(initialBalD) ? 0 : Math.round(initialBalD * 100);
+
     try {
       const newCustId = await repo.createCustomer({
         name: custName.trim(),
         phone_number: custPhone || '',
         credit_limit_cents: Math.round(limitD * 100),
+        current_balance_cents: initialBalCents,
         trust_status: custStatus
       });
       await refreshAllData();
@@ -517,12 +570,12 @@ export const ModalManager = () => {
           name: custName.trim(),
           phone_number: custPhone || '',
           credit_limit_cents: Math.round(limitD * 100),
-          current_balance_cents: 0,
+          current_balance_cents: initialBalCents,
           trust_status: custStatus
         });
       }
       handleClose();
-      showToast('Customer created', 'success');
+      showToast('Customer created successfully', 'success');
     } catch (e) {
       showToast(e.message, 'error');
     }
@@ -550,14 +603,46 @@ export const ModalManager = () => {
     }
   };
 
+  const handleAdjustCustomerBalance = async () => {
+    const amtD = parseFloat(adjAmount);
+    if (adjType !== 'SET_BALANCE' && (!amtD || amtD <= 0)) {
+      showToast('Please enter a valid dollar amount', 'error');
+      return;
+    }
+    if (adjType === 'SET_BALANCE' && isNaN(amtD)) {
+      showToast('Please enter a valid target balance', 'error');
+      return;
+    }
+    const amtCents = Math.round((amtD || 0) * 100);
+    try {
+      await repo.adjustCustomerBalance(modal.payload.customer_id, {
+        amountCents: amtCents,
+        type: adjType,
+        reason: adjReason,
+        notes: adjNotes
+      });
+      await refreshAllData();
+      handleClose();
+      showToast('Customer balance updated successfully!', 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
   const handleSettleTab = async () => {
     const amtD = parseFloat(settleAmt);
     if (!amtD || amtD <= 0) {
-      showToast('Invalid amount', 'error');
+      showToast('Invalid payment amount', 'error');
       return;
     }
     try {
-      await repo.settleTabPayment(modal.payload.customer_id, Math.round(amtD * 100), settleType, settleType === 'DIGITAL' ? settleProvider : null);
+      await repo.settleTabPayment(
+        modal.payload.customer_id,
+        Math.round(amtD * 100),
+        settleType,
+        settleType === 'DIGITAL' ? settleProvider : null,
+        settleNotes
+      );
       await refreshAllData();
       handleClose();
       showToast('Payment applied successfully', 'success');
@@ -1223,6 +1308,24 @@ export const ModalManager = () => {
                   </div>
                 </div>
 
+                {diffC > 0 && selectedCustomer && (
+                  <div className="card p-xs mb-sm body-small text-warning" style={{ background: 'rgba(245, 124, 0, 0.1)', border: '1px solid rgba(245, 124, 0, 0.3)', borderRadius: '6px' }}>
+                    <span>⚠️ Shortfall of <strong>{formatCents(diffC)}</strong> remaining. Record shortfall as debt on <strong>{selectedCustomer.name}</strong>'s account?</span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm mt-xs"
+                      style={{ width: '100%' }}
+                      onClick={() => {
+                        const curTab = parseFloat(splitTabInput) || 0;
+                        const newTab = curTab + (diffC / 100);
+                        setSplitTabInput(newTab.toFixed(2));
+                      }}
+                    >
+                      📝 Record {formatCents(diffC)} Shortfall as Tab Debt
+                    </button>
+                  </div>
+                )}
+
                 <button
                   className="btn btn-primary btn-block"
                   onClick={handleSplitPayment}
@@ -1269,7 +1372,7 @@ export const ModalManager = () => {
               </button>
               {filterCustomers(customers || [], customerPickerSearch).map(c => {
                 const safePrepayments = customerPrepayments || [];
-                const activePreps = safePrepayments.filter(p => Number(p.customer_id) === Number(c.customer_id) && p.status !== 'FULFILLED');
+                const balInfo = calculateCustomerBalance(c, safePrepayments);
                 return (
                   <button
                     key={c.customer_id}
@@ -1279,15 +1382,28 @@ export const ModalManager = () => {
                     <div className="text-left">
                       <div className="flex-center gap-xs">
                         <strong>{c.name}</strong>
-                        {activePreps.length > 0 && (
+                        {balInfo.hasPrepayments && (
                           <span className="badge badge-good-standing" style={{ fontSize: '10px', padding: '2px 6px' }}>
-                            📦 {activePreps.length} Prepaid
+                            📦 {balInfo.prepaymentCount} Prepaid
                           </span>
                         )}
                       </div>
-                      <small className="text-muted">{c.phone_number || c.phone || ''}</small>
+                      <small className="text-muted">{c.phone_number || c.phone || 'No phone'}</small>
                     </div>
-                    <span className="body-medium text-muted">Bal: {formatCents(c.current_balance_cents)}</span>
+                    <div className="text-right">
+                      <div className={`body-medium font-weight-bold ${balInfo.hasDebt ? 'text-error' : balInfo.hasStoreCredit ? 'text-success' : 'text-muted'}`}>
+                        {balInfo.hasDebt
+                          ? `Bal: ${formatCents(balInfo.debtCents)}`
+                          : balInfo.hasStoreCredit
+                          ? `Credit: ${formatCents(balInfo.storeCreditCents)}`
+                          : 'Bal: $0.00'}
+                      </div>
+                      {balInfo.creditLimitCents > 0 && (
+                        <small className="text-muted" style={{ fontSize: '10px' }}>
+                          Limit: {formatCents(balInfo.creditLimitCents)}
+                        </small>
+                      )}
+                    </div>
                   </button>
                 );
               })}
@@ -1820,16 +1936,25 @@ export const ModalManager = () => {
               <button className="modal-close" onClick={handleClose}>&times;</button>
             </div>
             <div className="modal-body">
-              <div className="form-group">
+              <div className="form-group mb-sm">
+                <label className="form-label">Full Name *</label>
                 <input type="text" className="form-input" placeholder="Full Name" value={custName} onChange={e => setCustName(e.target.value)} />
               </div>
-              <div className="form-group">
+              <div className="form-group mb-sm">
+                <label className="form-label">Phone Number</label>
                 <input type="text" className="form-input" placeholder="Phone Number" value={custPhone} onChange={e => setCustPhone(e.target.value)} />
               </div>
-              <div className="form-group">
+              <div className="form-group mb-sm">
+                <label className="form-label">Credit Limit ($)</label>
                 <input type="number" className="form-input" placeholder="Credit Limit ($)" value={custLimit} onChange={e => setCustLimit(e.target.value)} min="0" step="1" />
               </div>
-              <div className="form-group">
+              <div className="form-group mb-sm">
+                <label className="form-label">Initial Balance (Optional, $)</label>
+                <input type="number" className="form-input" placeholder="0.00 (positive = debt, negative = credit)" value={initialCustBalance} onChange={e => setInitialCustBalance(e.target.value)} step="0.01" />
+                <small className="text-muted" style={{ fontSize: '11px' }}>Enter positive for opening tab debt (e.g. 15.00), or negative for opening store credit (e.g. -20.00).</small>
+              </div>
+              <div className="form-group mb-sm">
+                <label className="form-label">Trust Status</label>
                 <select className="form-select" value={custStatus} onChange={e => setCustStatus(e.target.value)}>
                   <option value="GOOD_STANDING">Good Standing</option>
                   <option value="VIP">VIP</option>
@@ -1845,78 +1970,463 @@ export const ModalManager = () => {
         )}
 
         {/* Edit Customer Profile */}
-        {modal.name === 'editCustomer' && (
-          <div>
-            <div className="modal-header">
-              <h2>Edit Customer Profile</h2>
-              <button className="modal-close" onClick={handleClose}>&times;</button>
-            </div>
-            <div className="modal-body">
-              <div className="form-group mb-sm">
-                <label className="form-label">Full Name *</label>
-                <input type="text" className="form-input" placeholder="Full Name" value={custName} onChange={e => setCustName(e.target.value)} />
+        {modal.name === 'editCustomer' && (() => {
+          const balInfo = calculateCustomerBalance(modal.payload, customerPrepayments || []);
+          return (
+            <div>
+              <div className="modal-header">
+                <h2>Edit Customer Profile</h2>
+                <button className="modal-close" onClick={handleClose}>&times;</button>
               </div>
-              <div className="form-group mb-sm">
-                <label className="form-label">Phone Number</label>
-                <input type="text" className="form-input" placeholder="Phone Number" value={custPhone} onChange={e => setCustPhone(e.target.value)} />
-              </div>
-              <div className="form-group mb-sm">
-                <label className="form-label">Credit Limit ($)</label>
-                <input type="number" className="form-input" placeholder="Credit Limit ($)" value={custLimit} onChange={e => setCustLimit(e.target.value)} min="0" step="1" />
-              </div>
-              <div className="form-group mb-sm">
-                <label className="form-label">Trust Status</label>
-                <select className="form-select" value={custStatus} onChange={e => setCustStatus(e.target.value)}>
-                  <option value="GOOD_STANDING">Good Standing</option>
-                  <option value="VIP">VIP</option>
-                  <option value="PAUSED">Paused</option>
-                </select>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
-              <button className="btn btn-primary" onClick={handleEditCustomer}>Save Changes</button>
-            </div>
-          </div>
-        )}
+              <div className="modal-body">
+                {/* Financial overview snippet */}
+                <div className="p-sm mb-md" style={{ background: 'var(--market-surface-variant)', borderRadius: '8px', border: '1px solid var(--market-border-light)' }}>
+                  <div className="flex-between mb-xs">
+                    <span className="body-small text-muted">Current Balance:</span>
+                    <strong className={balInfo.hasDebt ? 'text-error' : balInfo.hasStoreCredit ? 'text-success' : ''}>
+                      {balInfo.hasDebt ? `${formatCents(balInfo.debtCents)} (Debt Owed)` : balInfo.hasStoreCredit ? `${formatCents(balInfo.storeCreditCents)} (Store Credit)` : '$0.00 (Settled)'}
+                    </strong>
+                  </div>
+                  <div className="flex-between body-small text-muted">
+                    <span>Available Tab Credit:</span>
+                    <strong className="text-success">{formatCents(balInfo.availableCreditCents)}</strong>
+                  </div>
+                  <div className="flex-center gap-xs mt-sm">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm flex-1"
+                      onClick={() => { handleClose(); openModal('adjustCustomerBalance', modal.payload); }}
+                    >
+                      💳 Adjust Balance / Credit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm flex-1"
+                      onClick={() => { handleClose(); openModal('customerLedger', modal.payload); }}
+                    >
+                      📜 View Ledger
+                    </button>
+                  </div>
+                </div>
 
-        {/* Settle Tab */}
-        {modal.name === 'settleTab' && (
-          <div>
-            <div className="modal-header">
-              <h2>Settle Tab</h2>
-              <button className="modal-close" onClick={handleClose}>&times;</button>
-            </div>
-            <div className="modal-body">
-              <p className="body-medium mb-md">Settle balance for <strong>{modal.payload?.name}</strong> (Owes: {formatCents(modal.payload?.current_balance_cents || 0)})</p>
-              <div className="form-group">
-                <label className="form-label">Payment Amount ($)</label>
-                <input type="number" className="form-input" value={settleAmt} onChange={e => setSettleAmt(e.target.value)} step="0.01" min="0.01" max={(modal.payload?.current_balance_cents / 100).toFixed(2)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Payment Type</label>
-                <select className="form-select" value={settleType} onChange={e => setSettleType(e.target.value)}>
-                  <option value="CASH">Cash</option>
-                  <option value="DIGITAL">Digital</option>
-                </select>
-              </div>
-              {settleType === 'DIGITAL' && (
-                <div className="form-group">
-                  <label className="form-label">Provider</label>
-                  <select className="form-select" value={settleProvider} onChange={e => setSettleProvider(e.target.value)}>
-                    <option value="Square">Square</option>
-                    <option value="Venmo">Venmo</option>
-                    <option value="Zelle">Zelle</option>
+                <div className="form-group mb-sm">
+                  <label className="form-label">Full Name *</label>
+                  <input type="text" className="form-input" placeholder="Full Name" value={custName} onChange={e => setCustName(e.target.value)} />
+                </div>
+                <div className="form-group mb-sm">
+                  <label className="form-label">Phone Number</label>
+                  <input type="text" className="form-input" placeholder="Phone Number" value={custPhone} onChange={e => setCustPhone(e.target.value)} />
+                </div>
+                <div className="form-group mb-sm">
+                  <label className="form-label">Credit Limit ($)</label>
+                  <input type="number" className="form-input" placeholder="Credit Limit ($)" value={custLimit} onChange={e => setCustLimit(e.target.value)} min="0" step="1" />
+                </div>
+                <div className="form-group mb-sm">
+                  <label className="form-label">Trust Status</label>
+                  <select className="form-select" value={custStatus} onChange={e => setCustStatus(e.target.value)}>
+                    <option value="GOOD_STANDING">Good Standing</option>
+                    <option value="VIP">VIP</option>
+                    <option value="PAUSED">Paused</option>
                   </select>
                 </div>
-              )}
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+                <button className="btn btn-primary" onClick={handleEditCustomer}>Save Changes</button>
+              </div>
             </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
-              <button className="btn btn-success" onClick={handleSettleTab}>Apply Payment</button>
+          );
+        })()}
+
+        {/* Record Customer Payment */}
+        {modal.name === 'settleTab' && (() => {
+          const balInfo = calculateCustomerBalance(modal.payload, customerPrepayments || []);
+          const amtVal = parseFloat(settleAmt) || 0;
+          const amtCents = Math.round(amtVal * 100);
+          const isOverpaying = balInfo.hasDebt && amtCents > balInfo.debtCents;
+          const overpayCreditCents = isOverpaying ? (amtCents - balInfo.debtCents) : 0;
+
+          return (
+            <div>
+              <div className="modal-header">
+                <h2>💵 Record Customer Payment</h2>
+                <button className="modal-close" onClick={handleClose}>&times;</button>
+              </div>
+              <div className="modal-body">
+                {/* Account Summary Banner */}
+                <div className="p-sm mb-md" style={{ background: 'var(--market-surface-variant)', borderRadius: '8px' }}>
+                  <div className="flex-between mb-xs">
+                    <span className="body-medium">Customer:</span>
+                    <strong>{modal.payload?.name}</strong>
+                  </div>
+                  <div className="flex-between mb-xs">
+                    <span className="body-medium">Current Balance:</span>
+                    <strong className={balInfo.hasDebt ? 'text-error font-weight-bold' : balInfo.hasStoreCredit ? 'text-success font-weight-bold' : ''}>
+                      {balInfo.formattedBalance} {balInfo.hasDebt ? '(Owed)' : balInfo.hasStoreCredit ? '(Credit)' : '(Settled)'}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Quick Fill Button */}
+                {balInfo.hasDebt && (
+                  <div className="mb-md flex-center gap-xs">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setSettleAmt((balInfo.debtCents / 100).toFixed(2))}
+                    >
+                      Pay Full Tab ({formatCents(balInfo.debtCents)})
+                    </button>
+                  </div>
+                )}
+
+                <div className="form-group mb-sm">
+                  <label className="form-label">Payment Amount ($) *</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={settleAmt}
+                    onChange={e => setSettleAmt(e.target.value)}
+                    step="0.01"
+                    min="0.01"
+                    placeholder="0.00"
+                    autoFocus
+                  />
+                </div>
+
+                {isOverpaying && (
+                  <div className="p-xs mb-sm body-small text-success" style={{ background: 'rgba(34, 197, 94, 0.1)', borderRadius: '6px', border: '1px solid rgba(34, 197, 94, 0.3)' }}>
+                    💡 Overpayment Notice: Paying {formatCents(amtCents)} will clear the {formatCents(balInfo.debtCents)} tab and credit <strong>{formatCents(overpayCreditCents)}</strong> to store credit.
+                  </div>
+                )}
+
+                <div className="form-group mb-sm">
+                  <label className="form-label">Payment Method</label>
+                  <select className="form-select" value={settleType} onChange={e => setSettleType(e.target.value)}>
+                    <option value="CASH">Cash</option>
+                    <option value="DIGITAL">Digital (Square / Venmo / Zelle)</option>
+                  </select>
+                </div>
+
+                {settleType === 'DIGITAL' && (
+                  <div className="form-group mb-sm">
+                    <label className="form-label">Digital Provider</label>
+                    <select className="form-select" value={settleProvider} onChange={e => setSettleProvider(e.target.value)}>
+                      <option value="Square">Square</option>
+                      <option value="Venmo">Venmo</option>
+                      <option value="Zelle">Zelle</option>
+                    </select>
+                  </div>
+                )}
+
+                <div className="form-group mb-sm">
+                  <label className="form-label">Notes / Memo (Optional)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. Full tab payoff / register cash"
+                    value={settleNotes}
+                    onChange={e => setSettleNotes(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+                <button className="btn btn-success" onClick={handleSettleTab}>Apply Payment</button>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
+
+        {/* Adjust Customer Balance (Issue Credit / Charge Debt) */}
+        {modal.name === 'adjustCustomerBalance' && (() => {
+          const balInfo = calculateCustomerBalance(modal.payload, customerPrepayments || []);
+          const curBal = balInfo.balance;
+          const amtVal = parseFloat(adjAmount) || 0;
+          const amtCents = Math.round(amtVal * 100);
+
+          let previewNewBal = curBal;
+          if (adjType === 'CREDIT') {
+            previewNewBal = curBal + amtCents;
+          } else if (adjType === 'DEBIT') {
+            previewNewBal = curBal - amtCents;
+          } else if (adjType === 'SET_BALANCE') {
+            previewNewBal = amtCents;
+          }
+
+          const previewDebt = previewNewBal < 0 ? Math.abs(previewNewBal) : 0;
+          const previewCredit = previewNewBal > 0 ? previewNewBal : 0;
+
+          return (
+            <div>
+              <div className="modal-header">
+                <h2>💳 Adjust Customer Balance</h2>
+                <button className="modal-close" onClick={handleClose}>&times;</button>
+              </div>
+              <div className="modal-body">
+                {/* Current Status Box */}
+                <div className="p-sm mb-md" style={{ background: 'var(--market-surface-variant)', borderRadius: '8px' }}>
+                  <div className="flex-between mb-xs">
+                    <span className="body-medium">Customer:</span>
+                    <strong>{modal.payload?.name}</strong>
+                  </div>
+                  <div className="flex-between mb-xs">
+                    <span className="body-small text-muted">Current Balance:</span>
+                    <strong className={balInfo.hasDebt ? 'text-error' : balInfo.hasStoreCredit ? 'text-success' : ''}>
+                      {balInfo.formattedBalance} {balInfo.hasDebt ? '(Owed)' : balInfo.hasStoreCredit ? '(Credit)' : '(Settled)'}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Adjustment Type Selector */}
+                <div className="form-group mb-sm">
+                  <label className="form-label">Adjustment Action *</label>
+                  <select className="form-select" value={adjType} onChange={e => setAdjType(e.target.value)}>
+                    <option value="CREDIT">🟢 Add Store Credit (Positive Ledger Entry)</option>
+                    <option value="DEBIT">🔴 Charge Debt (Negative Ledger Entry)</option>
+                    <option value="SET_BALANCE">⚙️ Set Exact Balance (Direct Correction)</option>
+                  </select>
+                </div>
+
+                {/* Amount Input */}
+                <div className="form-group mb-sm">
+                  <label className="form-label">
+                    {adjType === 'SET_BALANCE' ? 'Target Balance Amount ($) *' : 'Adjustment Amount ($) *'}
+                  </label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    placeholder="0.00"
+                    value={adjAmount}
+                    onChange={e => setAdjAmount(e.target.value)}
+                    step="0.01"
+                    min={adjType === 'SET_BALANCE' ? undefined : '0.01'}
+                    autoFocus
+                  />
+                  {adjType === 'SET_BALANCE' && (
+                    <small className="text-muted" style={{ fontSize: '11px' }}>
+                      Positive = prepaid credit; negative = debt owed.
+                    </small>
+                  )}
+                </div>
+
+                {/* Reason Category */}
+                <div className="form-group mb-sm">
+                  <label className="form-label">Reason / Category</label>
+                  <select className="form-select" value={adjReason} onChange={e => setAdjReason(e.target.value)}>
+                    <option value="Store Credit / Refund">Store Credit / Refund</option>
+                    <option value="Loyalty Reward / Bonus">Loyalty Reward / Bonus</option>
+                    <option value="Deposit / Advance Payment">Deposit / Advance Payment</option>
+                    <option value="Prepayment Overpayment">Prepayment Overpayment</option>
+                    <option value="Manual Fee / Offline Tab">Manual Fee / Offline Tab</option>
+                    <option value="Bookkeeping Correction">Bookkeeping Correction</option>
+                    <option value="Bad Debt Write-off">Bad Debt Write-off</option>
+                  </select>
+                </div>
+
+                {/* Memo / Notes */}
+                <div className="form-group mb-md">
+                  <label className="form-label">Audit Memo / Notes (Optional)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. Return credit without receipt, bonus promotion"
+                    value={adjNotes}
+                    onChange={e => setAdjNotes(e.target.value)}
+                  />
+                </div>
+
+                {/* Live Impact Preview */}
+                {amtVal > 0 && (
+                  <div className="p-sm" style={{ background: 'rgba(59, 130, 246, 0.1)', borderRadius: '6px', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+                    <div className="title-small text-primary mb-xs" style={{ fontSize: '12px', fontWeight: 'bold' }}>
+                      📊 Balance Impact Preview
+                    </div>
+                    <div className="flex-between body-small mb-xs">
+                      <span>New Balance:</span>
+                      <strong className={previewDebt > 0 ? 'text-error' : previewCredit > 0 ? 'text-success' : ''}>
+                        {previewDebt > 0 ? `-${formatCents(previewDebt)} (Owed)` : previewCredit > 0 ? `+${formatCents(previewCredit)} (Credit)` : '$0.00 (Settled)'}
+                      </strong>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+                <button className="btn btn-primary" onClick={handleAdjustCustomerBalance}>
+                  Apply Balance Adjustment
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Customer Balance & Transaction Ledger */}
+        {modal.name === 'customerLedger' && (() => {
+          const balInfo = calculateCustomerBalance(modal.payload, customerPrepayments || []);
+          const filteredEntries = (customerLedgerEntries || []).filter(entry => {
+            if (customerLedgerFilter === 'TAB_CHARGES') return entry.type === 'HOUSE_TAB_CHARGE';
+            if (customerLedgerFilter === 'PAYMENTS') return entry.type === 'TAB_PAYMENT';
+            if (customerLedgerFilter === 'PREPAYMENTS') return entry.type === 'PREPAYMENT_DEPOSIT';
+            if (customerLedgerFilter === 'ADJUSTMENTS') return entry.type === 'BALANCE_ADJUSTMENT';
+            return true; // 'ALL'
+          });
+
+          return (
+            <div>
+              <div className="modal-header">
+                <div>
+                  <h2 style={{ margin: 0 }}>📜 Customer Ledger: {modal.payload?.name}</h2>
+                  <p className="body-small text-muted" style={{ margin: '2px 0 0' }}>Complete audit trail of tab charges, payments, prepayments, and adjustments.</p>
+                </div>
+                <button className="modal-close" onClick={handleClose}>&times;</button>
+              </div>
+
+              <div className="modal-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+                {/* 4 KPI Summary Cards */}
+                <div className="grid-4col mb-md" style={{ gap: '8px' }}>
+                  <div className="card p-xs text-center" style={{ background: balInfo.hasDebt ? 'rgba(239, 68, 68, 0.1)' : 'var(--market-surface-variant)' }}>
+                    <div className="label-small text-muted">TAB DEBT OWED</div>
+                    <div className={`title-medium ${balInfo.hasDebt ? 'text-error' : ''}`} style={{ fontWeight: 'bold' }}>
+                      {formatCents(balInfo.debtCents)}
+                    </div>
+                  </div>
+                  <div className="card p-xs text-center" style={{ background: balInfo.hasStoreCredit ? 'rgba(34, 197, 94, 0.1)' : 'var(--market-surface-variant)' }}>
+                    <div className="label-small text-muted">STORE CREDIT</div>
+                    <div className={`title-medium ${balInfo.hasStoreCredit ? 'text-success' : ''}`} style={{ fontWeight: 'bold' }}>
+                      {formatCents(balInfo.storeCreditCents)}
+                    </div>
+                  </div>
+                  <div className="card p-xs text-center" style={{ background: 'var(--market-surface-variant)' }}>
+                    <div className="label-small text-muted">PREPAYMENTS</div>
+                    <div className="title-medium" style={{ fontWeight: 'bold' }}>
+                      {formatCents(balInfo.prepaidCreditCents)}
+                    </div>
+                  </div>
+                  <div className="card p-xs text-center" style={{ background: 'var(--market-surface-variant)' }}>
+                    <div className="label-small text-muted">AVAILABLE TAB</div>
+                    <div className="title-medium text-success" style={{ fontWeight: 'bold' }}>
+                      {formatCents(balInfo.availableCreditCents)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filter Tabs & Quick Action */}
+                <div className="flex-between mb-sm" style={{ flexWrap: 'wrap', gap: '8px' }}>
+                  <div className="flex-center gap-xs" style={{ flexWrap: 'wrap' }}>
+                    <button
+                      className={`btn btn-xs ${customerLedgerFilter === 'ALL' ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => setCustomerLedgerFilter('ALL')}
+                    >
+                      All ({customerLedgerEntries.length})
+                    </button>
+                    <button
+                      className={`btn btn-xs ${customerLedgerFilter === 'TAB_CHARGES' ? 'btn-danger' : 'btn-ghost'}`}
+                      onClick={() => setCustomerLedgerFilter('TAB_CHARGES')}
+                    >
+                      Tab Charges
+                    </button>
+                    <button
+                      className={`btn btn-xs ${customerLedgerFilter === 'PAYMENTS' ? 'btn-success' : 'btn-ghost'}`}
+                      onClick={() => setCustomerLedgerFilter('PAYMENTS')}
+                    >
+                      Payments
+                    </button>
+                    <button
+                      className={`btn btn-xs ${customerLedgerFilter === 'PREPAYMENTS' ? 'btn-secondary' : 'btn-ghost'}`}
+                      onClick={() => setCustomerLedgerFilter('PREPAYMENTS')}
+                    >
+                      Prepayments
+                    </button>
+                    <button
+                      className={`btn btn-xs ${customerLedgerFilter === 'ADJUSTMENTS' ? 'btn-secondary' : 'btn-ghost'}`}
+                      onClick={() => setCustomerLedgerFilter('ADJUSTMENTS')}
+                    >
+                      Adjustments
+                    </button>
+                  </div>
+
+                  <div className="flex-center gap-xs">
+                    <button
+                      className="btn btn-secondary btn-xs"
+                      onClick={() => { handleClose(); openModal('adjustCustomerBalance', modal.payload); }}
+                    >
+                      💳 Adjust Balance
+                    </button>
+                    <button
+                      className="btn btn-success btn-xs"
+                      onClick={() => { handleClose(); openModal('settleTab', modal.payload); }}
+                    >
+                      💵 Settle Tab
+                    </button>
+                  </div>
+                </div>
+
+                {/* Ledger Entries List / Table */}
+                {customerLedgerLoading ? (
+                  <div className="text-center p-lg text-muted">Loading ledger entries...</div>
+                ) : filteredEntries.length === 0 ? (
+                  <div className="card text-center p-md text-muted">
+                    No financial ledger events recorded for this customer yet.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {filteredEntries.map(entry => {
+                      const isCredit = entry.direction === 'CREDIT';
+                      const badgeClass = entry.type === 'HOUSE_TAB_CHARGE'
+                        ? 'badge-paused'
+                        : entry.type === 'TAB_PAYMENT'
+                        ? 'badge-good-standing'
+                        : entry.type === 'PREPAYMENT_DEPOSIT'
+                        ? 'badge-vip'
+                        : 'badge-secondary';
+
+                      return (
+                        <div
+                          key={entry.id}
+                          className="flex-between p-sm"
+                          style={{
+                            background: 'var(--market-surface-variant)',
+                            borderRadius: '6px',
+                            borderLeft: `3px solid ${isCredit ? 'var(--market-green-primary)' : 'var(--market-error)'}`
+                          }}
+                        >
+                          <div>
+                            <div className="flex-center gap-xs mb-xs" style={{ justifyContent: 'flex-start' }}>
+                              <span className="body-medium font-weight-bold">{entry.title}</span>
+                              <span className={`badge ${badgeClass}`} style={{ fontSize: '9px', padding: '1px 5px' }}>
+                                {entry.type}
+                              </span>
+                            </div>
+                            <div className="body-small text-muted" style={{ fontSize: '11px' }}>
+                              {entry.description}
+                            </div>
+                            <div className="label-small text-muted mt-xs" style={{ fontSize: '10px' }}>
+                              {new Date(entry.timestamp).toLocaleString()}
+                            </div>
+                          </div>
+
+                          <div className="text-right">
+                            <div className={`body-medium font-weight-bold ${isCredit ? 'text-success' : 'text-error'}`}>
+                              {isCredit ? `-${formatCents(entry.amount_cents)}` : `+${formatCents(entry.amount_cents)}`}
+                            </div>
+                            <div className="label-small text-muted" style={{ fontSize: '10px' }}>
+                              Running Debt: {formatCents(entry.running_balance_cents)}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="modal-footer">
+                <button className="btn btn-secondary" onClick={handleClose}>Close Ledger</button>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Void Sale */}
         {modal.name === 'voidSale' && (

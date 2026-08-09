@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { formatCents, filterCustomerSuggestions } from '../repository';
+import { formatCents, filterCustomerSuggestions, calculateCustomerBalance } from '../repository';
 
 /**
  * Highlight matching prefix in suggestion text
@@ -237,11 +237,24 @@ export const CustomerNameInput = ({
         {/* Badges / indicators for selected customer */}
         {hasAttachedCustomer && (
           <div className="customer-name-badge-group">
-            {selectedCustomer.current_balance_cents > 0 && (
-              <span className="badge badge-paused" title="Current tab balance" style={{ fontSize: '11px', padding: '2px 6px' }}>
-                Bal: {formatCents(selectedCustomer.current_balance_cents)}
-              </span>
-            )}
+            {(() => {
+              const b = calculateCustomerBalance(selectedCustomer);
+              if (b.hasDebt) {
+                return (
+                  <span className="badge badge-paused" title="Customer owes money (debt)" style={{ fontSize: '11px', padding: '2px 6px' }}>
+                    Debt: -{formatCents(b.debtCents)}
+                  </span>
+                );
+              }
+              if (b.hasStoreCredit) {
+                return (
+                  <span className="badge badge-good-standing" title="Customer has store credit" style={{ fontSize: '11px', padding: '2px 6px' }}>
+                    Credit: +{formatCents(b.storeCreditCents)}
+                  </span>
+                );
+              }
+              return null;
+            })()}
             {activePrepayCount > 0 && (
               <span className="badge badge-good-standing" title="Active prepayments" style={{ fontSize: '11px', padding: '2px 6px' }}>
                 📦 {activePrepayCount}
@@ -335,9 +348,18 @@ export const CustomerNameInput = ({
                 </div>
 
                 <div className="customer-suggestion-balance text-right">
-                  <span className={`body-small ${hasTabBalance ? 'text-error font-weight-bold' : 'text-muted'}`}>
-                    Bal: {formatCents(c.current_balance_cents || 0)}
-                  </span>
+                  {(() => {
+                    const b = calculateCustomerBalance(c);
+                    return (
+                      <span className={`body-small ${b.hasDebt ? 'text-error font-weight-bold' : b.hasStoreCredit ? 'text-success font-weight-bold' : 'text-muted'}`}>
+                        {b.hasDebt
+                          ? `Debt: -${formatCents(b.debtCents)}`
+                          : b.hasStoreCredit
+                          ? `Credit: +${formatCents(b.storeCreditCents)}`
+                          : 'Bal: $0.00'}
+                      </span>
+                    );
+                  })()}
                   {c.credit_limit_cents > 0 && (
                     <div className="text-muted" style={{ fontSize: '10px' }}>
                       Limit: {formatCents(c.credit_limit_cents)}

@@ -1,11 +1,14 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { usePos } from '../context/PosContext';
-import { formatCents, formatMgToGrams } from '../repository';
+import { formatCents, formatMgToGrams, calculateCustomerBalance } from '../repository';
 
 export const CustomerScreen = () => {
   const { customers, customerPrepayments, repo, openModal, refreshAllData, showToast } = usePos();
   const safeCustomers = customers || [];
   const safePrepayments = customerPrepayments || [];
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState('ALL'); // 'ALL' | 'DEBT' | 'CREDIT' | 'PREPAY' | 'ZERO'
 
   const handleFulfill = async (prepaymentId) => {
     try {
@@ -17,12 +20,78 @@ export const CustomerScreen = () => {
     }
   };
 
+  // Calculate high-level summary KPIs
+  const customerMetrics = useMemo(() => {
+    let totalDebtCents = 0;
+    let debtCustomerCount = 0;
+    let totalStoreCreditCents = 0;
+    let creditCustomerCount = 0;
+    let zeroBalanceCount = 0;
+
+    safeCustomers.forEach(c => {
+      const balInfo = calculateCustomerBalance(c, safePrepayments);
+      if (balInfo.hasDebt) {
+        totalDebtCents += balInfo.debtCents;
+        debtCustomerCount += 1;
+      } else if (balInfo.hasStoreCredit) {
+        totalStoreCreditCents += balInfo.storeCreditCents;
+        creditCustomerCount += 1;
+      } else {
+        zeroBalanceCount += 1;
+      }
+    });
+
+    const activePrepayments = safePrepayments.filter(p => p.status !== 'FULFILLED');
+    const totalPrepaymentCreditCents = activePrepayments.reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+    const totalPrepaymentWeightMg = activePrepayments.reduce((sum, p) => sum + (Number(p.weight_mg) || 0), 0);
+    const prepayCustomerIds = new Set(activePrepayments.map(p => Number(p.customer_id)));
+
+    const netPositionCents = totalStoreCreditCents + totalPrepaymentCreditCents - totalDebtCents;
+
+    return {
+      totalDebtCents,
+      debtCustomerCount,
+      totalStoreCreditCents,
+      creditCustomerCount,
+      zeroBalanceCount,
+      activePrepaymentsCount: activePrepayments.length,
+      prepayCustomerCount: prepayCustomerIds.size,
+      totalPrepaymentCreditCents,
+      totalPrepaymentWeightMg,
+      netPositionCents,
+      totalCustomers: safeCustomers.length
+    };
+  }, [safeCustomers, safePrepayments]);
+
+  // Filtered and searched customer list
+  const filteredCustomers = useMemo(() => {
+    return safeCustomers.filter(c => {
+      const q = searchQuery.trim().toLowerCase();
+      const matchesSearch = !q ||
+        (c.name && c.name.toLowerCase().includes(q)) ||
+        (c.phone_number && c.phone_number.toLowerCase().includes(q)) ||
+        (c.phone && c.phone.toLowerCase().includes(q)) ||
+        (c.notes && c.notes.toLowerCase().includes(q));
+
+      if (!matchesSearch) return false;
+
+      const balInfo = calculateCustomerBalance(c, safePrepayments);
+
+      if (activeFilter === 'DEBT') return balInfo.hasDebt;
+      if (activeFilter === 'CREDIT') return balInfo.hasStoreCredit;
+      if (activeFilter === 'PREPAY') return balInfo.hasPrepayments;
+      if (activeFilter === 'ZERO') return balInfo.currentBalanceCents === 0 && !balInfo.hasPrepayments;
+      return true; // 'ALL'
+    });
+  }, [safeCustomers, safePrepayments, searchQuery, activeFilter]);
+
   return (
-    <div>
-      <div className="section-header">
+    <div className="customer-screen-container">
+      {/* Section Header */}
+      <div className="section-header mb-md">
         <div>
-          <h2 className="section-title">👥 CUSTOMER ACCOUNTS & BACKORDERS</h2>
-          <p className="body-small text-muted">Manage customer house tabs, credit limits, prepaid deliveries, and stock backorders.</p>
+          <h2 className="section-title">👥 CUSTOMER ACCOUNTS & BALANCES</h2>
+          <p className="body-small text-muted">Track customer house tabs (debt), store credits, credit limits, and prepaid order deliveries.</p>
         </div>
         <div className="flex-center gap-xs">
           <button className="btn btn-secondary btn-sm" onClick={() => openModal('addCustomerPrepayment')}>
@@ -34,96 +103,272 @@ export const CustomerScreen = () => {
         </div>
       </div>
 
-      <div className="grid-2col mb-lg">
-        {safeCustomers.map(c => {
-          const bal = c.current_balance_cents;
-          const lim = c.credit_limit_cents;
-          const pct = lim > 0 ? Math.min((bal / lim) * 100, 100) : 0;
-          const badgeClass = c.trust_status === 'VIP'
-            ? 'badge-vip'
-            : c.trust_status === 'PAUSED'
-            ? 'badge-paused'
-            : 'badge-good-standing';
+      {/* KPI Financial Overview Cards */}
+      <div className="grid-4col mb-md" style={{ gap: '12px' }}>
+        {/* Receivables / Debt Owed */}
+        <div className="card" style={{ padding: '14px', borderLeft: '4px solid var(--market-error)' }}>
+          <div className="flex-between body-small text-muted mb-xs">
+            <span>🔴 RECEIVABLES (DEBT)</span>
+            <span className="badge badge-paused" style={{ fontSize: '10px' }}>{customerMetrics.debtCustomerCount} accounts</span>
+          </div>
+          <div className="title-large text-error" style={{ fontSize: '1.5rem', fontWeight: 800 }}>
+            {formatCents(customerMetrics.totalDebtCents)}
+          </div>
+          <div className="body-small text-muted" style={{ fontSize: '11px', marginTop: '4px' }}>
+            Unpaid House Tabs owed to store
+          </div>
+        </div>
 
-          const activePrepayments = safePrepayments.filter(
-            p => Number(p.customer_id) === Number(c.customer_id) && p.status !== 'FULFILLED'
-          );
-          const totalWeightOwedMg = activePrepayments.reduce((sum, p) => sum + (p.weight_mg || 0), 0);
-          const totalCreditCents = activePrepayments.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
+        {/* Store Credit Held */}
+        <div className="card" style={{ padding: '14px', borderLeft: '4px solid var(--market-green-primary)' }}>
+          <div className="flex-between body-small text-muted mb-xs">
+            <span>🟢 STORE CREDIT</span>
+            <span className="badge badge-good-standing" style={{ fontSize: '10px' }}>{customerMetrics.creditCustomerCount} accounts</span>
+          </div>
+          <div className="title-large text-success" style={{ fontSize: '1.5rem', fontWeight: 800 }}>
+            {formatCents(customerMetrics.totalStoreCreditCents)}
+          </div>
+          <div className="body-small text-muted" style={{ fontSize: '11px', marginTop: '4px' }}>
+            Customer balances & overpayments
+          </div>
+        </div>
 
-          return (
-            <div key={c.customer_id} className="customer-card">
-              <div className="customer-card-header">
-                <div>
-                  <div className="customer-name">{c.name}</div>
-                  <div className="customer-phone">{c.phone_number || c.phone || 'No phone'}</div>
-                </div>
-                <div className="flex-center gap-xs">
-                  <span className={`badge ${badgeClass}`}>{c.trust_status}</span>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    style={{ padding: '2px 6px', fontSize: '12px' }}
-                    onClick={() => openModal('editCustomer', c)}
-                    title="Edit Customer Profile"
-                  >
-                    ✏️ Edit
-                  </button>
-                </div>
-              </div>
+        {/* Prepaid Orders & Backorders */}
+        <div className="card" style={{ padding: '14px', borderLeft: '4px solid #f57c00' }}>
+          <div className="flex-between body-small text-muted mb-xs">
+            <span>📦 PENDING PREPAYMENTS</span>
+            <span className="badge badge-vip" style={{ fontSize: '10px' }}>{customerMetrics.activePrepaymentsCount} orders</span>
+          </div>
+          <div className="title-large" style={{ fontSize: '1.5rem', fontWeight: 800, color: '#f57c00' }}>
+            {formatCents(customerMetrics.totalPrepaymentCreditCents)}
+          </div>
+          <div className="body-small text-muted" style={{ fontSize: '11px', marginTop: '4px' }}>
+            {customerMetrics.totalPrepaymentWeightMg > 0 ? `${formatMgToGrams(customerMetrics.totalPrepaymentWeightMg)} weight owed` : 'Prepaid goods & credit'}
+          </div>
+        </div>
 
-              <div>
-                <div className="flex-between body-medium mb-xs">
-                  <span>Balance: <strong className={pct >= 100 ? 'text-error' : ''}>{formatCents(bal)}</strong></span>
-                  <span className="text-muted">Limit: {formatCents(lim)}</span>
-                </div>
-                <div className="customer-balance-bar">
-                  <div
-                    className="customer-balance-fill"
-                    style={{
-                      width: `${pct}%`,
-                      background: pct >= 90 ? 'var(--market-error)' : pct >= 75 ? 'var(--market-warning)' : 'var(--market-green-primary)'
-                    }}
-                  />
-                </div>
-              </div>
-
-              {(totalWeightOwedMg > 0 || totalCreditCents > 0) && (
-                <div className="p-xs mt-sm body-small flex-between" style={{ background: 'var(--market-surface-variant)', borderRadius: '6px', alignItems: 'center' }}>
-                  <div>
-                    <div className="font-weight-bold text-success">
-                      📦 Owed: {totalWeightOwedMg > 0 ? formatMgToGrams(totalWeightOwedMg) : ''} {totalCreditCents > 0 ? `(${formatCents(totalCreditCents)} Credit)` : ''}
-                    </div>
-                    <div className="text-muted font-italic" style={{ fontSize: '11px' }}>
-                      {activePrepayments.length} pending delivery
-                    </div>
-                  </div>
-                  <button
-                    className="btn btn-success btn-sm"
-                    style={{ padding: '4px 8px', fontSize: '11px', whiteSpace: 'nowrap' }}
-                    onClick={async () => {
-                      for (const p of activePrepayments) {
-                        await handleFulfill(p.prepayment_id);
-                      }
-                    }}
-                    title="Mark all pending prepayments for this customer as delivered"
-                  >
-                    ✅ Mark Delivered
-                  </button>
-                </div>
-              )}
-
-              <button className="btn btn-success btn-block mt-sm" onClick={() => openModal('settleTab', c)}>
-                Settle Tab
-              </button>
-            </div>
-          );
-        })}
+        {/* Net Customer Position */}
+        <div className="card" style={{ padding: '14px', borderLeft: `4px solid ${customerMetrics.netPositionCents >= 0 ? 'var(--market-primary)' : 'var(--market-warning)'}` }}>
+          <div className="flex-between body-small text-muted mb-xs">
+            <span>⚖️ NET POSITION</span>
+            <span className="label-small text-muted">{customerMetrics.totalCustomers} total</span>
+          </div>
+          <div className={`title-large ${customerMetrics.netPositionCents >= 0 ? 'text-primary' : 'text-warning'}`} style={{ fontSize: '1.5rem', fontWeight: 800 }}>
+            {customerMetrics.netPositionCents >= 0 ? `+${formatCents(customerMetrics.netPositionCents)}` : formatCents(customerMetrics.netPositionCents)}
+          </div>
+          <div className="body-small text-muted" style={{ fontSize: '11px', marginTop: '4px' }}>
+            Receivables minus customer credits
+          </div>
+        </div>
       </div>
+
+      {/* Search & Filter Toolbar */}
+      <div className="card p-sm mb-md flex-between" style={{ gap: '12px', flexWrap: 'wrap' }}>
+        <div style={{ flex: '1', minWidth: '220px' }}>
+          <input
+            type="text"
+            className="form-input"
+            placeholder="🔍 Search customers by name, phone, or notes..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            style={{ width: '100%' }}
+          />
+        </div>
+
+        <div className="flex-center gap-xs" style={{ flexWrap: 'wrap' }}>
+          <button
+            className={`btn btn-sm ${activeFilter === 'ALL' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setActiveFilter('ALL')}
+          >
+            All ({customerMetrics.totalCustomers})
+          </button>
+          <button
+            className={`btn btn-sm ${activeFilter === 'DEBT' ? 'btn-danger' : 'btn-ghost'}`}
+            onClick={() => setActiveFilter('DEBT')}
+            title="Customers with outstanding house tab debt"
+          >
+            🔴 Owes Debt ({customerMetrics.debtCustomerCount})
+          </button>
+          <button
+            className={`btn btn-sm ${activeFilter === 'CREDIT' ? 'btn-success' : 'btn-ghost'}`}
+            onClick={() => setActiveFilter('CREDIT')}
+            title="Customers with store credit available"
+          >
+            🟢 Store Credit ({customerMetrics.creditCustomerCount})
+          </button>
+          <button
+            className={`btn btn-sm ${activeFilter === 'PREPAY' ? 'btn-secondary' : 'btn-ghost'}`}
+            onClick={() => setActiveFilter('PREPAY')}
+            title="Customers with pending prepayments / backorders"
+          >
+            📦 Prepayments ({customerMetrics.prepayCustomerCount})
+          </button>
+          <button
+            className={`btn btn-sm ${activeFilter === 'ZERO' ? 'btn-secondary' : 'btn-ghost'}`}
+            onClick={() => setActiveFilter('ZERO')}
+            title="Customers with settled zero balance"
+          >
+            ⚪ Settled ({customerMetrics.zeroBalanceCount})
+          </button>
+        </div>
+      </div>
+
+      {/* Customer Cards Grid */}
+      {filteredCustomers.length === 0 ? (
+        <div className="card text-center p-xl mb-lg">
+          <div style={{ fontSize: '2rem', marginBottom: '8px' }}>👤</div>
+          <div className="title-medium mb-xs">No matching customers found</div>
+          <p className="body-small text-muted mb-md">
+            {searchQuery ? `No customer records matching "${searchQuery}" under filter "${activeFilter}".` : 'No customers in this category.'}
+          </p>
+          <button className="btn btn-primary btn-sm" onClick={() => openModal('addCustomer', { name: searchQuery })}>
+            + Add New Customer
+          </button>
+        </div>
+      ) : (
+        <div className="grid-2col mb-lg">
+          {filteredCustomers.map(c => {
+            const balInfo = calculateCustomerBalance(c, safePrepayments);
+            const badgeClass = c.trust_status === 'VIP'
+              ? 'badge-vip'
+              : c.trust_status === 'PAUSED'
+              ? 'badge-paused'
+              : 'badge-good-standing';
+
+            const activePrepayments = safePrepayments.filter(
+              p => Number(p.customer_id) === Number(c.customer_id) && p.status !== 'FULFILLED'
+            );
+
+            return (
+              <div key={c.customer_id} className="customer-card">
+                {/* Header */}
+                <div className="customer-card-header">
+                  <div>
+                    <div className="customer-name flex-center gap-xs" style={{ justifyContent: 'flex-start' }}>
+                      <span>{c.name}</span>
+                      <span className={`badge ${badgeClass}`} style={{ fontSize: '10px' }}>{c.trust_status || 'GOOD_STANDING'}</span>
+                    </div>
+                    <div className="customer-phone">{c.phone_number || c.phone || 'No phone recorded'}</div>
+                  </div>
+                  <div className="flex-center gap-xs">
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      style={{ padding: '3px 8px', fontSize: '11px' }}
+                      onClick={() => openModal('editCustomer', c)}
+                      title="Edit Customer Details & Credit Limit"
+                    >
+                      ✏️ Edit
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ padding: '3px 8px', fontSize: '11px' }}
+                      onClick={() => openModal('customerLedger', c)}
+                      title="View Complete Balance & Transaction Ledger"
+                    >
+                      📜 Ledger
+                    </button>
+                  </div>
+                </div>
+
+                {/* Balance & Debt Breakdown Box */}
+                <div
+                  className="p-sm"
+                  style={{
+                    background: balInfo.hasDebt
+                      ? 'rgba(239, 68, 68, 0.08)'
+                      : balInfo.hasStoreCredit
+                      ? 'rgba(34, 197, 94, 0.08)'
+                      : 'var(--market-surface-variant)',
+                    borderRadius: '8px',
+                    border: `1px solid ${
+                      balInfo.hasDebt
+                        ? 'rgba(239, 68, 68, 0.25)'
+                        : balInfo.hasStoreCredit
+                        ? 'rgba(34, 197, 94, 0.25)'
+                        : 'var(--market-border-light)'
+                    }`
+                  }}
+                >
+                  {/* Status Headline */}
+                  <div className="flex-between mb-xs">
+                    <span className="body-small text-muted" style={{ fontWeight: 600 }}>
+                      {balInfo.hasDebt ? '🔴 OWES MONEY (DEBT)' : balInfo.hasStoreCredit ? '🟢 PREPAID / STORE CREDIT' : '⚪ ACCOUNT SETTLED'}
+                    </span>
+                    <span className={`body-medium font-weight-bold ${balInfo.hasDebt ? 'text-error' : balInfo.hasStoreCredit ? 'text-success' : ''}`}>
+                      {balInfo.hasDebt
+                        ? `-${formatCents(balInfo.debtCents)} (Owed)`
+                        : balInfo.hasStoreCredit
+                        ? `+${formatCents(balInfo.storeCreditCents)} (Credit)`
+                        : '$0.00 (Settled)'}
+                    </span>
+                  </div>
+
+                  <div className="flex-between body-small text-muted mb-xs" style={{ fontSize: '12px' }}>
+                    <span>Account Balance: <strong className={balInfo.hasDebt ? 'text-error' : balInfo.hasStoreCredit ? 'text-success' : ''}>{balInfo.formattedBalance}</strong></span>
+                    {balInfo.creditLimitCents > 0 && (
+                      <span>Limit: <strong>{formatCents(balInfo.creditLimitCents)}</strong></span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Active Prepayments / Backorders Section */}
+                {(balInfo.prepaidWeightMg > 0 || balInfo.prepaidCreditCents > 0) && (
+                  <div className="p-xs body-small flex-between" style={{ background: 'rgba(56, 107, 31, 0.12)', borderRadius: '6px', alignItems: 'center', border: '1px solid rgba(56, 107, 31, 0.3)' }}>
+                    <div>
+                      <div className="font-weight-bold text-success">
+                        📦 Prepayments: {balInfo.prepaidWeightMg > 0 ? formatMgToGrams(balInfo.prepaidWeightMg) : ''} {balInfo.prepaidCreditCents > 0 ? `(${formatCents(balInfo.prepaidCreditCents)} Paid)` : ''}
+                      </div>
+                      <div className="text-muted font-italic" style={{ fontSize: '11px' }}>
+                        {activePrepayments.length} order(s) pending delivery
+                      </div>
+                    </div>
+                    <button
+                      className="btn btn-success btn-sm"
+                      style={{ padding: '4px 8px', fontSize: '11px', whiteSpace: 'nowrap' }}
+                      onClick={async () => {
+                        for (const p of activePrepayments) {
+                          await handleFulfill(p.prepayment_id);
+                        }
+                      }}
+                      title="Mark all pending prepayments for this customer as delivered"
+                    >
+                      ✅ Deliver
+                    </button>
+                  </div>
+                )}
+
+                {/* Action Buttons Row */}
+                <div className="flex-center gap-xs mt-xs" style={{ width: '100%' }}>
+                  <button
+                    className="btn btn-success btn-sm flex-1"
+                    style={{ flex: 1 }}
+                    onClick={() => openModal('settleTab', c)}
+                    title="Log a payment against customer's balance independent of a sale"
+                  >
+                    💵 Record Payment
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm flex-1"
+                    style={{ flex: 1 }}
+                    onClick={() => openModal('adjustCustomerBalance', c)}
+                    title="Issue Store Credit, Charge Debt, or Adjust Balance"
+                  >
+                    💳 Adjust Balance
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Prepaid Deliveries & Backordered Stock Ledger */}
       <div className="card mt-lg">
         <div className="card-header border-bottom pb-sm mb-md flex-between">
-          <h3 className="title-medium">📦 Customer Prepayments & Backordered Stock Ledger</h3>
+          <div>
+            <h3 className="title-medium">📦 Customer Prepayments & Backordered Stock Ledger</h3>
+            <p className="body-small text-muted" style={{ margin: 0 }}>Active orders and stock owed to customers.</p>
+          </div>
           <button className="btn btn-secondary btn-sm" onClick={() => openModal('addCustomerPrepayment')}>
             + Record Prepayment
           </button>

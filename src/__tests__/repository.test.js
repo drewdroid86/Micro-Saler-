@@ -17,6 +17,7 @@ import {
   filterCustomers,
   getAllCustomerNames,
   filterCustomerSuggestions,
+  calculateCustomerBalance,
   PosRepository
 } from '../repository.js';
 
@@ -902,5 +903,289 @@ test('filterCustomerSuggestions (CustomerNameInput filtering) applies startsWith
   const chMatches = filterCustomerSuggestions(sampleCustomers, 'Ch');
   assert.equal(chMatches.length, 1);
   assert.equal(chMatches[0].name, 'Charlie Brown');
+});
+
+test('calculateCustomerBalance correctly calculates debt, store credit, prepayments, and available credit', () => {
+  // 1. Customer with Debt (balance = -1500 => owes $15.00 debt)
+  const debtCust = { customer_id: 1, name: 'Debt Customer', balance: -1500, credit_limit_cents: 2500 };
+  const debtBal = calculateCustomerBalance(debtCust, []);
+  assert.equal(debtBal.hasDebt, true);
+  assert.equal(debtBal.hasCredit, false);
+  assert.equal(debtBal.hasStoreCredit, false);
+  assert.equal(debtBal.debtCents, 1500);
+  assert.equal(debtBal.storeCreditCents, 0);
+  assert.equal(debtBal.balance, -1500);
+  assert.equal(debtBal.creditLimitCents, 2500);
+  assert.equal(debtBal.availableCreditCents, 1000); // $25.00 limit - $15.00 debt = $10.00 available
+  assert.equal(debtBal.utilizationPercent, 60);
+  assert.equal(debtBal.balanceType, 'DEBT');
+  assert.equal(debtBal.formattedDebt, '$15.00');
+  assert.equal(debtBal.formattedBalance, '-$15.00');
+  assert.equal(debtBal.formattedNet, '-$15.00');
+
+  // 2. Customer with Store Credit (balance = +1000 => $10.00 store credit)
+  const creditCust = { customer_id: 2, name: 'Credit Customer', balance: 1000, credit_limit_cents: 2500 };
+  const creditBal = calculateCustomerBalance(creditCust, []);
+  assert.equal(creditBal.hasDebt, false);
+  assert.equal(creditBal.hasCredit, true);
+  assert.equal(creditBal.hasStoreCredit, true);
+  assert.equal(creditBal.debtCents, 0);
+  assert.equal(creditBal.storeCreditCents, 1000);
+  assert.equal(creditBal.balance, 1000);
+  assert.equal(creditBal.availableCreditCents, 3500); // $25.00 limit + $10.00 credit = $35.00 buying power
+  assert.equal(creditBal.utilizationPercent, 0);
+  assert.equal(creditBal.balanceType, 'STORE_CREDIT');
+  assert.equal(creditBal.formattedStoreCredit, '$10.00');
+  assert.equal(creditBal.formattedBalance, '+$10.00');
+  assert.equal(creditBal.formattedNet, '$10.00');
+
+  // 3. Customer with Zero Balance and Prepayments
+  const prepayCust = { customer_id: 3, name: 'Prepay Customer', balance: 0, credit_limit_cents: 5000 };
+  const prepayments = [
+    { prepayment_id: 1, customer_id: 3, amount_cents: 2000, weight_mg: 5000, status: 'PENDING_DELIVERY' },
+    { prepayment_id: 2, customer_id: 3, amount_cents: 1500, weight_mg: 3500, status: 'AWAITING_STOCK' },
+    { prepayment_id: 3, customer_id: 3, amount_cents: 1000, weight_mg: 2000, status: 'FULFILLED' } // should be ignored
+  ];
+  const prepayBal = calculateCustomerBalance(prepayCust, prepayments);
+  assert.equal(prepayBal.hasDebt, false);
+  assert.equal(prepayBal.hasCredit, true);
+  assert.equal(prepayBal.hasPrepayments, true);
+  assert.equal(prepayBal.prepaymentCount, 2);
+  assert.equal(prepayBal.prepaidCreditCents, 3500);
+  assert.equal(prepayBal.prepaidWeightMg, 8500);
+  assert.equal(prepayBal.totalCreditCents, 3500);
+  assert.equal(prepayBal.balanceType, 'PREPAID_ONLY');
+
+  // 4. Null safety
+  const nullBal = calculateCustomerBalance(null, []);
+  assert.equal(nullBal.balance, 0);
+  assert.equal(nullBal.debtCents, 0);
+  assert.equal(nullBal.hasDebt, false);
+  assert.equal(nullBal.hasCredit, false);
+  assert.equal(nullBal.balanceType, 'ZERO');
+});
+
+test('formatCents converts positive and negative cents accurately', () => {
+  assert.equal(formatCents(100), '$1.00');
+  assert.equal(formatCents(1250), '$12.50');
+  assert.equal(formatCents(0), '$0.00');
+  assert.equal(formatCents(-500), '-$5.00');
+  assert.equal(formatCents(-1250), '-$12.50');
+  assert.equal(formatCents(null), '$0.00');
+});
+
+test('adjustCustomerBalance issues credit, charges debt, writes to customer_ledger, and records audit trail', async () => {
+  const customerStore = [
+    { customer_id: 1, name: 'Test Customer', balance: -1000, credit_limit_cents: 2500 } // owes $10.00
+  ];
+  const ledgerStore = [];
+  const auditStore = [];
+
+  const mockDb = {
+    async getById(store, id) {
+      return customerStore.find(c => c.customer_id === id) || null;
+    },
+    async runTransaction(storeNames, mode, callback) {
+      const tx = {
+        objectStore(name) {
+          return {
+            get(id) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              setTimeout(() => {
+                req.result = customerStore.find(c => c.customer_id === id) || null;
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            },
+            add(record) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              setTimeout(() => {
+                if (name === 'customer_ledger') {
+                  const id = ledgerStore.length + 1;
+                  ledgerStore.push({ ...record, entry_id: id });
+                  req.result = id;
+                } else if (name === 'audit_log') {
+                  const id = auditStore.length + 1;
+                  auditStore.push({ ...record, audit_id: id });
+                  req.result = id;
+                }
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            },
+            put(record) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              setTimeout(() => {
+                const idx = customerStore.findIndex(c => c.customer_id === record.customer_id);
+                if (idx >= 0) customerStore[idx] = record;
+                req.result = record.customer_id;
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            }
+          };
+        }
+      };
+      return await callback(tx);
+    }
+  };
+
+  const repo = new PosRepository(mockDb);
+
+  // 1. Issue $15.00 Store Credit (previous balance -$10.00 debt => new balance +$5.00 store credit)
+  const creditResult = await repo.adjustCustomerBalance(1, {
+    amountCents: 1500,
+    type: 'CREDIT',
+    reason: 'Store Credit / Refund',
+    notes: 'Returned item store credit'
+  });
+
+  assert.equal(creditResult.previous_balance_cents, -1000);
+  assert.equal(creditResult.new_balance_cents, 500);
+  assert.equal(customerStore[0].balance, 500);
+  assert.equal(ledgerStore.length, 1);
+  assert.equal(ledgerStore[0].amount_cents, 1500);
+  assert.equal(ledgerStore[0].type, 'BALANCE_ADJUSTMENT');
+
+  // 2. Charge Tab / Add Debt of $20.00 (previous balance +$5.00 => new balance -$15.00 debt)
+  const debitResult = await repo.adjustCustomerBalance(1, {
+    amountCents: 2000,
+    type: 'DEBIT',
+    reason: 'Manual Fee / Offline Tab',
+    notes: 'Offline purchase add'
+  });
+
+  assert.equal(debitResult.previous_balance_cents, 500);
+  assert.equal(debitResult.new_balance_cents, -1500);
+  assert.equal(customerStore[0].balance, -1500);
+  assert.equal(ledgerStore.length, 2);
+  assert.equal(ledgerStore[1].amount_cents, -2000);
+
+  // 3. Set Exact Balance to $0.00 (settled)
+  const setBalResult = await repo.adjustCustomerBalance(1, {
+    amountCents: 0,
+    type: 'SET_BALANCE',
+    reason: 'Bad Debt Write-off',
+    notes: 'Account reset'
+  });
+
+  assert.equal(setBalResult.previous_balance_cents, -1500);
+  assert.equal(setBalResult.new_balance_cents, 0);
+  assert.equal(customerStore[0].balance, 0);
+  assert.equal(ledgerStore.length, 3);
+  assert.equal(ledgerStore[2].amount_cents, 1500); // delta to reach 0
+});
+
+test('recordCustomerPayment logs positive ledger entry and reduces debt or adds credit', async () => {
+  const customerStore = [
+    { customer_id: 1, name: 'Alice Smith', balance: -2000, credit_limit_cents: 2500 } // owes $20.00
+  ];
+  const tabPaymentStore = [];
+  const ledgerStore = [];
+  const auditStore = [];
+
+  const mockDb = {
+    async runTransaction(storeNames, mode, callback) {
+      const tx = {
+        objectStore(name) {
+          return {
+            get(id) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              setTimeout(() => {
+                req.result = customerStore.find(c => c.customer_id === id) || null;
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            },
+            add(record) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              setTimeout(() => {
+                if (name === 'tab_payments') {
+                  const id = tabPaymentStore.length + 1;
+                  tabPaymentStore.push({ ...record, payment_id: id });
+                  req.result = id;
+                } else if (name === 'customer_ledger') {
+                  const id = ledgerStore.length + 1;
+                  ledgerStore.push({ ...record, entry_id: id });
+                  req.result = id;
+                } else if (name === 'audit_log') {
+                  const id = auditStore.length + 1;
+                  auditStore.push({ ...record, audit_id: id });
+                  req.result = id;
+                }
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            },
+            put(record) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              setTimeout(() => {
+                const idx = customerStore.findIndex(c => c.customer_id === record.customer_id);
+                if (idx >= 0) customerStore[idx] = record;
+                req.result = record.customer_id;
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            }
+          };
+        }
+      };
+      return await callback(tx);
+    }
+  };
+
+  const repo = new PosRepository(mockDb);
+
+  // Pay $30.00 on a -$20.00 debt balance => leaves +$10.00 store credit
+  const paymentId = await repo.recordCustomerPayment(1, 3000, 'CASH', null, 'Full payment with overpayment');
+
+  assert.ok(paymentId);
+  assert.equal(customerStore[0].balance, 1000); // +$10.00 store credit
+  assert.equal(tabPaymentStore.length, 1);
+  assert.equal(tabPaymentStore[0].amount_paid_cents, 3000);
+  assert.equal(ledgerStore.length, 1);
+  assert.equal(ledgerStore[0].amount_cents, 3000);
+  assert.equal(ledgerStore[0].type, 'PAYMENT_RECEIVED');
+  assert.equal(auditStore.length, 1);
+});
+
+test('Customer balance always strictly equals the sum of ledger entries', async () => {
+  const customer = { customer_id: 1, name: 'Alice Smith', balance: 0 };
+  const ledgerEntries = [
+    { entry_id: 1, customer_id: 1, amount_cents: -5000, type: 'SALE_DEBT', created_at: 1000 },
+    { entry_id: 2, customer_id: 1, amount_cents: 3000, type: 'PAYMENT_RECEIVED', created_at: 2000 },
+    { entry_id: 3, customer_id: 1, amount_cents: 1500, type: 'PREPAYMENT_CREDIT', created_at: 3000 },
+    { entry_id: 4, customer_id: 1, amount_cents: -500, type: 'BALANCE_ADJUSTMENT', created_at: 4000 }
+  ];
+
+  // Sum of ledger: -5000 + 3000 + 1500 - 500 = -1000 ($10.00 debt)
+  customer.balance = -1000;
+
+  const mockDb = {
+    async getById(store, id) {
+      if (store === 'customers' && id === 1) return customer;
+      return null;
+    },
+    async getAllByIndex(store, indexName, value) {
+      if (store === 'customer_ledger') return ledgerEntries.filter(e => e.customer_id === value);
+      return [];
+    }
+  };
+
+  const repo = new PosRepository(mockDb);
+  const verification = await repo.verifyCustomerBalance(1);
+  const derived = await repo.deriveCustomerBalance(1);
+
+  assert.equal(verification.is_valid, true);
+  assert.equal(verification.current_balance, -1000);
+  assert.equal(verification.ledger_sum, -1000);
+  assert.equal(verification.discrepancy, 0);
+  assert.equal(derived, -1000);
+
+  // Chronological ledger check
+  const ledger = await repo.getCustomerLedger(1);
+  assert.equal(ledger.length, 4);
+  assert.equal(ledger[0].running_balance_cents, -1000); // latest running balance
+  assert.equal(ledger[3].running_balance_cents, -5000); // initial running balance
 });
 

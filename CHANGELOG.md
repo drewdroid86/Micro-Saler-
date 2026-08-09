@@ -5,6 +5,19 @@ All notable changes to the **Micro Saler POS** project will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-08-09
+
+### 🚀 Added
+- **Customer Balance Tracking (Credit & Debt)**:
+  - Comprehensive customer financial balance engine tracking House Tab debt (`current_balance_cents > 0`), Store Credit balances (`current_balance_cents < 0`), active prepayments/backorders, available credit line, and utilization percentage.
+  - New `calculateCustomerBalance` helper function returning structured debt, store credit, prepaid credit, available credit line, utilization, and formatted currency.
+  - **Customer Balance Adjustments (`adjustCustomerBalance`)**: Issue store credit, charge tab debt, or set exact target balances with structured reason categories and audit logging.
+  - **Full Financial Customer Ledger (`customerLedger`)**: Chronological audit trail aggregating sales with tab charges, tab settlements, prepayments, and manual adjustments with real-time running debt/credit calculations.
+  - **Upgraded Customer Screen**: Top financial summary KPI metrics (Total Receivables / Debt, Store Credit Held, Pending Prepayments, Net Account Position), search and filter chips (`All`, `Owes Debt`, `Store Credit`, `Prepayments`, `Settled`), rich customer cards with visual balance boxes and available credit indicators.
+  - **Enhanced Settle Tab & Autocomplete**: Overpayment support automatically allocating excess settlement funds to Store Credit, and dual Debt/Credit pill indicators across checkout and autocomplete.
+
+---
+
 ## [1.3.0] - 2026-07-30
 
 ### 🚀 Added

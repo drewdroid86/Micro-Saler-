@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { formatCents, filterCustomers } from '../repository';
+import { formatCents, filterCustomers, calculateCustomerBalance } from '../repository';
 
 /**
  * Highlight matched search query in text
@@ -213,11 +213,24 @@ export const CustomerAutocomplete = ({
           >
             <span className="customer-pill-icon">👤</span>
             <span className="customer-pill-name">{selectedCustomer.name}</span>
-            {selectedCustomer.current_balance_cents > 0 && (
-              <span className="customer-pill-bal text-error" title="Current tab balance">
-                ({formatCents(selectedCustomer.current_balance_cents)})
-              </span>
-            )}
+            {(() => {
+              const b = calculateCustomerBalance(selectedCustomer);
+              if (b.hasDebt) {
+                return (
+                  <span className="customer-pill-bal text-error" title="Customer owes money (debt)">
+                    (Debt: -{formatCents(b.debtCents)})
+                  </span>
+                );
+              }
+              if (b.hasStoreCredit) {
+                return (
+                  <span className="customer-pill-bal text-success" title="Customer has store credit">
+                    (Credit: +{formatCents(b.storeCreditCents)})
+                  </span>
+                );
+              }
+              return null;
+            })()}
             {selectedPrepaymentCount > 0 && (
               <span className="customer-pill-prepay badge badge-good-standing" title="Active prepaid orders">
                 📦 {selectedPrepaymentCount}
@@ -397,9 +410,18 @@ export const CustomerAutocomplete = ({
                 </div>
 
                 <div className="customer-item-balance-col text-right">
-                  <span className={`customer-item-bal ${hasBalance ? 'text-error font-weight-bold' : 'text-muted'}`}>
-                    Bal: {formatCents(c.current_balance_cents || 0)}
-                  </span>
+                  {(() => {
+                    const b = calculateCustomerBalance(c);
+                    return (
+                      <span className={`customer-item-bal ${b.hasDebt ? 'text-error font-weight-bold' : b.hasStoreCredit ? 'text-success font-weight-bold' : 'text-muted'}`}>
+                        {b.hasDebt
+                          ? `Debt: -${formatCents(b.debtCents)}`
+                          : b.hasStoreCredit
+                          ? `Credit: +${formatCents(b.storeCreditCents)}`
+                          : 'Bal: $0.00'}
+                      </span>
+                    );
+                  })()}
                   {c.credit_limit_cents > 0 && (
                     <span className="customer-item-limit text-muted">
                       Limit: {formatCents(c.credit_limit_cents)}

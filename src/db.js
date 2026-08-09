@@ -5,7 +5,7 @@
  */
 
 const DB_NAME = 'MicroSalerDB';
-export const DB_VERSION = 9;
+export const DB_VERSION = 10;
 
 export default class MicroSalerDB {
   constructor() {
@@ -54,6 +54,23 @@ export default class MicroSalerDB {
                   const record = cursor.value;
                   if (!record.sale_type) {
                     record.sale_type = record.pricing_mode || 'RETAIL';
+                    cursor.update(record);
+                  }
+                  cursor.continue();
+                }
+              };
+            }
+          }
+
+          if (event.oldVersion < 10) {
+            if (db.objectStoreNames.contains('customers')) {
+              const custStore = transaction.objectStore('customers');
+              custStore.openCursor().onsuccess = (cursorEvent) => {
+                const cursor = cursorEvent.target.result;
+                if (cursor) {
+                  const record = cursor.value;
+                  if (record.balance === undefined) {
+                    record.balance = 0;
                     cursor.update(record);
                   }
                   cursor.continue();
@@ -181,6 +198,13 @@ export default class MicroSalerDB {
       store.createIndex('customer_id', 'customer_id', { unique: false });
       store.createIndex('status', 'status', { unique: false });
       store.createIndex('created_at', 'created_at', { unique: false });
+    }
+
+    if (!db.objectStoreNames.contains('customer_ledger')) {
+      const store = db.createObjectStore('customer_ledger', { keyPath: 'entry_id', autoIncrement: true });
+      store.createIndex('customer_id', 'customer_id', { unique: false });
+      store.createIndex('created_at', 'created_at', { unique: false });
+      store.createIndex('sale_id', 'sale_id', { unique: false });
     }
   }
 
@@ -425,6 +449,7 @@ export default class MicroSalerDB {
       'suppliers',
       'supplier_payments',
       'customers',
+      'customer_ledger',
       'customer_prepayments',
       'sales',
       'sale_payments',
@@ -510,6 +535,7 @@ export default class MicroSalerDB {
       'suppliers',
       'supplier_payments',
       'customers',
+      'customer_ledger',
       'customer_prepayments',
       'sales',
       'sale_payments',
