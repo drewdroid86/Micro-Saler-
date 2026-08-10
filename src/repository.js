@@ -2380,7 +2380,7 @@ export class PosRepository {
 
       const oldPayments = await this.db.getAllByIndex('sale_payments', 'sale_id', sId);
 
-      // Compute tab delta before transaction so we know what ledger entry to write
+      // Compute customer balance delta (both HOUSE_TAB debt and STORE_CREDIT draw from customer balance)
       const oldTabTotalCents = oldPayments
         .filter(p => p.payment_type === 'HOUSE_TAB')
         .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
@@ -2388,6 +2388,16 @@ export class PosRepository {
         .filter(p => p.payment_type === 'HOUSE_TAB')
         .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
       const tabDeltaCents = newTabTotalCents - oldTabTotalCents;
+
+      const oldCreditTotalCents = oldPayments
+        .filter(p => p.payment_type === 'STORE_CREDIT' || p.payment_type === 'PREPAID_DELIVERY')
+        .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+      const newCreditTotalCents = payments
+        .filter(p => p.payment_type === 'STORE_CREDIT' || p.payment_type === 'PREPAID_DELIVERY')
+        .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+      const creditDeltaCents = newCreditTotalCents - oldCreditTotalCents;
+
+      const totalBalanceDeltaCents = -(tabDeltaCents + creditDeltaCents);
 
       await this.db.runTransaction(
         ['sale_payments', 'sales', 'customers', 'customer_ledger', 'audit_log'],
@@ -2415,13 +2425,13 @@ export class PosRepository {
             });
           }
 
-          // Rebalance customer tab via ledger (keeps both balance fields in sync)
-          if (tabDeltaCents !== 0 && sale.customer_id) {
+          // Rebalance customer balance via ledger (keeps both balance fields in sync)
+          if (totalBalanceDeltaCents !== 0 && sale.customer_id) {
             await this._applyLedgerEntryInTx(tx, {
               customerId: Number(sale.customer_id),
-              amountCents: -tabDeltaCents, // Negative = more debt when tab increases
+              amountCents: totalBalanceDeltaCents,
               type: 'RECONCILIATION_ADJUSTMENT',
-              description: `Payment correction for Sale #${sId} (tab delta: ${tabDeltaCents})`,
+              description: `Payment correction for Sale #${sId} (tab delta: ${tabDeltaCents}, credit delta: ${creditDeltaCents})`,
               saleId: sId,
               timestamp: now
             });

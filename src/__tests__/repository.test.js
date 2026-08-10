@@ -1654,6 +1654,55 @@ test('reconcileSaleRecord CORRECT_PAYMENT rebalances tab via ledger without dual
   assert.equal(updatedSale.reconciliation_status, 'RECONCILED');
 });
 
+test('reconcileSaleRecord CORRECT_PAYMENT correctly adjusts customer balance when correcting STORE_CREDIT', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  // Customer initially has $50.00 store credit (balance = 5000)
+  mockDb.stores.customers.set(1, { customer_id: 1, name: 'Dana', balance: 5000, current_balance_cents: -5000 });
+
+  const saleId = 301;
+  mockDb.stores.sales.set(saleId, {
+    sale_id: saleId,
+    customer_id: 1,
+    status: 'COMPLETED',
+    total_amount_cents: 2000,
+    needs_reconciliation: true
+  });
+
+  mockDb.stores.sale_items.set(1, {
+    id: 1,
+    sale_id: saleId,
+    pigment_id: 1,
+    weight_mg: 2000,
+    price_charged_cents: 2000,
+    unit_cogs_cents: 100
+  });
+
+  // Old payment was mistakenly entered as CASH $20
+  mockDb.stores.sale_payments.set(1, {
+    payment_id: 1,
+    sale_id: saleId,
+    payment_type: 'CASH',
+    amount_cents: 2000,
+    merchant_fee_cents: 0
+  });
+
+  // Correct payment to STORE_CREDIT $20 (customer spends $20 store credit)
+  await repo.reconcileSaleRecord(saleId, 'CORRECT_PAYMENT', {
+    payments: [{ payment_type: 'STORE_CREDIT', amount_cents: 2000, merchant_fee_cents: 0 }]
+  });
+
+  const updatedCustomer = mockDb.stores.customers.get(1);
+  // Balance should decrease from $50 to $30 (balance = 3000, current_balance_cents = -3000)
+  assert.equal(updatedCustomer.balance, 3000);
+  assert.equal(updatedCustomer.current_balance_cents, -3000);
+
+  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values());
+  assert.equal(ledgerEntries.length, 1);
+  assert.equal(ledgerEntries[0].amount_cents, -2000);
+});
+
 test('fulfillCustomerPrepayment links sale and voidSale restores prepayment status to PENDING_DELIVERY', async () => {
   const mockDb = createMockDatabase();
   const repo = new PosRepository(mockDb);
