@@ -15,6 +15,16 @@ export const PricingCalculatorScreen = () => {
   // Custom Weight Quick-Add state
   const [customWeightGrams, setCustomWeightGrams] = useState('10');
 
+  const handleSetCalcMode = (mode) => {
+    setCalcMode(mode);
+    if (mode === 'margin') {
+      const current = parseFloat(targetPercentInput);
+      if (isNaN(current) || current >= 100) {
+        setTargetPercentInput('50');
+      }
+    }
+  };
+
   // When a pigment is selected, auto-fill its cost per gram (WAC)
   const handlePigmentSelect = (e) => {
     const id = e.target.value;
@@ -205,7 +215,7 @@ export const PricingCalculatorScreen = () => {
                 <button
                   type="button"
                   className={`toggle-option ${calcMode === 'margin' ? 'active' : ''}`}
-                  onClick={() => setCalcMode('margin')}
+                  onClick={() => handleSetCalcMode('margin')}
                   style={{ padding: '4px 10px', fontSize: '12px' }}
                 >
                   Margin %
@@ -213,7 +223,7 @@ export const PricingCalculatorScreen = () => {
                 <button
                   type="button"
                   className={`toggle-option ${calcMode === 'markup' ? 'active' : ''}`}
-                  onClick={() => setCalcMode('markup')}
+                  onClick={() => handleSetCalcMode('markup')}
                   style={{ padding: '4px 10px', fontSize: '12px' }}
                 >
                   Markup %
@@ -240,8 +250,13 @@ export const PricingCalculatorScreen = () => {
         {/* Quick Percent Presets */}
         <div className="mt-md pt-sm" style={{ borderTop: '1px solid var(--market-border-light)' }}>
           <div className="preset-pills-container flex-wrap gap-xs align-center">
-            <span className="label-small text-muted" style={{ marginRight: '8px' }}>Target Presets:</span>
-            {[25, 33, 50, 60, 70, 75, 100, 150, 200].map(val => (
+            <span className="label-small text-muted" style={{ marginRight: '8px' }}>
+              {calcMode === 'margin' ? 'Margin Presets (<100%):' : 'Markup Presets:'}
+            </span>
+            {(calcMode === 'margin'
+              ? [20, 30, 40, 50, 60, 70, 75, 80, 90]
+              : [25, 50, 75, 100, 150, 200, 300, 400]
+            ).map(val => (
               <button
                 key={val}
                 type="button"
@@ -296,7 +311,7 @@ export const PricingCalculatorScreen = () => {
                     </span>
                   </td>
                   <td className={row.profitCents >= 0 ? 'text-success font-bold' : 'text-error font-bold'}>
-                    +{formatCents(row.profitCents)}
+                    {row.profitCents >= 0 ? '+' : ''}{formatCents(row.profitCents)}
                   </td>
                 </tr>
               ))}
@@ -332,7 +347,9 @@ export const PricingCalculatorScreen = () => {
             </div>
             <div className="stat-card p-sm" style={{ background: '#fff', borderRadius: 'var(--radius-md)', flex: 1 }}>
               <div className="label-small text-muted">Profit ($)</div>
-              <div className="title-medium font-bold text-success">+{formatCents(customCalc.profitCents)}</div>
+              <div className={`title-medium font-bold ${customCalc.profitCents >= 0 ? 'text-success' : 'text-error'}`}>
+                {customCalc.profitCents >= 0 ? '+' : ''}{formatCents(customCalc.profitCents)}
+              </div>
             </div>
           </div>
 

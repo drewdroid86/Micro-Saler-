@@ -111,6 +111,8 @@ export const ModalManager = () => {
   const [prepaymentPigmentId, setPrepaymentPigmentId] = useState('');
   const [prepaymentWeightG, setPrepaymentWeightG] = useState('');
   const [prepaymentAmountD, setPrepaymentAmountD] = useState('');
+  const [prepaymentPaymentType, setPrepaymentPaymentType] = useState('CASH'); // 'CASH' | 'DIGITAL' | 'UNPAID'
+  const [prepaymentDigitalProvider, setPrepaymentDigitalProvider] = useState('Square');
   const [prepaymentStatus, setPrepaymentStatus] = useState('PENDING_DELIVERY');
   const [prepaymentNotes, setPrepaymentNotes] = useState('');
   const [custStatus, setCustStatus] = useState('GOOD_STANDING');
@@ -171,6 +173,12 @@ export const ModalManager = () => {
     setPigmentCost('');
     setPigmentRetail('');
     setPigmentWholesale('');
+
+    setPrepaymentWeightG('');
+    setPrepaymentAmountD('');
+    setPrepaymentPaymentType('CASH');
+    setPrepaymentDigitalProvider('Square');
+    setPrepaymentStatus('PENDING_DELIVERY');
 
     setEditName('');
     setEditColor('#000000');
@@ -801,6 +809,8 @@ export const ModalManager = () => {
         pigment_name: selPigment ? selPigment.name : '',
         weight_mg: Math.round(wG * 1000),
         amount_cents: Math.round(amtD * 100),
+        payment_type: prepaymentPaymentType,
+        digital_provider: prepaymentPaymentType === 'DIGITAL' ? prepaymentDigitalProvider : null,
         status: prepaymentStatus,
         notes: prepaymentNotes
       });
@@ -2950,6 +2960,49 @@ export const ModalManager = () => {
                     min="0"
                   />
                 </div>
+              </div>
+
+              <div className="form-group mb-sm">
+                <label className="form-label">Payment Tender / Deposit Collected</label>
+                <div className="flex-center gap-xs mb-xs">
+                  <button
+                    type="button"
+                    className={`btn btn-sm flex-1 ${prepaymentPaymentType === 'CASH' ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setPrepaymentPaymentType('CASH')}
+                  >
+                    💵 Cash Deposit
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm flex-1 ${prepaymentPaymentType === 'DIGITAL' ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setPrepaymentPaymentType('DIGITAL')}
+                  >
+                    💳 Digital
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm flex-1 ${prepaymentPaymentType === 'UNPAID' ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setPrepaymentPaymentType('UNPAID')}
+                  >
+                    ⚡ Unpaid / Promise
+                  </button>
+                </div>
+
+                {prepaymentPaymentType === 'DIGITAL' && (
+                  <div className="flex-center gap-xs mt-xs">
+                    {['Square', 'Venmo', 'Zelle'].map(provider => (
+                      <button
+                        key={provider}
+                        type="button"
+                        className={`btn btn-sm flex-1 ${prepaymentDigitalProvider === provider ? 'btn-secondary' : 'btn-ghost'}`}
+                        onClick={() => setPrepaymentDigitalProvider(provider)}
+                        style={{ fontSize: '11px', padding: '3px 6px' }}
+                      >
+                        {provider}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="form-group mb-sm">

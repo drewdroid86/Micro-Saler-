@@ -406,6 +406,15 @@ export class PosRepository {
 
   async restockPigment(pigmentId, receivedMg, totalCostCents, supplierName, paymentStatus = 'PAID', supplierId = null, paidDownCents = 0) {
     const pId = Number(pigmentId);
+    const validReceivedMg = Number(receivedMg);
+    const validTotalCostCents = Number(totalCostCents);
+    if (!validReceivedMg || validReceivedMg <= 0 || isNaN(validReceivedMg)) {
+      throw new Error('Received stock weight must be greater than 0');
+    }
+    if (isNaN(validTotalCostCents) || validTotalCostCents < 0) {
+      throw new Error('Total restock cost cannot be negative');
+    }
+
     return await this.db.runTransaction(
       ['pigments', 'stock_receipts', 'suppliers', 'supplier_payments'],
       'readwrite',
@@ -776,7 +785,14 @@ export class PosRepository {
       const tabAmount = payments
         .filter(p => p.payment_type === 'HOUSE_TAB')
         .reduce((sum, p) => sum + p.amount_cents, 0);
-      const availableCredit = Math.max(0, customer.credit_limit_cents - customer.current_balance_cents);
+
+      let customerPrepayments = [];
+      try {
+        customerPrepayments = await this.db.getAll('customer_prepayments');
+      } catch (_) {}
+
+      const balInfo = calculateCustomerBalance(customer, customerPrepayments);
+      const availableCredit = balInfo.availableCreditCents;
 
       if (tabAmount > availableCredit && !isCreditOverride) {
         throw new Error(`Credit limit exceeded. Available: $${(availableCredit/100).toFixed(2)}, Requested: $${(tabAmount/100).toFixed(2)}. Enable Handshake Override.`);
@@ -859,21 +875,25 @@ export class PosRepository {
       });
 
       // 4. Write sale_items and accumulate pigment stock deductions against
-      // the single shared pigment instance for that pigment_id.
+      // the single shared pigment instance for that pigment_id with live WAC COGS.
       for (const item of items) {
         const pId = Number(item.pigment_id);
         if (pId > 0) {
+          const pigment = pigmentCache.get(pId);
+          const liveUnitCogs = pigment && pigment.stock_mg > 0
+            ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * item.weight_mg)
+            : (item.unit_cogs_cents || 0);
+
           saleItemsStore.add({
             sale_id: createdSaleId,
             pigment_id: pId,
             weight_mg: item.weight_mg,
             price_charged_cents: item.price_charged_cents,
-            unit_cogs_cents: item.unit_cogs_cents,
+            unit_cogs_cents: liveUnitCogs,
           });
 
-          const pigment = pigmentCache.get(pId);
           pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
-          pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - item.unit_cogs_cents);
+          pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - liveUnitCogs);
         }
       }
 
@@ -1512,12 +1532,19 @@ export class PosRepository {
       ? Number(customer.balance)
       : (customer.current_balance_cents !== undefined ? -Number(customer.current_balance_cents) : 0);
 
+    const legacyDebt = Number(customer.current_balance_cents) || 0;
+    const hasDualFieldDrift = (customer.balance !== undefined && customer.current_balance_cents !== undefined)
+      ? (customerBal !== -legacyDebt)
+      : false;
+
     return {
       customer_id: cId,
       customer_name: customer.name,
       current_balance: customerBal,
+      legacy_debt_cents: legacyDebt,
       ledger_sum: ledgerSum,
-      is_valid: customerBal === ledgerSum,
+      has_dual_field_drift: hasDualFieldDrift,
+      is_valid: customerBal === ledgerSum && !hasDualFieldDrift,
       discrepancy: customerBal - ledgerSum,
       entries_count: (entries || []).length
     };
@@ -1897,6 +1924,12 @@ export class PosRepository {
   async createCustomerPrepayment(data) {
     if (!data.customer_id) throw new Error('Customer is required');
     const now = Date.now();
+    const paymentType = data.payment_type || 'CASH';
+    const digitalProvider = data.digital_provider || null;
+    const merchantFeeCents = data.merchant_fee_cents !== undefined
+      ? Number(data.merchant_fee_cents) || 0
+      : (paymentType === 'DIGITAL' ? calculateMerchantFeeCents(digitalProvider, Number(data.amount_cents) || 0) : 0);
+
     const record = {
       customer_id: Number(data.customer_id),
       pigment_id: data.pigment_id ? Number(data.pigment_id) : null,
@@ -1904,6 +1937,9 @@ export class PosRepository {
       weight_mg: data.weight_mg || 0,
       amount_cents: data.amount_cents || 0,
       status: data.status || 'PENDING_DELIVERY',
+      payment_type: paymentType,
+      digital_provider: digitalProvider,
+      merchant_fee_cents: merchantFeeCents,
       notes: data.notes || '',
       created_at: now,
     };
@@ -1913,7 +1949,14 @@ export class PosRepository {
       entity_type: 'CustomerPrepayment',
       entity_id: Number(prepaymentId),
       action: 'CREATE_PREPAYMENT',
-      details_json: JSON.stringify({ customer_id: data.customer_id, weight_mg: data.weight_mg, amount_cents: data.amount_cents }),
+      details_json: JSON.stringify({
+        customer_id: data.customer_id,
+        weight_mg: data.weight_mg,
+        amount_cents: data.amount_cents,
+        payment_type: paymentType,
+        digital_provider: digitalProvider,
+        merchant_fee_cents: merchantFeeCents
+      }),
       created_at: now,
       timestamp: now,
     });

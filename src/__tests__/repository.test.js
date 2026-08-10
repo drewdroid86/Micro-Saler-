@@ -1766,5 +1766,101 @@ test('completeSale respects individual pricingMode override per transaction', as
   assert.equal(wholesaleSale.pricing_mode, 'WHOLESALE');
 });
 
+test('restockPigment guards against invalid zero/negative weight and negative cost', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  mockDb.stores.pigments.set(1, { pigment_id: 1, name: 'Red', stock_mg: 1000, total_cost_cents: 100 });
+
+  await assert.rejects(
+    async () => repo.restockPigment(1, 0, 500, 'Supplier A'),
+    /Received stock weight must be greater than 0/
+  );
+
+  await assert.rejects(
+    async () => repo.restockPigment(1, -500, 500, 'Supplier A'),
+    /Received stock weight must be greater than 0/
+  );
+
+  await assert.rejects(
+    async () => repo.restockPigment(1, 5000, -100, 'Supplier A'),
+    /Total restock cost cannot be negative/
+  );
+});
+
+test('verifyCustomerBalance detects dual-field drift between balance and current_balance_cents', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  // Customer with drifted balance: balance says +$20 credit, but legacy field says $10 debt (drift!)
+  mockDb.stores.customers.set(1, {
+    customer_id: 1,
+    name: 'Drifting Customer',
+    balance: 2000,
+    current_balance_cents: 1000
+  });
+
+  const res = await repo.verifyCustomerBalance(1);
+  assert.equal(res.has_dual_field_drift, true);
+  assert.equal(res.is_valid, false);
+});
+
+test('completeSale tab credit check folds active prepayments into unified credit exposure', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  // Customer with $50 credit limit, zero debt
+  mockDb.stores.customers.set(1, {
+    customer_id: 1,
+    name: 'Eve',
+    balance: 0,
+    current_balance_cents: 0,
+    credit_limit_cents: 5000
+  });
+  mockDb.stores.pigments.set(1, { pigment_id: 1, name: 'Gold', stock_mg: 50000, total_cost_cents: 1000 });
+
+  // Add $40 unfulfilled prepayment credit/order
+  mockDb.stores.customer_prepayments.set(1, {
+    prepayment_id: 1,
+    customer_id: 1,
+    pigment_id: 1,
+    weight_mg: 5000,
+    amount_cents: 4000,
+    status: 'PENDING_DELIVERY'
+  });
+
+  const cart = [{
+    pigment_id: 1,
+    weight_mg: 5000,
+    price_charged_cents: 3000,
+    unit_cogs_cents: 100
+  }];
+
+  // Attempting $30 HOUSE_TAB sale when available credit is $50 limit + $40 prepay credit = $90
+  const saleId = await repo.completeSale(1, cart, [{ payment_type: 'HOUSE_TAB', amount_cents: 3000, merchant_fee_cents: 0 }]);
+  assert.ok(saleId);
+});
+
+test('createCustomerPrepayment persists payment tender method and digital provider', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const prepId = await repo.createCustomerPrepayment({
+    customer_id: 1,
+    pigment_id: 1,
+    weight_mg: 10000,
+    amount_cents: 5000,
+    payment_type: 'DIGITAL',
+    digital_provider: 'Square'
+  });
+
+  const prep = mockDb.stores.customer_prepayments.get(prepId);
+  assert.ok(prep);
+  assert.equal(prep.payment_type, 'DIGITAL');
+  assert.equal(prep.digital_provider, 'Square');
+  assert.equal(prep.merchant_fee_cents, 140); // Square: 2.6% of $50 = $1.30 + $0.10 = $1.40 (140 cents)
+});
+
+
 
 
