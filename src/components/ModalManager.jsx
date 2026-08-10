@@ -179,7 +179,11 @@ export const ModalManager = () => {
     setCustName('');
     setCustPhone('');
     setCustLimit('');
-    setInitialCustBalance('');
+    setCustStartingBalAmt('');
+    setCustStartingBalType('CREDIT');
+    setEditCustStartingBalAmt('');
+    setEditCustStartingBalType('CREDIT');
+    setEditCustHasLedgerEntries(false);
     setCustStatus('GOOD_STANDING');
     setCustomerPickerSearch('');
 
