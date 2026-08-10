@@ -1555,62 +1555,136 @@ test('completeSale accepts STORE_CREDIT and deducts from customer balance via le
   const mockDb = createMockDatabase();
   const repo = new PosRepository(mockDb);
 
-  // Seed customer with $50.00 store credit (balance = +5000)
-  mockDb.stores.customers.set(1, { customer_id: 1, name: 'Alice', balance: 5000, current_balance_cents: -5000, credit_limit_cents: 10000 });
+  // Create customer with $50.00 store credit (balance = +5000)
+  const custId = await repo.createCustomer({
+    name: 'Alice',
+    phone_number: '555-0101',
+    initial_balance_cents: 5000,
+    credit_limit_cents: 10000
+  });
+
   mockDb.stores.pigments.set(1, { pigment_id: 1, name: 'Blue', stock_mg: 50000, total_cost_cents: 2500 });
 
   const saleId = await repo.completeSale(
-    1,
+    custId,
     [{ pigment_id: 1, weight_mg: 5000, price_charged_cents: 2000, unit_cogs_cents: 250 }],
     [{ payment_type: 'STORE_CREDIT', amount_cents: 2000, digital_provider: null, merchant_fee_cents: 0 }]
   );
 
   assert.ok(saleId);
-  const updatedCustomer = mockDb.stores.customers.get(1);
+  const sale = mockDb.stores.sales.get(saleId);
+  assert.equal(sale.status, 'COMPLETED');
+  assert.equal(sale.total_amount_cents, 2000);
+
+  const salePayments = Array.from(mockDb.stores.sale_payments.values()).filter(p => p.sale_id === saleId);
+  assert.equal(salePayments.length, 1);
+  assert.equal(salePayments[0].payment_type, 'STORE_CREDIT');
+  assert.equal(salePayments[0].amount_cents, 2000);
+  assert.equal(salePayments[0].merchant_fee_cents, 0);
+
+  const updatedCustomer = mockDb.stores.customers.get(custId);
   assert.equal(updatedCustomer.balance, 3000); // 5000 - 2000 = 3000 credit remaining
   assert.equal(updatedCustomer.current_balance_cents, -3000);
 
-  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values());
-  assert.equal(ledgerEntries.length, 1);
-  assert.equal(ledgerEntries[0].type, 'SALE_CREDIT_APPLIED');
-  assert.equal(ledgerEntries[0].amount_cents, -2000);
+  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values()).filter(e => e.customer_id === custId);
+  assert.equal(ledgerEntries.length, 2); // opening_balance + SALE_CREDIT_APPLIED
+  const saleEntry = ledgerEntries.find(e => e.type === 'SALE_CREDIT_APPLIED');
+  assert.ok(saleEntry);
+  assert.equal(saleEntry.amount_cents, -2000);
+  assert.equal(saleEntry.sale_id, saleId);
+
+  const verify = await repo.verifyCustomerBalance(custId);
+  assert.equal(verify.has_dual_field_drift, false);
+  assert.equal(verify.is_valid, true);
+  assert.equal(verify.ledger_sum, 3000);
+});
+
+test('completeSale accepts split tender combining STORE_CREDIT, CASH, and DIGITAL', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const custId = await repo.createCustomer({
+    name: 'Alice',
+    initial_balance_cents: 2000
+  });
+  mockDb.stores.pigments.set(1, { pigment_id: 1, name: 'Blue', stock_mg: 50000, total_cost_cents: 2500 });
+
+  // Total sale: $50.00 split into $20 STORE_CREDIT + $20 CASH + $10 DIGITAL (Square)
+  const payments = [
+    { payment_type: 'STORE_CREDIT', amount_cents: 2000, digital_provider: null, merchant_fee_cents: 0 },
+    { payment_type: 'CASH', amount_cents: 2000, digital_provider: null, merchant_fee_cents: 0 },
+    { payment_type: 'DIGITAL', amount_cents: 1000, digital_provider: 'Square', merchant_fee_cents: 36 }
+  ];
+
+  const saleId = await repo.completeSale(
+    custId,
+    [{ pigment_id: 1, weight_mg: 10000, price_charged_cents: 5000, unit_cogs_cents: 500 }],
+    payments
+  );
+
+  assert.ok(saleId);
+  const updatedCustomer = mockDb.stores.customers.get(custId);
+  assert.equal(updatedCustomer.balance, 0); // 2000 credit exhausted
+  assert.equal(updatedCustomer.current_balance_cents, 0);
+
+  const salePayments = Array.from(mockDb.stores.sale_payments.values()).filter(p => p.sale_id === saleId);
+  assert.equal(salePayments.length, 3);
+  assert.equal(salePayments.find(p => p.payment_type === 'STORE_CREDIT').amount_cents, 2000);
+  assert.equal(salePayments.find(p => p.payment_type === 'CASH').amount_cents, 2000);
+  assert.equal(salePayments.find(p => p.payment_type === 'DIGITAL').amount_cents, 1000);
+
+  const verify = await repo.verifyCustomerBalance(custId);
+  assert.equal(verify.has_dual_field_drift, false);
+  assert.equal(verify.is_valid, true);
 });
 
 test('voidSale restores STORE_CREDIT payments back to customer ledger balance', async () => {
   const mockDb = createMockDatabase();
   const repo = new PosRepository(mockDb);
 
-  mockDb.stores.customers.set(1, { customer_id: 1, name: 'Alice', balance: 3000, current_balance_cents: -3000 });
+  const custId = await repo.createCustomer({
+    name: 'Alice',
+    initial_balance_cents: 3000
+  });
   mockDb.stores.pigments.set(1, { pigment_id: 1, name: 'Blue', stock_mg: 45000, total_cost_cents: 2250 });
 
   const saleId = 101;
-  mockDb.stores.sales.set(saleId, { sale_id: saleId, customer_id: 1, status: 'COMPLETED', total_amount_cents: 2000 });
+  mockDb.stores.sales.set(saleId, { sale_id: saleId, customer_id: custId, status: 'COMPLETED', total_amount_cents: 2000 });
   mockDb.stores.sale_items.set(1, { id: 1, sale_id: saleId, pigment_id: 1, weight_mg: 5000, unit_cogs_cents: 250 });
   mockDb.stores.sale_payments.set(1, { payment_id: 1, sale_id: saleId, payment_type: 'STORE_CREDIT', amount_cents: 2000 });
 
   await repo.voidSale(saleId, 'Wrong product selected');
 
-  const updatedCustomer = mockDb.stores.customers.get(1);
+  const updatedCustomer = mockDb.stores.customers.get(custId);
   assert.equal(updatedCustomer.balance, 5000); // 3000 + 2000 restored
   assert.equal(updatedCustomer.current_balance_cents, -5000);
 
-  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values());
-  assert.equal(ledgerEntries.length, 1);
-  assert.equal(ledgerEntries[0].type, 'SALE_VOID_CREDIT_REFUND');
-  assert.equal(ledgerEntries[0].amount_cents, 2000);
+  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values()).filter(e => e.customer_id === custId);
+  assert.equal(ledgerEntries.length, 2); // opening + refund
+  const refundEntry = ledgerEntries.find(e => e.type === 'SALE_VOID_CREDIT_REFUND');
+  assert.ok(refundEntry);
+  assert.equal(refundEntry.amount_cents, 2000);
+
+  const verify = await repo.verifyCustomerBalance(custId);
+  assert.equal(verify.has_dual_field_drift, false);
+  assert.equal(verify.is_valid, true);
+  assert.equal(verify.ledger_sum, 5000);
 });
 
-test('reconcileSaleRecord CORRECT_PAYMENT rebalances tab via ledger without dual-field drift', async () => {
+test('reconcileSaleRecord CORRECT_PAYMENT rebalances tab via ledger without creating dual-field drift', async () => {
   const mockDb = createMockDatabase();
   const repo = new PosRepository(mockDb);
 
-  // Customer initially owes $10.00 (balance = -1000, current_balance_cents = 1000)
-  mockDb.stores.customers.set(1, { customer_id: 1, name: 'Charlie', balance: -1000, current_balance_cents: 1000 });
+  // Customer initially owes $10.00 (debt = 1000, balance = -1000)
+  const custId = await repo.createCustomer({
+    name: 'Charlie',
+    initial_balance_cents: -1000
+  });
 
   const saleId = 201;
   mockDb.stores.sales.set(saleId, {
     sale_id: saleId,
-    customer_id: 1,
+    customer_id: custId,
     status: 'COMPLETED',
     total_amount_cents: 5000,
     needs_reconciliation: true
@@ -1639,19 +1713,27 @@ test('reconcileSaleRecord CORRECT_PAYMENT rebalances tab via ledger without dual
     payments: [{ payment_type: 'HOUSE_TAB', amount_cents: 5000, merchant_fee_cents: 0 }]
   });
 
-  const updatedCustomer = mockDb.stores.customers.get(1);
+  const updatedCustomer = mockDb.stores.customers.get(custId);
   // Both fields must stay strictly in sync: debt increased from $10 to $30
   assert.equal(updatedCustomer.balance, -3000);
   assert.equal(updatedCustomer.current_balance_cents, 3000);
 
-  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values());
-  assert.equal(ledgerEntries.length, 1);
-  assert.equal(ledgerEntries[0].type, 'RECONCILIATION_ADJUSTMENT');
-  assert.equal(ledgerEntries[0].amount_cents, -2000);
+  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values()).filter(e => e.customer_id === custId);
+  assert.equal(ledgerEntries.length, 2); // opening + reconciliation
+  const adjEntry = ledgerEntries.find(e => e.type === 'RECONCILIATION_ADJUSTMENT');
+  assert.ok(adjEntry);
+  assert.equal(adjEntry.amount_cents, -2000);
 
   const updatedSale = mockDb.stores.sales.get(saleId);
   assert.equal(updatedSale.needs_reconciliation, false);
   assert.equal(updatedSale.reconciliation_status, 'RECONCILED');
+
+  // Verify that performing Integrity Repair / CORRECT_PAYMENT does NOT create drift
+  const verify = await repo.verifyCustomerBalance(custId);
+  assert.equal(verify.has_dual_field_drift, false);
+  assert.equal(verify.is_valid, true);
+  assert.equal(verify.ledger_sum, -3000);
+  assert.equal(verify.current_balance, -3000);
 });
 
 test('reconcileSaleRecord CORRECT_PAYMENT correctly adjusts customer balance when correcting STORE_CREDIT', async () => {
@@ -1659,12 +1741,15 @@ test('reconcileSaleRecord CORRECT_PAYMENT correctly adjusts customer balance whe
   const repo = new PosRepository(mockDb);
 
   // Customer initially has $50.00 store credit (balance = 5000)
-  mockDb.stores.customers.set(1, { customer_id: 1, name: 'Dana', balance: 5000, current_balance_cents: -5000 });
+  const custId = await repo.createCustomer({
+    name: 'Dana',
+    initial_balance_cents: 5000
+  });
 
   const saleId = 301;
   mockDb.stores.sales.set(saleId, {
     sale_id: saleId,
-    customer_id: 1,
+    customer_id: custId,
     status: 'COMPLETED',
     total_amount_cents: 2000,
     needs_reconciliation: true
@@ -1693,14 +1778,21 @@ test('reconcileSaleRecord CORRECT_PAYMENT correctly adjusts customer balance whe
     payments: [{ payment_type: 'STORE_CREDIT', amount_cents: 2000, merchant_fee_cents: 0 }]
   });
 
-  const updatedCustomer = mockDb.stores.customers.get(1);
+  const updatedCustomer = mockDb.stores.customers.get(custId);
   // Balance should decrease from $50 to $30 (balance = 3000, current_balance_cents = -3000)
   assert.equal(updatedCustomer.balance, 3000);
   assert.equal(updatedCustomer.current_balance_cents, -3000);
 
-  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values());
-  assert.equal(ledgerEntries.length, 1);
-  assert.equal(ledgerEntries[0].amount_cents, -2000);
+  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values()).filter(e => e.customer_id === custId);
+  assert.equal(ledgerEntries.length, 2); // opening + reconciliation
+  const adjEntry = ledgerEntries.find(e => e.type === 'RECONCILIATION_ADJUSTMENT');
+  assert.ok(adjEntry);
+  assert.equal(adjEntry.amount_cents, -2000);
+
+  const verify = await repo.verifyCustomerBalance(custId);
+  assert.equal(verify.has_dual_field_drift, false);
+  assert.equal(verify.is_valid, true);
+  assert.equal(verify.ledger_sum, 3000);
 });
 
 test('fulfillCustomerPrepayment links sale and voidSale restores prepayment status to PENDING_DELIVERY', async () => {

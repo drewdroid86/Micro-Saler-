@@ -1374,7 +1374,8 @@ export const ModalManager = () => {
             const cashC = Math.round((parseFloat(splitCashInput) || 0) * 100);
             const digitalC = Math.round((parseFloat(splitDigitalInput) || 0) * 100);
             const tabC = Math.round((parseFloat(splitTabInput) || 0) * 100);
-            const tenderedTotal = cashC + digitalC + tabC;
+            const creditC = Math.round((parseFloat(splitCreditInput) || 0) * 100);
+            const tenderedTotal = cashC + digitalC + tabC + creditC;
             const diffC = totalAmountCents - tenderedTotal;
 
             return (

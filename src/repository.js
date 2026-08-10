@@ -1204,7 +1204,7 @@ export class PosRepository {
         const customer = req.result;
         if (customer) {
           customer.balance = (Number(customer.balance) || 0) + signedAmount;
-          customer.current_balance_cents = -customer.balance; // Legacy compatibility
+          customer.current_balance_cents = (-customer.balance) === 0 ? 0 : -customer.balance; // Legacy compatibility
           custStore.put(customer);
         }
         resolve(customer);
