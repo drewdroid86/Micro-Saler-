@@ -2074,6 +2074,139 @@ test('scanAndReconcileIntegrity batch auto-repairs drifted customer balances', a
   assert.equal(check1.is_valid, true);
 });
 
+test('repairCustomerBalance and scanAndReconcileIntegrity are strictly idempotent on complex customer accounts', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const cId = 1;
+  const sId = 100;
+
+  // 1. Seed historical completed sale
+  mockDb.stores.sales.set(sId, {
+    sale_id: sId,
+    customer_id: cId,
+    status: 'COMPLETED',
+    total_amount_cents: 3500,
+    created_at: 1000
+  });
+
+  mockDb.stores.sale_items.set(1, {
+    sale_item_id: 1,
+    sale_id: sId,
+    pigment_id: 1,
+    weight_mg: 5000,
+    price_charged_cents: 3500,
+    unit_cogs_cents: 500
+  });
+
+  mockDb.stores.sale_payments.set(1, {
+    payment_id: 1,
+    sale_id: sId,
+    payment_type: 'STORE_CREDIT',
+    amount_cents: 2000,
+    merchant_fee_cents: 0
+  });
+
+  mockDb.stores.sale_payments.set(2, {
+    payment_id: 2,
+    sale_id: sId,
+    payment_type: 'HOUSE_TAB',
+    amount_cents: 1500,
+    merchant_fee_cents: 0
+  });
+
+  // 2. Seed existing customer_ledger entries (True economic history: +5000 opening, -2000 store credit spent, -1500 tab charged = Net +1500 balance)
+  mockDb.stores.customer_ledger.set(1, {
+    entry_id: 1,
+    customer_id: cId,
+    amount_cents: 5000,
+    type: 'opening_balance',
+    description: 'Initial customer deposit',
+    created_at: 500,
+    timestamp: 500
+  });
+
+  mockDb.stores.customer_ledger.set(2, {
+    entry_id: 2,
+    customer_id: cId,
+    amount_cents: -2000,
+    type: 'SALE_CREDIT_APPLIED',
+    description: 'Store credit applied to Sale #100',
+    sale_id: sId,
+    created_at: 1000,
+    timestamp: 1000
+  });
+
+  mockDb.stores.customer_ledger.set(3, {
+    entry_id: 3,
+    customer_id: cId,
+    amount_cents: -1500,
+    type: 'SALE_DEBT',
+    description: 'House tab charge for Sale #100',
+    sale_id: sId,
+    created_at: 1000,
+    timestamp: 1000
+  });
+
+  // 3. Customer record with historical drift: balance says 9999, current_balance_cents says 4444 (drifted from true ledger sum 1500)
+  mockDb.stores.customers.set(cId, {
+    customer_id: cId,
+    name: 'Complex Customer',
+    balance: 9999,
+    current_balance_cents: 4444
+  });
+
+  // Verification before repair: must detect drift
+  const preCheck = await repo.verifyCustomerBalance(cId);
+  assert.equal(preCheck.is_valid, false);
+  assert.equal(preCheck.has_dual_field_drift, true);
+  assert.equal(preCheck.ledger_sum, 1500);
+
+  const initialLedgerCount = mockDb.stores.customer_ledger.size;
+  assert.equal(initialLedgerCount, 3);
+
+  // 4. RUN REPAIR 1
+  const repairResult1 = await repo.scanAndReconcileIntegrity();
+  assert.equal(repairResult1.customerRepairedCount, 1);
+
+  // Verify state after first repair:
+  const postCheck1 = await repo.verifyCustomerBalance(cId);
+  assert.equal(postCheck1.is_valid, true);
+  assert.equal(postCheck1.has_dual_field_drift, false);
+  assert.equal(postCheck1.current_balance, 1500);
+  assert.equal(postCheck1.legacy_debt_cents, -1500);
+  assert.equal(postCheck1.ledger_sum, 1500);
+
+  // Customer record fields must be strictly synchronized
+  const custAfter1 = mockDb.stores.customers.get(cId);
+  assert.equal(custAfter1.balance, 1500);
+  assert.equal(custAfter1.current_balance_cents, -1500);
+
+  // MUST NOT create any new ledger entries (ledger entries remained immutable source of truth)
+  assert.equal(mockDb.stores.customer_ledger.size, initialLedgerCount);
+
+  // 5. RUN REPAIR 2 (Idempotency test)
+  const repairResult2 = await repo.scanAndReconcileIntegrity();
+  // Second run makes zero repairs because state is already valid
+  assert.equal(repairResult2.customerRepairedCount, 0);
+  assert.equal(repairResult2.repairedCount, 0);
+
+  // Verify state after second repair:
+  const postCheck2 = await repo.verifyCustomerBalance(cId);
+  assert.equal(postCheck2.is_valid, true);
+  assert.equal(postCheck2.has_dual_field_drift, false);
+  assert.equal(postCheck2.current_balance, 1500);
+  assert.equal(postCheck2.ledger_sum, 1500);
+
+  const custAfter2 = mockDb.stores.customers.get(cId);
+  assert.equal(custAfter2.balance, 1500);
+  assert.equal(custAfter2.current_balance_cents, -1500);
+
+  // Still exactly 3 ledger entries: NO duplicate reconciliation or repair entries
+  assert.equal(mockDb.stores.customer_ledger.size, initialLedgerCount);
+});
+
+
 
 
 
