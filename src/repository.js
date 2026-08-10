@@ -1558,6 +1558,101 @@ export class PosRepository {
     return verification.ledger_sum;
   }
 
+  /**
+   * Repairs customer balance and dual-field drift against ledger truth.
+   * If customer has legacy balance with 0 ledger entries, initializes canonical opening_balance ledger entry.
+   * If ledger entries exist, synchronizes customer.balance and customer.current_balance_cents to sum(customer_ledger).
+   */
+  async repairCustomerBalance(customerId) {
+    const cId = Number(customerId);
+    const now = Date.now();
+    return await this.db.runTransaction(['customers', 'customer_ledger', 'audit_log'], 'readwrite', async (tx) => {
+      const custStore = tx.objectStore('customers');
+      const ledgerStore = tx.objectStore('customer_ledger');
+      const auditStore = tx.objectStore('audit_log');
+
+      const customer = await new Promise((resolve, reject) => {
+        const req = custStore.get(cId);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      if (!customer) throw new Error(`Customer #${cId} not found`);
+
+      let entries = [];
+      if (ledgerStore.indexNames && ledgerStore.indexNames.contains('customer_id')) {
+        const idx = ledgerStore.index('customer_id');
+        entries = await new Promise((resolve, reject) => {
+          const req = idx.getAll(cId);
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+      } else {
+        const allEntries = await new Promise((resolve, reject) => {
+          const req = ledgerStore.getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+        entries = allEntries.filter(e => Number(e.customer_id) === cId);
+      }
+
+      let targetBalance = 0;
+      let repairReason = '';
+
+      if (entries.length === 0) {
+        // Case 1: Pre-v1.4.0 legacy customer with no ledger records yet
+        const legacyDebt = Number(customer.current_balance_cents) || 0;
+        const recordedBal = customer.balance !== undefined ? Number(customer.balance) : -legacyDebt;
+        targetBalance = recordedBal !== 0 ? recordedBal : -legacyDebt;
+
+        if (targetBalance !== 0) {
+          await new Promise((resolve, reject) => {
+            const req = ledgerStore.add({
+              customer_id: cId,
+              amount_cents: targetBalance,
+              type: 'opening_balance',
+              description: 'Legacy opening balance migration repair',
+              created_at: now,
+              timestamp: now
+            });
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+        }
+        repairReason = `Initialized canonical opening_balance ledger entry (${targetBalance} cents) for legacy customer`;
+      } else {
+        // Case 2: Customer has ledger entries - sum of ledger is absolute source of truth
+        targetBalance = entries.reduce((sum, e) => sum + (Number(e.amount_cents) || 0), 0);
+        repairReason = `Aligned customer balance to ledger sum (${targetBalance} cents)`;
+      }
+
+      customer.balance = targetBalance;
+      customer.current_balance_cents = (-targetBalance) === 0 ? 0 : -targetBalance;
+      custStore.put(customer);
+
+      auditStore.add({
+        entity_type: 'Customer',
+        entity_id: cId,
+        action: 'CUSTOMER_BALANCE_INTEGRITY_REPAIR',
+        details_json: JSON.stringify({
+          customer_id: cId,
+          repaired_balance: targetBalance,
+          reason: repairReason,
+          timestamp: now
+        }),
+        created_at: now,
+        timestamp: now
+      });
+
+      return {
+        customer_id: cId,
+        repaired_balance: targetBalance,
+        legacy_debt_cents: customer.current_balance_cents,
+        is_valid: true,
+        has_dual_field_drift: false
+      };
+    });
+  }
+
   async updatePigmentPricing(pigmentId, retailPricePerGramCents, wholesalePricePerGramCents) {
     const pId = Number(pigmentId);
     await this.db.updatePricing(pId, retailPricePerGramCents, wholesalePricePerGramCents);
@@ -2356,7 +2451,20 @@ export class PosRepository {
       }
     }
 
-    return { repairedCount, flaggedCount };
+    // Also scan all customers for ledger discrepancy and dual-field drift
+    const allCustomers = await this.db.getAll('customers');
+    let customerRepairedCount = 0;
+
+    for (const cust of allCustomers) {
+      const cId = Number(cust.customer_id);
+      const verification = await this.verifyCustomerBalance(cId);
+      if (!verification.is_valid || verification.has_dual_field_drift) {
+        await this.repairCustomerBalance(cId);
+        customerRepairedCount++;
+      }
+    }
+
+    return { repairedCount, flaggedCount, customerRepairedCount };
   }
 
   async repairDataIntegrity() {

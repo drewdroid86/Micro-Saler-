@@ -1459,6 +1459,9 @@ function createMockDatabase() {
     async getById(storeName, id) {
       return stores[storeName]?.get(Number(id)) || null;
     },
+    async getAll(storeName) {
+      return Array.from(stores[storeName]?.values() || []);
+    },
     async getAllByIndex(storeName, indexName, value) {
       const list = Array.from(stores[storeName]?.values() || []);
       return list.filter(item => item[indexName] === value);
@@ -1490,10 +1493,21 @@ function createMockDatabase() {
         objectStore(name) {
           const store = stores[name];
           return {
+            indexNames: {
+              contains: (idx) => idx === 'customer_id' || idx === 'sale_id'
+            },
             get(id) {
               const req = { onsuccess: null, onerror: null, result: null };
               setTimeout(() => {
                 req.result = store?.get(Number(id)) || null;
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            },
+            getAll() {
+              const req = { onsuccess: null, onerror: null, result: null };
+              setTimeout(() => {
+                req.result = Array.from(store?.values() || []);
                 if (req.onsuccess) req.onsuccess();
               }, 0);
               return req;
@@ -2001,6 +2015,65 @@ test('createCustomerPrepayment persists payment tender method and digital provid
   assert.equal(prep.digital_provider, 'Square');
   assert.equal(prep.merchant_fee_cents, 140); // Square: 2.6% of $50 = $1.30 + $0.10 = $1.40 (140 cents)
 });
+
+test('repairCustomerBalance repairs legacy pre-v1.4.0 customer with 0 ledger entries', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  // Pre-v1.4.0 legacy customer: had $25 debt in current_balance_cents, but no balance field or ledger entries
+  mockDb.stores.customers.set(1, {
+    customer_id: 1,
+    name: 'Legacy Bob',
+    current_balance_cents: 2500
+  });
+
+  const checkBefore = await repo.verifyCustomerBalance(1);
+  assert.equal(checkBefore.is_valid, false);
+
+  const repairResult = await repo.repairCustomerBalance(1);
+  assert.equal(repairResult.is_valid, true);
+  assert.equal(repairResult.has_dual_field_drift, false);
+  assert.equal(repairResult.repaired_balance, -2500);
+
+  const checkAfter = await repo.verifyCustomerBalance(1);
+  assert.equal(checkAfter.is_valid, true);
+  assert.equal(checkAfter.has_dual_field_drift, false);
+  assert.equal(checkAfter.current_balance, -2500);
+  assert.equal(checkAfter.legacy_debt_cents, 2500);
+  assert.equal(checkAfter.ledger_sum, -2500);
+
+  const ledger = Array.from(mockDb.stores.customer_ledger.values());
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0].type, 'opening_balance');
+  assert.equal(ledger[0].amount_cents, -2500);
+});
+
+test('scanAndReconcileIntegrity batch auto-repairs drifted customer balances', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  // Seed 1 drifted customer and 1 valid customer
+  mockDb.stores.customers.set(1, {
+    customer_id: 1,
+    name: 'Drifted Customer',
+    balance: 5000,
+    current_balance_cents: 2000 // Drifted!
+  });
+  mockDb.stores.customers.set(2, {
+    customer_id: 2,
+    name: 'Valid Customer',
+    balance: 0,
+    current_balance_cents: 0
+  });
+
+  const scanResult = await repo.scanAndReconcileIntegrity();
+  assert.equal(scanResult.customerRepairedCount, 1);
+
+  const check1 = await repo.verifyCustomerBalance(1);
+  assert.equal(check1.has_dual_field_drift, false);
+  assert.equal(check1.is_valid, true);
+});
+
 
 
 

@@ -65,13 +65,28 @@ export default class MicroSalerDB {
           if (event.oldVersion < 10) {
             if (db.objectStoreNames.contains('customers')) {
               const custStore = transaction.objectStore('customers');
+              const ledgerStore = db.objectStoreNames.contains('customer_ledger')
+                ? transaction.objectStore('customer_ledger')
+                : null;
               custStore.openCursor().onsuccess = (cursorEvent) => {
                 const cursor = cursorEvent.target.result;
                 if (cursor) {
                   const record = cursor.value;
+                  const legacyDebt = Number(record.current_balance_cents) || 0;
                   if (record.balance === undefined) {
-                    record.balance = 0;
+                    record.balance = -legacyDebt;
+                    record.current_balance_cents = legacyDebt;
                     cursor.update(record);
+                    if (ledgerStore && legacyDebt !== 0) {
+                      ledgerStore.add({
+                        customer_id: Number(record.customer_id),
+                        amount_cents: -legacyDebt,
+                        type: 'opening_balance',
+                        description: 'Legacy pre-v1.4.0 opening balance migration',
+                        created_at: Date.now(),
+                        timestamp: Date.now()
+                      });
+                    }
                   }
                   cursor.continue();
                 }
