@@ -9,6 +9,7 @@ export const CustomerScreen = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('ALL'); // 'ALL' | 'DEBT' | 'CREDIT' | 'PREPAY' | 'ZERO'
+  const [customerTypeFilter, setCustomerTypeFilter] = useState('ALL'); // 'ALL' | 'RETAIL' | 'WHOLESALE'
 
   const handleFulfill = async (prepaymentId) => {
     try {
@@ -27,9 +28,17 @@ export const CustomerScreen = () => {
     let totalStoreCreditCents = 0;
     let creditCustomerCount = 0;
     let zeroBalanceCount = 0;
+    let wholesaleCustomerCount = 0;
+    let retailCustomerCount = 0;
 
     safeCustomers.forEach(c => {
       const balInfo = calculateCustomerBalance(c, safePrepayments);
+      if (balInfo.isWholesale) {
+        wholesaleCustomerCount += 1;
+      } else {
+        retailCustomerCount += 1;
+      }
+
       if (balInfo.hasDebt) {
         totalDebtCents += balInfo.debtCents;
         debtCustomerCount += 1;
@@ -54,6 +63,8 @@ export const CustomerScreen = () => {
       totalStoreCreditCents,
       creditCustomerCount,
       zeroBalanceCount,
+      wholesaleCustomerCount,
+      retailCustomerCount,
       activePrepaymentsCount: activePrepayments.length,
       prepayCustomerCount: prepayCustomerIds.size,
       totalPrepaymentCreditCents,
@@ -77,13 +88,16 @@ export const CustomerScreen = () => {
 
       const balInfo = calculateCustomerBalance(c, safePrepayments);
 
+      if (customerTypeFilter === 'WHOLESALE' && !balInfo.isWholesale) return false;
+      if (customerTypeFilter === 'RETAIL' && balInfo.isWholesale) return false;
+
       if (activeFilter === 'DEBT') return balInfo.hasDebt;
       if (activeFilter === 'CREDIT') return balInfo.hasStoreCredit;
       if (activeFilter === 'PREPAY') return balInfo.hasPrepayments;
       if (activeFilter === 'ZERO') return balInfo.currentBalanceCents === 0 && !balInfo.hasPrepayments;
       return true; // 'ALL'
     });
-  }, [safeCustomers, safePrepayments, searchQuery, activeFilter]);
+  }, [safeCustomers, safePrepayments, searchQuery, activeFilter, customerTypeFilter]);
 
   return (
     <div className="customer-screen-container">
@@ -91,7 +105,7 @@ export const CustomerScreen = () => {
       <div className="section-header mb-md">
         <div>
           <h2 className="section-title">👥 CUSTOMER ACCOUNTS & BALANCES</h2>
-          <p className="body-small text-muted">Track customer house tabs (debt), store credits, credit limits, and prepaid order deliveries.</p>
+          <p className="body-small text-muted">Track customer house tabs, store credits, retail vs wholesale accounts, and prepaid backorders.</p>
         </div>
         <div className="flex-center gap-xs">
           <button className="btn btn-secondary btn-sm" onClick={() => openModal('addCustomerPrepayment')}>
@@ -150,21 +164,26 @@ export const CustomerScreen = () => {
         {/* Net Customer Position */}
         <div className="card" style={{ padding: '14px', borderLeft: `4px solid ${customerMetrics.netPositionCents >= 0 ? 'var(--market-primary)' : 'var(--market-warning)'}` }}>
           <div className="flex-between body-small text-muted mb-xs">
-            <span>⚖️ NET POSITION</span>
+            <span>⚖️ ACCOUNTS SPLIT</span>
             <span className="label-small text-muted">{customerMetrics.totalCustomers} total</span>
           </div>
-          <div className={`title-large ${customerMetrics.netPositionCents >= 0 ? 'text-primary' : 'text-warning'}`} style={{ fontSize: '1.5rem', fontWeight: 800 }}>
-            {customerMetrics.netPositionCents >= 0 ? `+${formatCents(customerMetrics.netPositionCents)}` : formatCents(customerMetrics.netPositionCents)}
+          <div className="flex-center gap-xs mt-xs mb-xs" style={{ justifyContent: 'flex-start' }}>
+            <span className="badge badge-secondary" style={{ fontSize: '12px', padding: '3px 8px' }}>
+              🏪 {customerMetrics.retailCustomerCount} Retail
+            </span>
+            <span className="badge badge-vip" style={{ fontSize: '12px', padding: '3px 8px' }}>
+              🏷️ {customerMetrics.wholesaleCustomerCount} Wholesale
+            </span>
           </div>
           <div className="body-small text-muted" style={{ fontSize: '11px', marginTop: '4px' }}>
-            Receivables minus customer credits
+            Net Ledger: {customerMetrics.netPositionCents >= 0 ? `+${formatCents(customerMetrics.netPositionCents)}` : formatCents(customerMetrics.netPositionCents)}
           </div>
         </div>
       </div>
 
-      {/* Search & Filter Toolbar */}
+      {/* Account Type Toggle & Search Toolbar */}
       <div className="card p-sm mb-md flex-between" style={{ gap: '12px', flexWrap: 'wrap' }}>
-        <div style={{ flex: '1', minWidth: '220px' }}>
+        <div style={{ flex: '1', minWidth: '200px' }}>
           <input
             type="text"
             className="form-input"
@@ -175,38 +194,62 @@ export const CustomerScreen = () => {
           />
         </div>
 
+        {/* Wholesale vs Retail Filter Toggle */}
+        <div className="flex-center gap-xs" style={{ background: 'var(--market-surface-variant)', padding: '4px', borderRadius: '6px' }}>
+          {[
+            { id: 'ALL', label: `All (${customerMetrics.totalCustomers})` },
+            { id: 'RETAIL', label: `🏪 Retail (${customerMetrics.retailCustomerCount})` },
+            { id: 'WHOLESALE', label: `🏷️ Wholesale (${customerMetrics.wholesaleCustomerCount})` }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              className={`btn btn-sm ${customerTypeFilter === tab.id ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setCustomerTypeFilter(tab.id)}
+              style={{ fontSize: '11px', padding: '4px 8px' }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Financial Balance Filter Tabs */}
         <div className="flex-center gap-xs" style={{ flexWrap: 'wrap' }}>
           <button
             className={`btn btn-sm ${activeFilter === 'ALL' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setActiveFilter('ALL')}
+            style={{ fontSize: '11px', padding: '4px 8px' }}
           >
-            All ({customerMetrics.totalCustomers})
+            All Balances
           </button>
           <button
             className={`btn btn-sm ${activeFilter === 'DEBT' ? 'btn-danger' : 'btn-ghost'}`}
             onClick={() => setActiveFilter('DEBT')}
             title="Customers with outstanding house tab debt"
+            style={{ fontSize: '11px', padding: '4px 8px' }}
           >
-            🔴 Owes Debt ({customerMetrics.debtCustomerCount})
+            🔴 Debt ({customerMetrics.debtCustomerCount})
           </button>
           <button
             className={`btn btn-sm ${activeFilter === 'CREDIT' ? 'btn-success' : 'btn-ghost'}`}
             onClick={() => setActiveFilter('CREDIT')}
             title="Customers with store credit available"
+            style={{ fontSize: '11px', padding: '4px 8px' }}
           >
-            🟢 Store Credit ({customerMetrics.creditCustomerCount})
+            🟢 Credit ({customerMetrics.creditCustomerCount})
           </button>
           <button
             className={`btn btn-sm ${activeFilter === 'PREPAY' ? 'btn-secondary' : 'btn-ghost'}`}
             onClick={() => setActiveFilter('PREPAY')}
             title="Customers with pending prepayments / backorders"
+            style={{ fontSize: '11px', padding: '4px 8px' }}
           >
-            📦 Prepayments ({customerMetrics.prepayCustomerCount})
+            📦 Prepay ({customerMetrics.prepayCustomerCount})
           </button>
           <button
             className={`btn btn-sm ${activeFilter === 'ZERO' ? 'btn-secondary' : 'btn-ghost'}`}
             onClick={() => setActiveFilter('ZERO')}
             title="Customers with settled zero balance"
+            style={{ fontSize: '11px', padding: '4px 8px' }}
           >
             ⚪ Settled ({customerMetrics.zeroBalanceCount})
           </button>
@@ -219,7 +262,7 @@ export const CustomerScreen = () => {
           <div style={{ fontSize: '2rem', marginBottom: '8px' }}>👤</div>
           <div className="title-medium mb-xs">No matching customers found</div>
           <p className="body-small text-muted mb-md">
-            {searchQuery ? `No customer records matching "${searchQuery}" under filter "${activeFilter}".` : 'No customers in this category.'}
+            {searchQuery ? `No customer records matching "${searchQuery}" under filter.` : 'No customers in this category.'}
           </p>
           <button className="btn btn-primary btn-sm" onClick={() => openModal('addCustomer', { name: searchQuery })}>
             + Add New Customer
@@ -244,8 +287,13 @@ export const CustomerScreen = () => {
                 {/* Header */}
                 <div className="customer-card-header">
                   <div>
-                    <div className="customer-name flex-center gap-xs" style={{ justifyContent: 'flex-start' }}>
+                    <div className="customer-name flex-center gap-xs" style={{ justifyContent: 'flex-start', flexWrap: 'wrap' }}>
                       <span>{c.name}</span>
+                      {balInfo.isWholesale ? (
+                        <span className="badge badge-vip" style={{ fontSize: '10px' }}>🏷️ Wholesale</span>
+                      ) : (
+                        <span className="badge badge-secondary" style={{ fontSize: '10px' }}>🏪 Retail</span>
+                      )}
                       <span className={`badge ${badgeClass}`} style={{ fontSize: '10px' }}>{c.trust_status || 'GOOD_STANDING'}</span>
                     </div>
                     <div className="customer-phone">{c.phone_number || c.phone || 'No phone recorded'}</div>

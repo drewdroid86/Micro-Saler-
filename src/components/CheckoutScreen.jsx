@@ -42,6 +42,7 @@ export const CheckoutScreen = () => {
     setSelectedPigment,
     pricingMode,
     setPricingMode,
+    changePricingMode,
     cart,
     addToCart,
     removeFromCart,
@@ -142,6 +143,11 @@ export const CheckoutScreen = () => {
           onChange={(text, customerRecord) => {
             setCustomerNameInput(text);
             setSelectedCustomer(customerRecord);
+            if (customerRecord) {
+              const isWholesale = customerRecord.customer_type === 'WHOLESALE' || Boolean(customerRecord.is_wholesale);
+              const switchFn = changePricingMode || setPricingMode;
+              switchFn(isWholesale ? 'WHOLESALE' : 'RETAIL');
+            }
           }}
           customers={customers}
           customerPrepayments={customerPrepayments}
@@ -149,6 +155,11 @@ export const CheckoutScreen = () => {
           onSelectCustomer={(cust) => {
             setSelectedCustomer(cust);
             setCustomerNameInput(cust ? cust.name : '');
+            if (cust) {
+              const isWholesale = cust.customer_type === 'WHOLESALE' || Boolean(cust.is_wholesale);
+              const switchFn = changePricingMode || setPricingMode;
+              switchFn(isWholesale ? 'WHOLESALE' : 'RETAIL');
+            }
           }}
           onOpenCustomerPicker={() => openModal('customerPicker')}
         />
@@ -156,13 +167,13 @@ export const CheckoutScreen = () => {
         <div className="pricing-toggle">
           <button
             className={`toggle-option ${pricingMode === 'RETAIL' ? 'active' : ''}`}
-            onClick={() => setPricingMode('RETAIL')}
+            onClick={() => (changePricingMode ? changePricingMode('RETAIL') : setPricingMode('RETAIL'))}
           >
             RETAIL
           </button>
           <button
             className={`toggle-option ${pricingMode === 'WHOLESALE' ? 'active' : ''}`}
-            onClick={() => setPricingMode('WHOLESALE')}
+            onClick={() => (changePricingMode ? changePricingMode('WHOLESALE') : setPricingMode('WHOLESALE'))}
           >
             WHOLESALE
           </button>

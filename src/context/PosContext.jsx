@@ -15,6 +15,7 @@ export const PosProvider = ({ children }) => {
   const [customers, setCustomers] = useState([]);
   const [sales, setSales] = useState([]);
   const [saleItems, setSaleItems] = useState([]);
+  const [salePayments, setSalePayments] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [shrinkageLogs, setShrinkageLogs] = useState([]);
   const [integrityMismatches, setIntegrityMismatches] = useState([]);
@@ -67,6 +68,7 @@ export const PosProvider = ({ children }) => {
       const allPrep = await activeDb.getAll('customer_prepayments');
       const allS = await activeDb.getAllSales();
       const allSI = await activeDb.getAll('sale_items');
+      const allSP = await activeDb.getAll('sale_payments');
       const allAudit = await activeDb.getAll('audit_log');
       const allShrink = await activeDb.getAll('shrinkage_logs');
 
@@ -79,6 +81,7 @@ export const PosProvider = ({ children }) => {
       setCustomerPrepayments(allPrep || []);
       setSales(allS);
       setSaleItems(allSI);
+      setSalePayments(allSP || []);
       setAuditLogs(allAudit.sort((a, b) => (b.created_at || b.timestamp || 0) - (a.created_at || a.timestamp || 0)));
       setShrinkageLogs(allShrink.sort((a, b) => (b.created_at || 0) - (a.created_at || 0)));
     } catch (err) {
@@ -391,6 +394,43 @@ export const PosProvider = ({ children }) => {
     });
   };
 
+  const changePricingMode = (newMode) => {
+    setPricingMode(newMode);
+    setCart(prevCart => {
+      if (!prevCart || prevCart.length === 0) return prevCart;
+      return prevCart.map(item => {
+        const pigment = item.pigment;
+        const validWeightMg = item.weight_mg;
+        if (!pigment) return item;
+
+        let priceChargedCents = null;
+        const matchingTier = priceTiers.find(
+          t => Number(t.pigment_id) === Number(pigment.pigment_id) && Number(t.weight_mg) === Number(validWeightMg)
+        );
+
+        if (matchingTier) {
+          const tierPrice = newMode === 'RETAIL'
+            ? matchingTier.retail_price_cents
+            : matchingTier.wholesale_price_cents;
+
+          if (tierPrice !== null && tierPrice !== undefined && !isNaN(tierPrice) && Number(tierPrice) > 0) {
+            priceChargedCents = Number(tierPrice);
+          }
+        }
+
+        if (priceChargedCents === null) {
+          const pricePerGramCents = getEffectivePricePerGramCents(pigment, validWeightMg, newMode);
+          priceChargedCents = Math.round((validWeightMg / 1000) * pricePerGramCents) + (pigment.default_pkg_cents || 0);
+        }
+
+        return {
+          ...item,
+          price_charged_cents: priceChargedCents
+        };
+      });
+    });
+  };
+
   const clearCart = () => {
     setCart([]);
   };
@@ -489,6 +529,7 @@ export const PosProvider = ({ children }) => {
     customerPrepayments,
     sales,
     saleItems,
+    salePayments,
     auditLogs,
     shrinkageLogs,
     cart,
@@ -499,6 +540,7 @@ export const PosProvider = ({ children }) => {
     setSelectedPigment,
     pricingMode,
     setPricingMode,
+    changePricingMode,
     isHandshakeOverride,
     setIsHandshakeOverride,
     isSubmitting,
@@ -526,7 +568,7 @@ export const PosProvider = ({ children }) => {
     checkStartupIntegrity
   }), [
     db, repo, loading, loadingError, isDbBlocked, currentTab, pigments, priceTiers,
-    customers, suppliers, supplierPayments, stockReceipts, customerPrepayments, sales, saleItems, auditLogs,
+    customers, suppliers, supplierPayments, stockReceipts, customerPrepayments, sales, saleItems, salePayments, auditLogs,
     shrinkageLogs, cart, selectedCustomer, selectedPigment, pricingMode, isHandshakeOverride,
     isSubmitting, setIsSubmitting, toasts, modal, integrityMismatches
   ]);

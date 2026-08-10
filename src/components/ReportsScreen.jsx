@@ -1,11 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { usePos } from '../context/PosContext';
-import { formatCents, formatMgToGrams } from '../repository';
+import { calculateBusinessInsights, formatCents, formatMgToGrams } from '../repository';
 
 export const ReportsScreen = () => {
   const {
     sales,
     saleItems,
+    salePayments,
     customers,
     suppliers,
     shrinkageLogs,
@@ -16,112 +17,33 @@ export const ReportsScreen = () => {
 
   const [timeRange, setTimeRange] = useState('ALL'); // 'TODAY', 'WEEK', 'MONTH', 'YTD', 'ALL'
 
-  // Filter timestamp bounds based on timeRange
-  const filterTimestamp = useMemo(() => {
-    const now = new Date();
-    if (timeRange === 'TODAY') {
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    }
-    if (timeRange === 'WEEK') {
-      return now.getTime() - (7 * 24 * 60 * 60 * 1000);
-    }
-    if (timeRange === 'MONTH') {
-      return now.getTime() - (30 * 24 * 60 * 60 * 1000);
-    }
-    if (timeRange === 'YTD') {
-      return new Date(now.getFullYear(), 0, 1).getTime();
-    }
-    return 0; // ALL
-  }, [timeRange]);
-
-  // Compute P&L Metrics
+  // Compute P&L Metrics using centralized repository business logic
   const metrics = useMemo(() => {
-    const safeSales = sales || [];
-    const safeShrinkageLogs = shrinkageLogs || [];
+    const raw = calculateBusinessInsights({
+      sales,
+      saleItems,
+      salePayments,
+      pigments,
+      customers,
+      suppliers,
+      shrinkageLogs,
+      customerPrepayments,
+      timeRange
+    });
+
     const safeCustomers = customers || [];
     const safeSuppliers = suppliers || [];
-    const safePigments = pigments || [];
-    const safePrepayments = customerPrepayments || [];
-
-    const filteredSales = safeSales.filter(s => {
-      const ts = s.created_at || s.timestamp || s.date || 0;
-      return filterTimestamp === 0 || ts >= filterTimestamp;
-    });
-
-    const completedSales = filteredSales.filter(s => s.status === 'COMPLETED' || !s.status || s.status === 'PAID');
-    const voidedSales = filteredSales.filter(s => s.status === 'VOIDED');
-
-    // Gross Revenue
-    const grossRevenueCents = completedSales.reduce((sum, s) => sum + (s.total_amount_cents || 0), 0);
-
-    // COGS
-    const totalCogsCents = completedSales.reduce((sum, s) => sum + (s.total_cogs_cents || 0), 0);
-
-    // Gross Profit
-    const grossProfitCents = grossRevenueCents - totalCogsCents;
-    const grossMarginPct = grossRevenueCents > 0 ? Math.round((grossProfitCents / grossRevenueCents) * 100) : 0;
-
-    // Shrinkage Loss in selected period
-    const filteredShrinkage = safeShrinkageLogs.filter(log => {
-      const ts = log.created_at || log.timestamp || 0;
-      return filterTimestamp === 0 || ts >= filterTimestamp;
-    });
-    const shrinkageLossCents = filteredShrinkage.reduce((sum, log) => sum + (log.cogs_loss_cents || 0), 0);
-
-    // Estimated Merchant Fees (~1.5% average across tender types)
-    const estimatedMerchantFeesCents = completedSales.reduce((sum, s) => {
-      return sum + Math.round((s.total_amount_cents || 0) * 0.015);
-    }, 0);
-
-    // Net Operating Profit
-    const netProfitCents = grossProfitCents - shrinkageLossCents - estimatedMerchantFeesCents;
-    const netMarginPct = grossRevenueCents > 0 ? Math.round((netProfitCents / grossRevenueCents) * 100) : 0;
-
-    // Accounts Receivable (Who Owes Me) - Customers with balance > 0
     const arCustomers = safeCustomers.filter(c => (c.current_balance_cents || 0) > 0);
-    const totalArCents = arCustomers.reduce((sum, c) => sum + (c.current_balance_cents || 0), 0);
-
-    // Accounts Payable (What I Owe Suppliers) - Suppliers with balance > 0
     const apSuppliers = safeSuppliers.filter(s => (s.current_balance_cents || 0) > 0);
-    const totalApCents = apSuppliers.reduce((sum, s) => sum + (s.current_balance_cents || 0), 0);
-
-    // Customer Prepayments & Backorder Liabilities (Owed to Customers)
-    const activePrepayments = safePrepayments.filter(p => p.status !== 'FULFILLED');
-    const totalPrepaymentCreditCents = activePrepayments.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
-    const totalPrepaymentWeightMg = activePrepayments.reduce((sum, p) => sum + (p.weight_mg || 0), 0);
-
-    // Inventory Valuation
-    const totalInventoryMg = safePigments.reduce((sum, p) => sum + (p.stock_mg || 0), 0);
-    const totalCostBasisCents = safePigments.reduce((sum, p) => sum + (p.total_cost_cents || 0), 0);
-    const totalRetailValueCents = safePigments.reduce((sum, p) => {
-      const g = (p.stock_mg || 0) / 1000;
-      const rate = p.retail_price_per_gram_cents || 0;
-      return sum + Math.round(g * rate);
-    }, 0);
 
     return {
-      completedCount: completedSales.length,
-      voidedCount: voidedSales.length,
-      grossRevenueCents,
-      totalCogsCents,
-      grossProfitCents,
-      grossMarginPct,
-      shrinkageLossCents,
-      estimatedMerchantFeesCents,
-      netProfitCents,
-      netMarginPct,
+      ...raw,
       arCustomers,
-      totalArCents,
       apSuppliers,
-      totalApCents,
-      activePrepayments,
-      totalPrepaymentCreditCents,
-      totalPrepaymentWeightMg,
-      totalInventoryMg,
-      totalCostBasisCents,
-      totalRetailValueCents
+      shrinkageLossCents: raw.totalShrinkageLossCents,
+      actualMerchantFeesCents: raw.totalMerchantFeeCents
     };
-  }, [sales, shrinkageLogs, customers, suppliers, pigments, customerPrepayments, filterTimestamp]);
+  }, [sales, saleItems, salePayments, pigments, customers, suppliers, shrinkageLogs, customerPrepayments, timeRange]);
 
   return (
     <div id="reports-screen">
@@ -235,8 +157,8 @@ export const ReportsScreen = () => {
             </div>
 
             <div className="flex-between body-small text-muted">
-              <span>Est. Payment Processing Fees</span>
-              <span>- {formatCents(metrics.estimatedMerchantFeesCents)}</span>
+              <span>Payment Processing Fees</span>
+              <span>- {formatCents(metrics.actualMerchantFeesCents)}</span>
             </div>
 
             <div className="divider" style={{ margin: '8px 0', borderStyle: 'double' }} />

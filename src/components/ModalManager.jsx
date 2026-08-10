@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { usePos } from '../context/PosContext';
-import { formatCents, formatMgToGrams, filterCustomers, calculateCustomerBalance } from '../repository';
+import { formatCents, formatMgToGrams, filterCustomers, calculateCustomerBalance, calculateMerchantFeeCents, DEFAULT_MERCHANT_FEE_RATES } from '../repository';
 import { CustomWeightModal } from './modals/CustomWeightModal';
 import { EditCartItemModal } from './modals/EditCartItemModal';
 import { BackupRestoreModal } from './modals/BackupRestoreModal';
@@ -87,6 +87,7 @@ export const ModalManager = () => {
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
   const [custLimit, setCustLimit] = useState('');
+  const [custType, setCustType] = useState('RETAIL'); // 'RETAIL' | 'WHOLESALE'
   const [custStartingBalAmt, setCustStartingBalAmt] = useState('');
   const [custStartingBalType, setCustStartingBalType] = useState('CREDIT');
 
@@ -95,6 +96,7 @@ export const ModalManager = () => {
   const [editCustStartingBalType, setEditCustStartingBalType] = useState('CREDIT');
 
   const [customerPickerSearch, setCustomerPickerSearch] = useState('');
+  const [customerPickerTypeFilter, setCustomerPickerTypeFilter] = useState('ALL'); // 'ALL' | 'RETAIL' | 'WHOLESALE'
 
   const [adjAmount, setAdjAmount] = useState('');
   const [adjType, setAdjType] = useState('CREDIT');
@@ -139,6 +141,7 @@ export const ModalManager = () => {
   const [splitCashInput, setSplitCashInput] = useState('');
   const [splitDigitalInput, setSplitDigitalInput] = useState('');
   const [splitTabInput, setSplitTabInput] = useState('');
+  const [splitCreditInput, setSplitCreditInput] = useState('');
   const [splitDigitalProvider, setSplitDigitalProvider] = useState('Square');
 
   const resetAllFormStates = useCallback(() => {
@@ -150,7 +153,10 @@ export const ModalManager = () => {
     setSplitCashInput('');
     setSplitDigitalInput('');
     setSplitTabInput('');
+    setSplitCreditInput('');
     setSplitDigitalProvider('Square');
+    setCustType('RETAIL');
+    setCustomerPickerTypeFilter('ALL');
     setRestockWeight('');
     setRestockCost('');
     setRestockSupplier('');
@@ -313,6 +319,7 @@ export const ModalManager = () => {
       setCustName(initial);
       setCustPhone('');
       setCustLimit('25');
+      setCustType(modal.payload?.customer_type || 'RETAIL');
       setCustStatus('GOOD_STANDING');
       setCustStartingBalAmt('');
       setCustStartingBalType('CREDIT');
@@ -322,6 +329,7 @@ export const ModalManager = () => {
       setCustName(modal.payload.name || '');
       setCustPhone(modal.payload.phone_number || modal.payload.phone || '');
       setCustLimit(modal.payload.credit_limit_cents !== undefined && modal.payload.credit_limit_cents !== null ? (modal.payload.credit_limit_cents / 100).toString() : '25');
+      setCustType(modal.payload.customer_type || (modal.payload.is_wholesale ? 'WHOLESALE' : 'RETAIL'));
       setCustStatus(modal.payload.trust_status || 'GOOD_STANDING');
       setEditCustStartingBalAmt('');
       setEditCustStartingBalType('CREDIT');
@@ -590,6 +598,8 @@ export const ModalManager = () => {
       const newCustId = await repo.createCustomer({
         name: custName.trim(),
         phone_number: custPhone || '',
+        customer_type: custType,
+        is_wholesale: custType === 'WHOLESALE',
         credit_limit_cents: Math.round(limitD * 100),
         starting_balance: signedStartingBal,
         trust_status: custStatus
@@ -600,10 +610,15 @@ export const ModalManager = () => {
           customer_id: newCustId,
           name: custName.trim(),
           phone_number: custPhone || '',
+          customer_type: custType,
+          is_wholesale: custType === 'WHOLESALE',
           credit_limit_cents: Math.round(limitD * 100),
           balance: signedStartingBal,
           trust_status: custStatus
         });
+        if (custType === 'WHOLESALE') {
+          setPricingMode('WHOLESALE');
+        }
       }
       handleClose();
       showToast('Customer created successfully', 'success');
@@ -622,6 +637,8 @@ export const ModalManager = () => {
       ...modal.payload,
       name: custName.trim(),
       phone_number: custPhone || '',
+      customer_type: custType,
+      is_wholesale: custType === 'WHOLESALE',
       credit_limit_cents: Math.round(limitD * 100),
       trust_status: custStatus
     };
@@ -816,7 +833,7 @@ export const ModalManager = () => {
     if (!digitalProvider) return;
     setIsSubmitting(true);
     try {
-      const feeCents = Math.round((totalAmountCents * 0.029) + 30);
+      const feeCents = calculateMerchantFeeCents(digitalProvider, totalAmountCents);
       const customerId = selectedCustomer?.customer_id || null;
       const payments = [{ payment_type: 'DIGITAL', digital_provider: digitalProvider, amount_cents: totalAmountCents, merchant_fee_cents: feeCents }];
 
@@ -862,7 +879,7 @@ export const ModalManager = () => {
 
         if (paidNowCents > 0) {
           if (tabPaidType === 'DIGITAL') {
-            const feeCents = Math.round((paidNowCents * 0.029) + 30);
+            const feeCents = calculateMerchantFeeCents(tabDigitalProvider, paidNowCents);
             payments.push({
               payment_type: 'DIGITAL',
               digital_provider: tabDigitalProvider,
@@ -915,12 +932,14 @@ export const ModalManager = () => {
       const cashD = parseFloat(splitCashInput) || 0;
       const digitalD = parseFloat(splitDigitalInput) || 0;
       const tabD = parseFloat(splitTabInput) || 0;
+      const creditD = parseFloat(splitCreditInput) || 0;
 
       const cashCents = Math.round(cashD * 100);
       const digitalCents = Math.round(digitalD * 100);
       const tabCents = Math.round(tabD * 100);
+      const creditCents = Math.round(creditD * 100);
 
-      const totalTenderedCents = cashCents + digitalCents + tabCents;
+      const totalTenderedCents = cashCents + digitalCents + tabCents + creditCents;
 
       if (totalTenderedCents !== totalAmountCents) {
         showToast(`Split total (${formatCents(totalTenderedCents)}) must equal sale total (${formatCents(totalAmountCents)})`, 'error');
@@ -932,16 +951,31 @@ export const ModalManager = () => {
         return;
       }
 
+      if (creditCents > 0) {
+        if (!selectedCustomer) {
+          showToast('Please select a customer first to use store credit in split payment', 'error');
+          return;
+        }
+        const availCredit = Math.max(0, Number(selectedCustomer.balance) || 0);
+        if (creditCents > availCredit) {
+          showToast(`Store credit split (${formatCents(creditCents)}) exceeds available credit (${formatCents(availCredit)})`, 'error');
+          return;
+        }
+      }
+
       const payments = [];
       if (cashCents > 0) {
         payments.push({ payment_type: 'CASH', digital_provider: null, amount_cents: cashCents, merchant_fee_cents: 0 });
       }
       if (digitalCents > 0) {
-        const feeCents = Math.round((digitalCents * 0.029) + 30);
+        const feeCents = calculateMerchantFeeCents(splitDigitalProvider, digitalCents);
         payments.push({ payment_type: 'DIGITAL', digital_provider: splitDigitalProvider, amount_cents: digitalCents, merchant_fee_cents: feeCents });
       }
       if (tabCents > 0) {
         payments.push({ payment_type: 'HOUSE_TAB', digital_provider: null, amount_cents: tabCents, merchant_fee_cents: 0 });
+      }
+      if (creditCents > 0) {
+        payments.push({ payment_type: 'STORE_CREDIT', digital_provider: null, amount_cents: creditCents, merchant_fee_cents: 0 });
       }
 
       const customerId = selectedCustomer?.customer_id || null;
@@ -960,11 +994,57 @@ export const ModalManager = () => {
     }
   };
 
+  // Store Credit Payment Handler
+  const handleStoreCreditPayment = async () => {
+    if (isSubmitting) return;
+    if (!selectedCustomer) {
+      showToast('Please select a customer to apply store credit', 'error');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const customerBalance = Number(selectedCustomer.balance) || 0;
+      if (customerBalance <= 0) {
+        showToast('This customer has no store credit available', 'error');
+        return;
+      }
+
+      const creditToApply = Math.min(customerBalance, totalAmountCents);
+      const remainderCents = totalAmountCents - creditToApply;
+
+      if (remainderCents > 0) {
+        showToast(`Store credit (${formatCents(creditToApply)}) doesn't cover full total (${formatCents(totalAmountCents)}). Use Split Payment to combine with other tender.`, 'error');
+        return;
+      }
+
+      const payments = [{
+        payment_type: 'STORE_CREDIT',
+        amount_cents: creditToApply,
+        merchant_fee_cents: 0,
+        digital_provider: null,
+      }];
+
+      const customerId = selectedCustomer.customer_id;
+      await repo.completeSale(customerId, cart, payments, isHandshakeOverride, pricingMode);
+      setCart([]);
+      setSelectedCustomer(null);
+      setSelectedPigment(null);
+      await refreshAllData();
+      handleClose();
+      showToast(`Sale completed with store credit (${formatCents(creditToApply)})!`, 'success');
+    } catch (error) {
+      showToast('Store credit payment failed: ' + error.message, 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const modalKey = `${modal.name}_${modal.payload?.pigment_id || modal.payload?.customer_id || modal.payload?.sale_id || modal.payload?.saleItem?.sale_item_id || 'default'}`;
 
   // Payment Drawer Modal
   if (modal.name === 'paymentDrawer') {
-    const feeCents = digitalProvider ? Math.round((totalAmountCents * 0.029) + 30) : 0;
+    const feeCents = digitalProvider ? calculateMerchantFeeCents(digitalProvider, totalAmountCents) : 0;
+    const providerPreset = digitalProvider ? (DEFAULT_MERCHANT_FEE_RATES[digitalProvider.toUpperCase()] || DEFAULT_MERCHANT_FEE_RATES.DEFAULT) : null;
     return (
       <div className="modal-overlay active" onClick={handleClose}>
         <div className="payment-drawer active" key={modalKey} onClick={e => e.stopPropagation()}>
@@ -994,6 +1074,14 @@ export const ModalManager = () => {
                 {t === 'tab' ? 'HOUSE TAB & PARTIAL' : t.toUpperCase()}
               </button>
             ))}
+            {selectedCustomer && (Number(selectedCustomer.balance) || 0) > 0 && (
+              <button
+                className={`payment-mode-tab ${drawerTab === 'credit' ? 'active' : ''}`}
+                onClick={() => setDrawerTab('credit')}
+              >
+                💰 STORE CREDIT
+              </button>
+            )}
           </div>
 
           {drawerTab === 'digital' && (
@@ -1012,8 +1100,8 @@ export const ModalManager = () => {
 
               <div className="merchant-fee-preview mb-md">
                 {digitalProvider
-                  ? `Estimated ${digitalProvider} Fee: ${formatCents(feeCents)} | Net Revenue: ${formatCents(totalAmountCents - feeCents)}`
-                  : 'Select provider to see estimated fee (2.9% + $0.30)'}
+                  ? `Estimated ${digitalProvider} Fee: ${formatCents(feeCents)} (${providerPreset?.description || ''}) | Net Revenue: ${formatCents(totalAmountCents - feeCents)}`
+                  : 'Select provider to see processing fees'}
               </div>
 
               <button
@@ -1319,7 +1407,7 @@ export const ModalManager = () => {
                   </div>
                 </div>
 
-                <div className="form-group mb-md">
+                <div className="form-group mb-sm">
                   <label className="form-label">📑 House Tab Portion ($)</label>
                   <input
                     type="number"
@@ -1334,6 +1422,23 @@ export const ModalManager = () => {
                     <div className="body-small text-muted mt-xs">Select a customer on checkout to split onto house tab.</div>
                   )}
                 </div>
+
+                {selectedCustomer && (Number(selectedCustomer.balance) || 0) > 0 && (
+                  <div className="form-group mb-md">
+                    <div className="flex-between">
+                      <label className="form-label">💰 Store Credit Portion ($)</label>
+                      <span className="body-small text-success">Avail: {formatCents(Number(selectedCustomer.balance) || 0)}</span>
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="form-input"
+                      placeholder="0.00"
+                      value={splitCreditInput}
+                      onChange={e => setSplitCreditInput(e.target.value)}
+                    />
+                  </div>
+                )}
 
                 <div className="card card-static p-sm mb-md" style={{ background: 'var(--market-surface-variant)' }}>
                   <div className="flex-between body-small mb-xs">
@@ -1376,6 +1481,48 @@ export const ModalManager = () => {
               </div>
             );
           })()}
+
+          {drawerTab === 'credit' && selectedCustomer && (() => {
+            const creditAvailable = Math.max(0, Number(selectedCustomer.balance) || 0);
+            const canCover = creditAvailable >= totalAmountCents;
+            return (
+              <div>
+                <div className="card card-static p-md mb-md">
+                  <div className="flex-between mb-xs">
+                    <span className="body-small">Customer:</span>
+                    <strong>{selectedCustomer.name}</strong>
+                  </div>
+                  <div className="flex-between mb-xs">
+                    <span className="body-small">Store Credit Available:</span>
+                    <strong style={{ color: 'var(--market-good-standing)' }}>{formatCents(creditAvailable)}</strong>
+                  </div>
+                  <div className="flex-between mb-xs">
+                    <span className="body-small">Sale Total:</span>
+                    <strong>{formatCents(totalAmountCents)}</strong>
+                  </div>
+                  {canCover && (
+                    <div className="flex-between mb-xs">
+                      <span className="body-small">Credit After Sale:</span>
+                      <strong>{formatCents(creditAvailable - totalAmountCents)}</strong>
+                    </div>
+                  )}
+                </div>
+                {!canCover && (
+                  <p className="body-small text-muted mb-md">
+                    ⚠️ Insufficient store credit. Available: {formatCents(creditAvailable)}, needed: {formatCents(totalAmountCents)}.
+                    Use the Split tab to combine store credit with other payment methods.
+                  </p>
+                )}
+                <button
+                  className="btn btn-primary btn-block"
+                  onClick={handleStoreCreditPayment}
+                  disabled={!canCover || isSubmitting}
+                >
+                  Pay with Store Credit ({formatCents(Math.min(creditAvailable, totalAmountCents))})
+                </button>
+              </div>
+            );
+          })()}
         </div>
       </div>
     );
@@ -1403,6 +1550,26 @@ export const ModalManager = () => {
                   autoFocus
                 />
               </div>
+
+              {/* Wholesale vs Retail Filter Toggle */}
+              <div className="flex-center gap-xs mb-xs" style={{ background: 'var(--market-surface-variant)', padding: '3px', borderRadius: '6px' }}>
+                {[
+                  { id: 'ALL', label: 'All Customers' },
+                  { id: 'RETAIL', label: '🏪 Retail' },
+                  { id: 'WHOLESALE', label: '🏷️ Wholesale' }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={`btn btn-sm flex-1 ${customerPickerTypeFilter === tab.id ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setCustomerPickerTypeFilter(tab.id)}
+                    style={{ fontSize: '11px', padding: '4px 6px' }}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
               <button
                 className="btn btn-ghost btn-block text-left"
                 onClick={() => { setSelectedCustomer(null); handleClose(); }}
@@ -1410,43 +1577,66 @@ export const ModalManager = () => {
               >
                 <strong>👤 Walk-in Customer</strong>
               </button>
-              {filterCustomers(customers || [], customerPickerSearch).map(c => {
-                const safePrepayments = customerPrepayments || [];
-                const balInfo = calculateCustomerBalance(c, safePrepayments);
-                return (
-                  <button
-                    key={c.customer_id}
-                    className="btn btn-ghost btn-block flex-between"
-                    onClick={() => { setSelectedCustomer(c); handleClose(); }}
-                  >
-                    <div className="text-left">
-                      <div className="flex-center gap-xs">
-                        <strong>{c.name}</strong>
-                        {balInfo.hasPrepayments && (
-                          <span className="badge badge-good-standing" style={{ fontSize: '10px', padding: '2px 6px' }}>
-                            📦 {balInfo.prepaymentCount} Prepaid
-                          </span>
+
+              {filterCustomers(customers || [], customerPickerSearch)
+                .filter(c => {
+                  if (customerPickerTypeFilter === 'ALL') return true;
+                  const isWholesale = c.customer_type === 'WHOLESALE' || Boolean(c.is_wholesale);
+                  return customerPickerTypeFilter === 'WHOLESALE' ? isWholesale : !isWholesale;
+                })
+                .map(c => {
+                  const safePrepayments = customerPrepayments || [];
+                  const balInfo = calculateCustomerBalance(c, safePrepayments);
+                  return (
+                    <button
+                      key={c.customer_id}
+                      className="btn btn-ghost btn-block flex-between"
+                      onClick={() => {
+                        setSelectedCustomer(c);
+                        if (c) {
+                          const isWholesale = c.customer_type === 'WHOLESALE' || Boolean(c.is_wholesale);
+                          setPricingMode(isWholesale ? 'WHOLESALE' : 'RETAIL');
+                        }
+                        handleClose();
+                      }}
+                    >
+                      <div className="text-left">
+                        <div className="flex-center gap-xs">
+                          <strong>{c.name}</strong>
+                          {balInfo.isWholesale ? (
+                            <span className="badge badge-vip" style={{ fontSize: '10px', padding: '2px 6px' }}>
+                              🏷️ Wholesale
+                            </span>
+                          ) : (
+                            <span className="badge badge-secondary" style={{ fontSize: '10px', padding: '2px 6px' }}>
+                              🏪 Retail
+                            </span>
+                          )}
+                          {balInfo.hasPrepayments && (
+                            <span className="badge badge-good-standing" style={{ fontSize: '10px', padding: '2px 6px' }}>
+                              📦 {balInfo.prepaymentCount} Prepaid
+                            </span>
+                          )}
+                        </div>
+                        <small className="text-muted">{c.phone_number || c.phone || 'No phone'}</small>
+                      </div>
+                      <div className="text-right">
+                        <div className={`body-medium font-weight-bold ${balInfo.hasDebt ? 'text-error' : balInfo.hasStoreCredit ? 'text-success' : 'text-muted'}`}>
+                          {balInfo.hasDebt
+                            ? `Bal: ${formatCents(balInfo.debtCents)}`
+                            : balInfo.hasStoreCredit
+                            ? `Credit: ${formatCents(balInfo.storeCreditCents)}`
+                            : 'Bal: $0.00'}
+                        </div>
+                        {balInfo.creditLimitCents > 0 && (
+                          <small className="text-muted" style={{ fontSize: '10px' }}>
+                            Limit: {formatCents(balInfo.creditLimitCents)}
+                          </small>
                         )}
                       </div>
-                      <small className="text-muted">{c.phone_number || c.phone || 'No phone'}</small>
-                    </div>
-                    <div className="text-right">
-                      <div className={`body-medium font-weight-bold ${balInfo.hasDebt ? 'text-error' : balInfo.hasStoreCredit ? 'text-success' : 'text-muted'}`}>
-                        {balInfo.hasDebt
-                          ? `Bal: ${formatCents(balInfo.debtCents)}`
-                          : balInfo.hasStoreCredit
-                          ? `Credit: ${formatCents(balInfo.storeCreditCents)}`
-                          : 'Bal: $0.00'}
-                      </div>
-                      {balInfo.creditLimitCents > 0 && (
-                        <small className="text-muted" style={{ fontSize: '10px' }}>
-                          Limit: {formatCents(balInfo.creditLimitCents)}
-                        </small>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
+                    </button>
+                  );
+                })}
             </div>
           </div>
         )}
@@ -1981,6 +2171,25 @@ export const ModalManager = () => {
                 <input type="text" className="form-input" placeholder="Full Name" value={custName} onChange={e => setCustName(e.target.value)} />
               </div>
               <div className="form-group mb-sm">
+                <label className="form-label">Customer Type / Default Pricing Tier</label>
+                <div className="flex-center gap-xs">
+                  <button
+                    type="button"
+                    className={`btn btn-sm flex-1 ${custType === 'RETAIL' ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setCustType('RETAIL')}
+                  >
+                    🏪 Retail Customer
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm flex-1 ${custType === 'WHOLESALE' ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setCustType('WHOLESALE')}
+                  >
+                    🏷️ Wholesale Customer
+                  </button>
+                </div>
+              </div>
+              <div className="form-group mb-sm">
                 <label className="form-label">Phone Number</label>
                 <input type="text" className="form-input" placeholder="Phone Number" value={custPhone} onChange={e => setCustPhone(e.target.value)} />
               </div>
@@ -2077,6 +2286,25 @@ export const ModalManager = () => {
                 <div className="form-group mb-sm">
                   <label className="form-label">Full Name *</label>
                   <input type="text" className="form-input" placeholder="Full Name" value={custName} onChange={e => setCustName(e.target.value)} />
+                </div>
+                <div className="form-group mb-sm">
+                  <label className="form-label">Customer Type / Default Pricing Tier</label>
+                  <div className="flex-center gap-xs">
+                    <button
+                      type="button"
+                      className={`btn btn-sm flex-1 ${custType === 'RETAIL' ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => setCustType('RETAIL')}
+                    >
+                      🏪 Retail Customer
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-sm flex-1 ${custType === 'WHOLESALE' ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => setCustType('WHOLESALE')}
+                    >
+                      🏷️ Wholesale Customer
+                    </button>
+                  </div>
                 </div>
                 <div className="form-group mb-sm">
                   <label className="form-label">Phone Number</label>

@@ -237,6 +237,11 @@ export const CustomerNameInput = ({
         {/* Badges / indicators for selected customer */}
         {hasAttachedCustomer && (
           <div className="customer-name-badge-group">
+            {(selectedCustomer.customer_type === 'WHOLESALE' || selectedCustomer.is_wholesale) && (
+              <span className="badge badge-vip" title="Wholesale Pricing Account" style={{ fontSize: '11px', padding: '2px 6px' }}>
+                🏷️ Wholesale
+              </span>
+            )}
             {(() => {
               const b = calculateCustomerBalance(selectedCustomer);
               if (b.hasDebt) {
@@ -328,6 +333,15 @@ export const CustomerNameInput = ({
                       <span className="customer-suggestion-name">
                         <HighlightPrefix text={c.name} query={value} />
                       </span>
+                      {(c.customer_type === 'WHOLESALE' || c.is_wholesale) ? (
+                        <span className="badge badge-vip" style={{ fontSize: '10px', padding: '1px 5px' }}>
+                          🏷️ Wholesale
+                        </span>
+                      ) : (
+                        <span className="badge badge-secondary" style={{ fontSize: '10px', padding: '1px 5px' }}>
+                          🏪 Retail
+                        </span>
+                      )}
                       {c.trust_status && (
                         <span className={`badge ${badgeClass}`} style={{ fontSize: '10px', padding: '1px 5px' }}>
                           {c.trust_status}

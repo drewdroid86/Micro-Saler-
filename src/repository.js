@@ -78,6 +78,9 @@ export function calculateCustomerBalance(customer, prepayments = []) {
     ? formatCents(balance)
     : '$0.00';
 
+  const customerType = (customer.customer_type || (customer.is_wholesale ? 'WHOLESALE' : 'RETAIL')).toUpperCase();
+  const isWholesale = customerType === 'WHOLESALE';
+
   return {
     balance,
     balanceCents: balance,
@@ -91,6 +94,8 @@ export function calculateCustomerBalance(customer, prepayments = []) {
     availableCreditCents,
     utilizationPercent,
     balanceType,
+    customerType,
+    isWholesale,
     hasDebt: balance < 0,
     hasCredit: totalCreditCents > 0,
     hasStoreCredit: balance > 0,
@@ -109,7 +114,50 @@ export function formatMgToGrams(mg) {
   return `${(m / 1000).toFixed(1)}g`;
 }
 
-export const APPROVED_PAYMENT_TYPES = new Set(['CASH', 'DIGITAL', 'HOUSE_TAB', 'PREPAID_DELIVERY']);
+export const APPROVED_PAYMENT_TYPES = new Set(['CASH', 'DIGITAL', 'HOUSE_TAB', 'PREPAID_DELIVERY', 'STORE_CREDIT']);
+
+export const DEFAULT_MERCHANT_FEE_RATES = {
+  SQUARE: { percentage: 0.026, fixedCents: 10, description: '2.6% + $0.10' },
+  VENMO: { percentage: 0.019, fixedCents: 10, description: '1.9% + $0.10' },
+  ZELLE: { percentage: 0.0, fixedCents: 0, description: 'No Fee ($0.00)' },
+  DEFAULT: { percentage: 0.029, fixedCents: 30, description: '2.9% + $0.30' }
+};
+
+/**
+ * Extensible helper to calculate merchant processing fees for digital payments.
+ * Supports provider presets (Square, Venmo, Zelle) as well as custom rate overrides,
+ * fixed fees, or direct fee overrides to preserve flexibility for changing deal terms.
+ *
+ * @param {string} [provider='SQUARE'] - Payment provider ('Square', 'Venmo', 'Zelle', etc.)
+ * @param {number} [amountCents=0] - Transaction amount in cents
+ * @param {Object} [options={}] - Custom override options
+ * @param {number} [options.customRate] - Custom percentage rate (e.g. 0.026 for 2.6%)
+ * @param {number} [options.customFixedCents] - Custom fixed cents (e.g. 15 for $0.15)
+ * @param {number} [options.customFeeCents] - Direct override of calculated fee in cents
+ * @returns {number} Calculated merchant fee in cents (rounded integer >= 0)
+ */
+export function calculateMerchantFeeCents(provider = 'SQUARE', amountCents = 0, options = {}) {
+  const amt = Number(amountCents) || 0;
+  if (amt <= 0) return 0;
+
+  if (options && options.customFeeCents !== undefined && options.customFeeCents !== null && !isNaN(options.customFeeCents)) {
+    return Math.max(0, Math.round(Number(options.customFeeCents)));
+  }
+
+  const key = (provider || 'DEFAULT').toUpperCase().trim();
+  const preset = DEFAULT_MERCHANT_FEE_RATES[key] || DEFAULT_MERCHANT_FEE_RATES.DEFAULT;
+
+  const rate = (options && options.customRate !== undefined && options.customRate !== null && !isNaN(options.customRate))
+    ? Number(options.customRate)
+    : preset.percentage;
+
+  const fixed = (options && options.customFixedCents !== undefined && options.customFixedCents !== null && !isNaN(options.customFixedCents))
+    ? Number(options.customFixedCents)
+    : preset.fixedCents;
+
+  const fee = (amt * rate) + fixed;
+  return Math.max(0, Math.round(fee));
+}
 
 export function validateCompletedSale({ sale, items = [], payments = [], customerId = null }) {
   const errors = [];
@@ -850,12 +898,16 @@ export class PosRepository {
 
       // 5. Write payments and update customer ledger/balance
       for (const payment of payments) {
+        const calculatedFee = payment.merchant_fee_cents !== undefined && payment.merchant_fee_cents !== null
+          ? Number(payment.merchant_fee_cents) || 0
+          : (payment.payment_type === 'DIGITAL' ? calculateMerchantFeeCents(payment.digital_provider, payment.amount_cents) : 0);
+
         salePaymentsStore.add({
           sale_id: createdSaleId,
           payment_type: payment.payment_type,
           digital_provider: payment.digital_provider || null,
           amount_cents: payment.amount_cents,
-          merchant_fee_cents: payment.merchant_fee_cents || 0,
+          merchant_fee_cents: calculatedFee,
         });
 
         if (payment.payment_type === 'HOUSE_TAB' && customerObj) {
@@ -963,7 +1015,7 @@ export class PosRepository {
   async voidSale(saleId, reason) {
     const sId = Number(saleId);
     return await this.db.runTransaction(
-      ['sales', 'sale_items', 'sale_payments', 'pigments', 'customers', 'customer_ledger', 'returns', 'audit_log'],
+      ['sales', 'sale_items', 'sale_payments', 'pigments', 'customers', 'customer_ledger', 'returns', 'audit_log', 'customer_prepayments'],
       'readwrite',
       async (tx) => {
         const salesStore = tx.objectStore('sales');
@@ -1046,6 +1098,37 @@ export class PosRepository {
               saleId: sId,
               timestamp: now
             });
+          }
+
+          const storeCreditTotal = payments
+            .filter(p => p.payment_type === 'STORE_CREDIT')
+            .reduce((sum, p) => sum + p.amount_cents, 0);
+
+          if (storeCreditTotal > 0) {
+            await this._applyLedgerEntryInTx(tx, {
+              customerId: Number(sale.customer_id),
+              amountCents: storeCreditTotal, // Positive refund restoring customer store credit
+              type: 'SALE_VOID_CREDIT_REFUND',
+              description: `Refund of store credit applied to voided Sale #${sId}`,
+              saleId: sId,
+              timestamp: now
+            });
+          }
+        }
+
+        // Restore prepayment if this sale originated from a fulfilled prepayment
+        if (sale.prepayment_id) {
+          const prepStore = tx.objectStore('customer_prepayments');
+          const prepayment = await new Promise((resolve, reject) => {
+            const req = prepStore.get(Number(sale.prepayment_id));
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          if (prepayment && prepayment.status === 'FULFILLED') {
+            prepayment.status = 'PENDING_DELIVERY';
+            delete prepayment.fulfilled_at;
+            delete prepayment.fulfillment_notes;
+            prepStore.put(prepayment);
           }
         }
 
@@ -1590,9 +1673,14 @@ export class PosRepository {
           ? Number(data.initial_balance_cents)
           : (data.current_balance_cents !== undefined ? -Number(data.current_balance_cents) : 0)));
 
+    const customerType = (data.customer_type || (data.is_wholesale ? 'WHOLESALE' : 'RETAIL')).toUpperCase();
+    const isWholesale = customerType === 'WHOLESALE';
+
     const customerId = await this.db.add('customers', {
       name: data.name,
       phone_number: data.phone_number || data.phone || '',
+      customer_type: customerType,
+      is_wholesale: isWholesale,
       balance: initialBal,
       current_balance_cents: -initialBal, // Legacy compatibility
       credit_limit_cents: data.credit_limit_cents !== undefined ? Number(data.credit_limit_cents) : 2500,
@@ -1776,10 +1864,19 @@ export class PosRepository {
         }
       }
 
+      const custType = data.customer_type !== undefined
+        ? data.customer_type.toUpperCase()
+        : (data.is_wholesale !== undefined
+          ? (data.is_wholesale ? 'WHOLESALE' : 'RETAIL')
+          : (existing.customer_type || (existing.is_wholesale ? 'WHOLESALE' : 'RETAIL')));
+      const isWholesale = custType === 'WHOLESALE';
+
       const updated = {
         ...existing,
         name: data.name !== undefined ? data.name : existing.name,
         phone_number: data.phone_number !== undefined ? data.phone_number : (data.phone !== undefined ? data.phone : existing.phone_number),
+        customer_type: custType,
+        is_wholesale: isWholesale,
         credit_limit_cents: data.credit_limit_cents !== undefined ? Number(data.credit_limit_cents) : existing.credit_limit_cents,
         balance: targetBal,
         current_balance_cents: -targetBal, // Legacy compatibility
@@ -1883,6 +1980,8 @@ export class PosRepository {
               total_amount_cents: item.amount_cents || 0,
               total_cogs_cents: unitCogsCents,
               status: 'COMPLETED',
+              source: 'PREPAYMENT_FULFILLMENT',
+              prepayment_id: prepId,
               created_at: now,
             });
             req.onsuccess = () => resolve(req.result);
@@ -1914,6 +2013,8 @@ export class PosRepository {
               total_amount_cents: item.amount_cents,
               total_cogs_cents: 0,
               status: 'COMPLETED',
+              source: 'PREPAYMENT_FULFILLMENT',
+              prepayment_id: prepId,
               created_at: now,
             });
             req.onsuccess = () => resolve(req.result);
@@ -2235,23 +2336,8 @@ export class PosRepository {
       }
 
       const oldPayments = await this.db.getAllByIndex('sale_payments', 'sale_id', sId);
-      for (const op of oldPayments) {
-        if (op.payment_id) {
-          await this.db.delete('sale_payments', op.payment_id);
-        }
-      }
 
-      for (const p of payments) {
-        await this.db.add('sale_payments', {
-          sale_id: sId,
-          payment_type: p.payment_type,
-          digital_provider: p.digital_provider || null,
-          amount_cents: p.amount_cents,
-          merchant_fee_cents: p.merchant_fee_cents || 0
-        });
-      }
-
-      // Rebalance customer house tab balance if HOUSE_TAB tender amount changed
+      // Compute tab delta before transaction so we know what ledger entry to write
       const oldTabTotalCents = oldPayments
         .filter(p => p.payment_type === 'HOUSE_TAB')
         .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
@@ -2260,26 +2346,66 @@ export class PosRepository {
         .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
       const tabDeltaCents = newTabTotalCents - oldTabTotalCents;
 
-      if (tabDeltaCents !== 0 && sale.customer_id) {
-        const customer = await this.db.getById('customers', Number(sale.customer_id));
-        if (customer) {
-          customer.current_balance_cents = Math.max(0, (customer.current_balance_cents || 0) + tabDeltaCents);
-          await this.db.put('customers', customer);
+      await this.db.runTransaction(
+        ['sale_payments', 'sales', 'customers', 'customer_ledger', 'audit_log'],
+        'readwrite',
+        async (tx) => {
+          const paymentStore = tx.objectStore('sale_payments');
+          const salesStore = tx.objectStore('sales');
+          const auditStore = tx.objectStore('audit_log');
+
+          // Delete old payments
+          for (const op of oldPayments) {
+            if (op.payment_id) {
+              paymentStore.delete(op.payment_id);
+            }
+          }
+
+          // Write corrected payments
+          for (const p of payments) {
+            paymentStore.add({
+              sale_id: sId,
+              payment_type: p.payment_type,
+              digital_provider: p.digital_provider || null,
+              amount_cents: p.amount_cents,
+              merchant_fee_cents: p.merchant_fee_cents || 0
+            });
+          }
+
+          // Rebalance customer tab via ledger (keeps both balance fields in sync)
+          if (tabDeltaCents !== 0 && sale.customer_id) {
+            await this._applyLedgerEntryInTx(tx, {
+              customerId: Number(sale.customer_id),
+              amountCents: -tabDeltaCents, // Negative = more debt when tab increases
+              type: 'RECONCILIATION_ADJUSTMENT',
+              description: `Payment correction for Sale #${sId} (tab delta: ${tabDeltaCents})`,
+              saleId: sId,
+              timestamp: now
+            });
+          }
+
+          // Mark reconciled
+          const currentSale = await new Promise((resolve, reject) => {
+            const req = salesStore.get(sId);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          if (currentSale) {
+            currentSale.needs_reconciliation = false;
+            currentSale.reconciliation_status = 'RECONCILED';
+            salesStore.put(currentSale);
+          }
+
+          auditStore.add({
+            entity_type: 'Sale',
+            entity_id: sId,
+            action: 'MANUAL_RECONCILIATION_CORRECT_PAYMENT',
+            details_json: JSON.stringify({ sale_id: sId, corrected_payments: payments, tab_delta_cents: tabDeltaCents }),
+            created_at: now,
+            timestamp: now
+          });
         }
-      }
-
-      sale.needs_reconciliation = false;
-      sale.reconciliation_status = 'RECONCILED';
-      await this.db.put('sales', sale);
-
-      await this.db.add('audit_log', {
-        entity_type: 'Sale',
-        entity_id: sId,
-        action: 'MANUAL_RECONCILIATION_CORRECT_PAYMENT',
-        details_json: JSON.stringify({ sale_id: sId, corrected_payments: payments, tab_delta_cents: tabDeltaCents }),
-        created_at: now,
-        timestamp: now
-      });
+      );
     } else if (actionType === 'EXTERNAL_RECONCILE') {
       const { note } = payload;
       if (!note || !note.trim()) {
@@ -2332,11 +2458,13 @@ export class PosRepository {
 export function calculateBusinessInsights({
   sales = [],
   saleItems = [],
+  salePayments = [],
   pigments = [],
   customers = [],
   suppliers = [],
   shrinkageLogs = [],
   stockReceipts = [],
+  customerPrepayments = [],
   timeRange = 'ALL',
   nowTimestamp = null
 }) {
@@ -2475,6 +2603,10 @@ export function calculateBusinessInsights({
   const grossMarginPct = grossRevenueCents > 0 ? Math.round((grossProfitCents / grossRevenueCents) * 100) : 0;
   const completedCount = completedSales.length;
   const averageOrderValueCents = completedCount > 0 ? Math.round(grossRevenueCents / completedCount) : 0;
+
+  // Merchant Processing Fees (actual recorded fees from sale_payments)
+  const filteredSalePayments = (salePayments || []).filter(p => completedSaleIds.has(p.sale_id));
+  const totalMerchantFeeCents = filteredSalePayments.reduce((sum, p) => sum + (p.merchant_fee_cents || 0), 0);
 
   // Pricing Mode Breakdown
   let retailSalesCount = 0;
@@ -2842,13 +2974,42 @@ export function calculateBusinessInsights({
     });
   });
 
+  const voidedSales = (sales || []).filter(s => {
+    const isVoided = s.status === 'VOIDED';
+    const ts = s.created_at || s.timestamp || s.date || 0;
+    return isVoided && (filterTimestamp === 0 || ts >= filterTimestamp);
+  });
+  const voidedCount = voidedSales.length;
+
+  const netProfitCents = grossProfitCents - totalShrinkageLossCents - totalMerchantFeeCents;
+  const netMarginPct = grossRevenueCents > 0 ? Math.round((netProfitCents / grossRevenueCents) * 100) : 0;
+
+  // Customer Prepayments & Backorder Liabilities
+  const activePrepayments = (customerPrepayments || []).filter(p => p.status !== 'FULFILLED');
+  const totalPrepaymentCreditCents = activePrepayments.reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+  const totalPrepaymentWeightMg = activePrepayments.reduce((sum, p) => sum + (Number(p.weight_mg) || 0), 0);
+
+  // Inventory Valuation
+  const totalInventoryMg = (pigments || []).reduce((sum, p) => sum + (Number(p.stock_mg) || 0), 0);
+  const totalCostBasisCents = (pigments || []).reduce((sum, p) => sum + (Number(p.total_cost_cents) || 0), 0);
+  const totalRetailValueCents = (pigments || []).reduce((sum, p) => {
+    const g = (Number(p.stock_mg) || 0) / 1000;
+    const rate = Number(p.retail_price_per_gram_cents) || 0;
+    return sum + Math.round(g * rate);
+  }, 0);
+
   return {
     timeRange,
     completedCount,
+    voidedCount,
     grossRevenueCents,
     totalCogsCents,
     grossProfitCents,
     grossMarginPct,
+    totalMerchantFeeCents,
+    actualMerchantFeesCents: totalMerchantFeeCents, // alias for reports compatibility
+    netProfitCents,
+    netMarginPct,
     averageOrderValueCents,
     perPigmentProfitability,
     dayOfWeekStats,
@@ -2861,6 +3022,12 @@ export function calculateBusinessInsights({
     totalApCents,
     shrinkageImpact,
     totalShrinkageLossCents,
+    activePrepayments,
+    totalPrepaymentCreditCents,
+    totalPrepaymentWeightMg,
+    totalInventoryMg,
+    totalCostBasisCents,
+    totalRetailValueCents,
     pricingModeSummary,
     detailedSalesList,
     validReceipts,

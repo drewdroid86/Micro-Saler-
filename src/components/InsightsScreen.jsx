@@ -17,6 +17,7 @@ export const InsightsScreen = () => {
   const {
     sales,
     saleItems,
+    salePayments,
     pigments,
     customers,
     suppliers,
@@ -51,6 +52,7 @@ export const InsightsScreen = () => {
     return calculateBusinessInsights({
       sales,
       saleItems,
+      salePayments,
       pigments,
       customers,
       suppliers,
@@ -58,7 +60,7 @@ export const InsightsScreen = () => {
       stockReceipts,
       timeRange
     });
-  }, [sales, saleItems, pigments, customers, suppliers, shrinkageLogs, stockReceipts, timeRange]);
+  }, [sales, saleItems, salePayments, pigments, customers, suppliers, shrinkageLogs, stockReceipts, timeRange]);
 
   // Sorted Per-Pigment Profitability Table
   const sortedProfitability = useMemo(() => {

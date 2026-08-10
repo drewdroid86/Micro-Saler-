@@ -18,6 +18,8 @@ import {
   getAllCustomerNames,
   filterCustomerSuggestions,
   calculateCustomerBalance,
+  calculateMerchantFeeCents,
+  DEFAULT_MERCHANT_FEE_RATES,
   PosRepository
 } from '../repository.js';
 
@@ -1374,4 +1376,395 @@ test('getCustomerLedger formats and labels opening_balance entry as Opening bala
   assert.equal(ledger[0].running_balance_cents, 5000);
   assert.equal(ledger[0].formatted_amount, '+$50.00');
 });
+
+test('calculateMerchantFeeCents computes provider fees accurately and supports custom overrides', () => {
+  // Square: 2.6% + 10¢
+  assert.equal(calculateMerchantFeeCents('Square', 10000), 270); // $100 * 0.026 + $0.10 = $2.70
+  assert.equal(calculateMerchantFeeCents('SQUARE', 5000), 140);  // $50 * 0.026 + $0.10 = $1.40
+
+  // Venmo: 1.9% + 10¢
+  assert.equal(calculateMerchantFeeCents('Venmo', 10000), 200);  // $100 * 0.019 + $0.10 = $2.00
+
+  // Zelle: 0% + 0¢
+  assert.equal(calculateMerchantFeeCents('Zelle', 10000), 0);
+
+  // Default fallback
+  assert.equal(calculateMerchantFeeCents('Unknown', 10000), 320); // 2.9% + 30¢
+
+  // Zero / negative amounts
+  assert.equal(calculateMerchantFeeCents('Square', 0), 0);
+  assert.equal(calculateMerchantFeeCents('Square', -500), 0);
+
+  // Custom rate override (e.g. 2.0% + $0.15)
+  assert.equal(calculateMerchantFeeCents('Square', 10000, { customRate: 0.02, customFixedCents: 15 }), 215);
+
+  // Direct fee override ($1.50)
+  assert.equal(calculateMerchantFeeCents('Square', 10000, { customFeeCents: 150 }), 150);
+});
+
+test('calculateBusinessInsights factors actual merchant processing fees into net profit and P&L metrics', () => {
+  const sales = [
+    { sale_id: 1, total_amount_cents: 10000, total_cogs_cents: 4000, status: 'COMPLETED', created_at: 1000 },
+    { sale_id: 2, total_amount_cents: 5000, total_cogs_cents: 2000, status: 'COMPLETED', created_at: 1000 },
+    { sale_id: 3, total_amount_cents: 8000, total_cogs_cents: 3000, status: 'VOIDED', created_at: 1000 },
+  ];
+
+  const salePayments = [
+    { payment_id: 1, sale_id: 1, payment_type: 'DIGITAL', amount_cents: 10000, merchant_fee_cents: 270 },
+    { payment_id: 2, sale_id: 2, payment_type: 'CASH', amount_cents: 5000, merchant_fee_cents: 0 },
+    { payment_id: 3, sale_id: 3, payment_type: 'DIGITAL', amount_cents: 8000, merchant_fee_cents: 220 }, // voided, should be excluded
+  ];
+
+  const shrinkageLogs = [
+    { log_id: 1, pigment_id: 1, cogs_loss_cents: 500, created_at: 1000 }
+  ];
+
+  const insights = calculateBusinessInsights({
+    sales,
+    saleItems: [],
+    salePayments,
+    pigments: [],
+    customers: [],
+    suppliers: [],
+    shrinkageLogs,
+    timeRange: 'ALL'
+  });
+
+  assert.equal(insights.grossRevenueCents, 15000); // 10000 + 5000
+  assert.equal(insights.totalCogsCents, 6000);    // 4000 + 2000
+  assert.equal(insights.grossProfitCents, 9000);   // 15000 - 6000
+  assert.equal(insights.totalMerchantFeeCents, 270); // only sale 1's fee (sale 3 is voided)
+  assert.equal(insights.totalShrinkageLossCents, 500);
+  assert.equal(insights.netProfitCents, 8230); // 9000 - 500 - 270
+  assert.equal(insights.voidedCount, 1);
+});
+
+function createMockDatabase() {
+  const stores = {
+    sales: new Map(),
+    sale_items: new Map(),
+    sale_payments: new Map(),
+    pigments: new Map(),
+    customers: new Map(),
+    customer_ledger: new Map(),
+    customer_prepayments: new Map(),
+    returns: new Map(),
+    audit_log: new Map()
+  };
+
+  let nextId = 1;
+
+  return {
+    stores,
+    async getById(storeName, id) {
+      return stores[storeName]?.get(Number(id)) || null;
+    },
+    async getAllByIndex(storeName, indexName, value) {
+      const list = Array.from(stores[storeName]?.values() || []);
+      return list.filter(item => item[indexName] === value);
+    },
+    async put(storeName, record) {
+      const key = record.id || record.sale_id || record.customer_id || record.pigment_id || record.prepayment_id || nextId++;
+      stores[storeName]?.set(Number(key), record);
+      return key;
+    },
+    async add(storeName, record) {
+      const key = nextId++;
+      const idField = storeName === 'sales' ? 'sale_id'
+        : storeName === 'customers' ? 'customer_id'
+        : storeName === 'pigments' ? 'pigment_id'
+        : storeName === 'sale_payments' ? 'payment_id'
+        : storeName === 'customer_ledger' ? 'entry_id'
+        : storeName === 'customer_prepayments' ? 'prepayment_id'
+        : 'id';
+      const item = { ...record, [idField]: key };
+      stores[storeName]?.set(key, item);
+      return key;
+    },
+    async delete(storeName, id) {
+      stores[storeName]?.delete(Number(id));
+      return true;
+    },
+    async runTransaction(storeNames, mode, callback) {
+      const tx = {
+        objectStore(name) {
+          const store = stores[name];
+          return {
+            get(id) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              setTimeout(() => {
+                req.result = store?.get(Number(id)) || null;
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            },
+            put(record) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              const key = record.sale_id || record.customer_id || record.pigment_id || record.prepayment_id || record.id || nextId++;
+              store?.set(Number(key), record);
+              setTimeout(() => {
+                req.result = key;
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            },
+            add(record) {
+              const req = { onsuccess: null, onerror: null, result: null };
+              const key = nextId++;
+              const idField = name === 'sales' ? 'sale_id'
+                : name === 'customers' ? 'customer_id'
+                : name === 'pigments' ? 'pigment_id'
+                : name === 'sale_payments' ? 'payment_id'
+                : name === 'customer_ledger' ? 'entry_id'
+                : name === 'customer_prepayments' ? 'prepayment_id'
+                : 'id';
+              const item = { ...record, [idField]: key };
+              store?.set(key, item);
+              setTimeout(() => {
+                req.result = key;
+                if (req.onsuccess) req.onsuccess();
+              }, 0);
+              return req;
+            },
+            delete(id) {
+              store?.delete(Number(id));
+              return true;
+            },
+            index(indexName) {
+              return {
+                getAll(value) {
+                  const req = { onsuccess: null, onerror: null, result: null };
+                  setTimeout(() => {
+                    const list = Array.from(store?.values() || []);
+                    req.result = list.filter(item => item[indexName] === value);
+                    if (req.onsuccess) req.onsuccess();
+                  }, 0);
+                  return req;
+                }
+              };
+            }
+          };
+        }
+      };
+      return await callback(tx);
+    }
+  };
+}
+
+test('completeSale accepts STORE_CREDIT and deducts from customer balance via ledger', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  // Seed customer with $50.00 store credit (balance = +5000)
+  mockDb.stores.customers.set(1, { customer_id: 1, name: 'Alice', balance: 5000, current_balance_cents: -5000, credit_limit_cents: 10000 });
+  mockDb.stores.pigments.set(1, { pigment_id: 1, name: 'Blue', stock_mg: 50000, total_cost_cents: 2500 });
+
+  const saleId = await repo.completeSale(
+    1,
+    [{ pigment_id: 1, weight_mg: 5000, price_charged_cents: 2000, unit_cogs_cents: 250 }],
+    [{ payment_type: 'STORE_CREDIT', amount_cents: 2000, digital_provider: null, merchant_fee_cents: 0 }]
+  );
+
+  assert.ok(saleId);
+  const updatedCustomer = mockDb.stores.customers.get(1);
+  assert.equal(updatedCustomer.balance, 3000); // 5000 - 2000 = 3000 credit remaining
+  assert.equal(updatedCustomer.current_balance_cents, -3000);
+
+  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values());
+  assert.equal(ledgerEntries.length, 1);
+  assert.equal(ledgerEntries[0].type, 'SALE_CREDIT_APPLIED');
+  assert.equal(ledgerEntries[0].amount_cents, -2000);
+});
+
+test('voidSale restores STORE_CREDIT payments back to customer ledger balance', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  mockDb.stores.customers.set(1, { customer_id: 1, name: 'Alice', balance: 3000, current_balance_cents: -3000 });
+  mockDb.stores.pigments.set(1, { pigment_id: 1, name: 'Blue', stock_mg: 45000, total_cost_cents: 2250 });
+
+  const saleId = 101;
+  mockDb.stores.sales.set(saleId, { sale_id: saleId, customer_id: 1, status: 'COMPLETED', total_amount_cents: 2000 });
+  mockDb.stores.sale_items.set(1, { id: 1, sale_id: saleId, pigment_id: 1, weight_mg: 5000, unit_cogs_cents: 250 });
+  mockDb.stores.sale_payments.set(1, { payment_id: 1, sale_id: saleId, payment_type: 'STORE_CREDIT', amount_cents: 2000 });
+
+  await repo.voidSale(saleId, 'Wrong product selected');
+
+  const updatedCustomer = mockDb.stores.customers.get(1);
+  assert.equal(updatedCustomer.balance, 5000); // 3000 + 2000 restored
+  assert.equal(updatedCustomer.current_balance_cents, -5000);
+
+  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values());
+  assert.equal(ledgerEntries.length, 1);
+  assert.equal(ledgerEntries[0].type, 'SALE_VOID_CREDIT_REFUND');
+  assert.equal(ledgerEntries[0].amount_cents, 2000);
+});
+
+test('reconcileSaleRecord CORRECT_PAYMENT rebalances tab via ledger without dual-field drift', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  // Customer initially owes $10.00 (balance = -1000, current_balance_cents = 1000)
+  mockDb.stores.customers.set(1, { customer_id: 1, name: 'Charlie', balance: -1000, current_balance_cents: 1000 });
+
+  const saleId = 201;
+  mockDb.stores.sales.set(saleId, {
+    sale_id: saleId,
+    customer_id: 1,
+    status: 'COMPLETED',
+    total_amount_cents: 5000,
+    needs_reconciliation: true
+  });
+
+  mockDb.stores.sale_items.set(1, {
+    id: 1,
+    sale_id: saleId,
+    pigment_id: 1,
+    weight_mg: 5000,
+    price_charged_cents: 5000,
+    unit_cogs_cents: 200
+  });
+
+  // Old payment was only $30.00 on HOUSE_TAB (underpaid by $20.00)
+  mockDb.stores.sale_payments.set(1, {
+    payment_id: 1,
+    sale_id: saleId,
+    payment_type: 'HOUSE_TAB',
+    amount_cents: 3000,
+    merchant_fee_cents: 0
+  });
+
+  // Reconcile: Correct payment to full $50.00 on HOUSE_TAB (+2000 tab delta)
+  await repo.reconcileSaleRecord(saleId, 'CORRECT_PAYMENT', {
+    payments: [{ payment_type: 'HOUSE_TAB', amount_cents: 5000, merchant_fee_cents: 0 }]
+  });
+
+  const updatedCustomer = mockDb.stores.customers.get(1);
+  // Both fields must stay strictly in sync: debt increased from $10 to $30
+  assert.equal(updatedCustomer.balance, -3000);
+  assert.equal(updatedCustomer.current_balance_cents, 3000);
+
+  const ledgerEntries = Array.from(mockDb.stores.customer_ledger.values());
+  assert.equal(ledgerEntries.length, 1);
+  assert.equal(ledgerEntries[0].type, 'RECONCILIATION_ADJUSTMENT');
+  assert.equal(ledgerEntries[0].amount_cents, -2000);
+
+  const updatedSale = mockDb.stores.sales.get(saleId);
+  assert.equal(updatedSale.needs_reconciliation, false);
+  assert.equal(updatedSale.reconciliation_status, 'RECONCILED');
+});
+
+test('fulfillCustomerPrepayment links sale and voidSale restores prepayment status to PENDING_DELIVERY', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  mockDb.stores.pigments.set(1, { pigment_id: 1, name: 'Gold', stock_mg: 20000, total_cost_cents: 1000 });
+  mockDb.stores.customer_prepayments.set(10, {
+    prepayment_id: 10,
+    customer_id: 1,
+    pigment_id: 1,
+    weight_mg: 5000,
+    amount_cents: 3000,
+    status: 'PENDING_DELIVERY'
+  });
+
+  // 1. Fulfill prepayment
+  const fulfilledItem = await repo.fulfillCustomerPrepayment(10);
+  assert.equal(fulfilledItem.status, 'FULFILLED');
+
+  const generatedSale = Array.from(mockDb.stores.sales.values())[0];
+  assert.ok(generatedSale);
+  assert.equal(generatedSale.source, 'PREPAYMENT_FULFILLMENT');
+  assert.equal(generatedSale.prepayment_id, 10);
+  assert.equal(generatedSale.total_amount_cents, 3000);
+
+  // 2. Void the fulfillment sale
+  await repo.voidSale(generatedSale.sale_id, 'Customer changed delivery address');
+
+  const restoredPrepayment = mockDb.stores.customer_prepayments.get(10);
+  assert.equal(restoredPrepayment.status, 'PENDING_DELIVERY');
+  assert.equal(restoredPrepayment.fulfilled_at, undefined);
+
+  // Inventory should also be restocked
+  const restockedPigment = mockDb.stores.pigments.get(1);
+  assert.equal(restockedPigment.stock_mg, 20000);
+});
+
+test('createCustomer and updateCustomer manage customer_type (WHOLESALE vs RETAIL) and is_wholesale flag', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  // 1. Create Wholesale customer
+  const custId = await repo.createCustomer({
+    name: 'Bulk Resin Co',
+    phone_number: '555-0199',
+    customer_type: 'WHOLESALE',
+    credit_limit_cents: 10000
+  });
+
+  const created = mockDb.stores.customers.get(custId);
+  assert.equal(created.name, 'Bulk Resin Co');
+  assert.equal(created.customer_type, 'WHOLESALE');
+  assert.equal(created.is_wholesale, true);
+
+  const balWholesale = calculateCustomerBalance(created);
+  assert.equal(balWholesale.isWholesale, true);
+  assert.equal(balWholesale.customerType, 'WHOLESALE');
+
+  // 2. Update customer to RETAIL
+  await repo.updateCustomer({
+    customer_id: custId,
+    customer_type: 'RETAIL'
+  });
+
+  const updated = mockDb.stores.customers.get(custId);
+  assert.equal(updated.customer_type, 'RETAIL');
+  assert.equal(updated.is_wholesale, false);
+
+  const balRetail = calculateCustomerBalance(updated);
+  assert.equal(balRetail.isWholesale, false);
+  assert.equal(balRetail.customerType, 'RETAIL');
+});
+
+test('completeSale respects individual pricingMode override per transaction', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  mockDb.stores.pigments.set(1, {
+    pigment_id: 1,
+    name: 'Titanium White',
+    stock_mg: 50000,
+    total_cost_cents: 5000,
+    retail_rate_cents: 200,
+    wholesale_rate_cents: 100
+  });
+
+  // Wholesale customer buying with RETAIL pricing override on this specific transaction
+  const cart = [{
+    pigment_id: 1,
+    pigment: mockDb.stores.pigments.get(1),
+    weight_mg: 5000,
+    price_charged_cents: 1000, // 5g * $2.00/g = $10.00
+    unit_cogs_cents: 500
+  }];
+
+  const payments = [{
+    payment_type: 'CASH',
+    digital_provider: null,
+    amount_cents: 1000,
+    merchant_fee_cents: 0
+  }];
+
+  const saleId = await repo.completeSale(1, cart, payments, false, 'RETAIL');
+  const sale = mockDb.stores.sales.get(saleId);
+  assert.equal(sale.pricing_mode, 'RETAIL');
+  assert.equal(sale.total_amount_cents, 1000);
+
+  // Another transaction with WHOLESALE pricing
+  const wholesaleSaleId = await repo.completeSale(1, cart, payments, false, 'WHOLESALE');
+  const wholesaleSale = mockDb.stores.sales.get(wholesaleSaleId);
+  assert.equal(wholesaleSale.pricing_mode, 'WHOLESALE');
+});
+
+
 
