@@ -2,6 +2,10 @@ import React, { createContext, useContext, useState, useEffect, useMemo } from '
 import MicroSalerDB from '../db.js';
 import { PosRepository, getEffectivePricePerGramCents, formatMgToGrams } from '../repository.js';
 
+export const BACKUP_STORAGE_KEY = 'micro_saler_last_backup_timestamp';
+export const AUTO_BACKUP_INTERVAL_MS = 30 * 60 * 1000;
+export const BACKUP_OVERDUE_MS = 24 * 60 * 60 * 1000;
+
 const PosContext = createContext(null);
 
 export const PosProvider = ({ children }) => {
@@ -23,6 +27,21 @@ export const PosProvider = ({ children }) => {
   const [supplierPayments, setSupplierPayments] = useState([]);
   const [stockReceipts, setStockReceipts] = useState([]);
   const [customerPrepayments, setCustomerPrepayments] = useState([]);
+
+  // Auto-backup state
+  const [lastBackupTime, setLastBackupTime] = useState(() => {
+    try {
+      const stored = localStorage.getItem(BACKUP_STORAGE_KEY);
+      return stored ? parseInt(stored, 10) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+
+  const isBackupOverdue = useMemo(() => {
+    if (!lastBackupTime) return true;
+    return (Date.now() - lastBackupTime) > BACKUP_OVERDUE_MS;
+  }, [lastBackupTime]);
 
   // Checkout state
   const [cart, setCart] = useState([]);
@@ -462,8 +481,10 @@ export const PosProvider = ({ children }) => {
     }
   };
 
-  const exportBackup = async () => {
+  const exportBackup = async (options = {}) => {
+    const isAuto = options?.isAuto || false;
     try {
+      if (!repo) return null;
       const backupData = await repo.exportData();
       const jsonStr = JSON.stringify(backupData, null, 2);
       const blob = new Blob([jsonStr], { type: 'application/json' });
@@ -472,7 +493,8 @@ export const PosProvider = ({ children }) => {
       const pad = (n) => String(n).padStart(2, '0');
       const d = new Date();
       const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
-      const fileName = `micro-saler-backup-${dateStr}.json`;
+      const prefix = isAuto ? 'micro-saler-auto-backup' : 'micro-saler-backup';
+      const fileName = `${prefix}-${dateStr}.json`;
 
       const link = document.createElement('a');
       link.href = url;
@@ -481,11 +503,47 @@ export const PosProvider = ({ children }) => {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      showToast('Ledger backup exported successfully!', 'success');
+
+      const now = Date.now();
+      try {
+        localStorage.setItem(BACKUP_STORAGE_KEY, String(now));
+      } catch (e) {}
+      setLastBackupTime(now);
+
+      if (isAuto) {
+        showToast('30-min auto-backup downloaded', 'info');
+      } else {
+        showToast('Ledger backup exported successfully!', 'success');
+      }
+      return backupData;
     } catch (error) {
-      showToast('Export failed: ' + error.message, 'error');
+      console.error('Backup export failed:', error);
+      if (!isAuto) {
+        showToast('Export failed: ' + error.message, 'error');
+      }
+      return null;
     }
   };
+
+  useEffect(() => {
+    if (!repo || !db) return;
+
+    // Periodic check every 60s for 30m auto-backup interval
+    const interval = setInterval(() => {
+      let storedTime = null;
+      try {
+        const stored = localStorage.getItem(BACKUP_STORAGE_KEY);
+        storedTime = stored ? parseInt(stored, 10) : null;
+      } catch (e) {}
+
+      const now = Date.now();
+      if (!storedTime || (now - storedTime >= AUTO_BACKUP_INTERVAL_MS)) {
+        exportBackup({ isAuto: true });
+      }
+    }, 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, [repo, db]);
 
   const importBackup = async (jsonData) => {
     if (!window.confirm("This will overwrite all current data — continue?")) {
@@ -560,6 +618,10 @@ export const PosProvider = ({ children }) => {
     quickCollectCash,
     exportBackup,
     importBackup,
+    lastBackupTime,
+    isBackupOverdue,
+    AUTO_BACKUP_INTERVAL_MS,
+    BACKUP_OVERDUE_MS,
     refreshAllData,
     retryDbInit,
     integrityMismatches,
@@ -570,7 +632,7 @@ export const PosProvider = ({ children }) => {
     db, repo, loading, loadingError, isDbBlocked, currentTab, pigments, priceTiers,
     customers, suppliers, supplierPayments, stockReceipts, customerPrepayments, sales, saleItems, salePayments, auditLogs,
     shrinkageLogs, cart, selectedCustomer, selectedPigment, pricingMode, isHandshakeOverride,
-    isSubmitting, setIsSubmitting, toasts, modal, integrityMismatches
+    isSubmitting, setIsSubmitting, toasts, modal, integrityMismatches, lastBackupTime, isBackupOverdue
   ]);
 
   return (

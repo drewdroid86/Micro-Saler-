@@ -1,16 +1,43 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { usePos } from '../context/PosContext';
-import { formatCents, formatMgToGrams } from '../repository';
+import { formatCents, formatMgToGrams, calculateBusinessInsights } from '../repository';
+
+// Mirrors the RETAIL/WHOLESALE margin floors used by the "Below Floor" recommendation
+// rule in calculateBusinessInsights (repository.js). Keep these two in sync if that
+// rule's thresholds ever change.
+const FLOOR_MARGIN_RETAIL_PCT = 65;
+const FLOOR_MARGIN_WHOLESALE_PCT = 50;
+const STRETCH_MARGIN_BAND_PCT = 15; // stretch suggestion = floor + this many points
+
+const TARGET_STORAGE_KEY = 'microsaler_daily_net_target_cents';
 
 export const PricingCalculatorScreen = () => {
-  const { pigments, addToCart, showToast } = usePos();
+  const {
+    pigments,
+    addToCart,
+    showToast,
+    sales,
+    saleItems,
+    salePayments,
+    customers,
+    suppliers,
+    shrinkageLogs,
+    stockReceipts
+  } = usePos();
   const activePigments = (pigments || []).filter(p => !p.is_archived && p.is_active !== false);
 
   // Input states
   const [selectedPigmentId, setSelectedPigmentId] = useState('');
   const [costPerGramInput, setCostPerGramInput] = useState('2.50');
-  const [calcMode, setCalcMode] = useState('margin'); // 'margin' | 'markup'
+  const [calcMode, setCalcMode] = useState('margin'); // 'margin' | 'markup' | 'target'
   const [targetPercentInput, setTargetPercentInput] = useState('50');
+  const [businessType, setBusinessType] = useState('RETAIL'); // 'RETAIL' | 'WHOLESALE' — sets the floor for Target Mode
+
+  // Target Mode: daily net-profit target, persisted locally per-device
+  const [dailyTargetInput, setDailyTargetInput] = useState(() => {
+    const saved = localStorage.getItem(TARGET_STORAGE_KEY);
+    return saved ? String((Number(saved) / 100).toFixed(0)) : '';
+  });
 
   // Custom Weight Quick-Add state
   const [customWeightGrams, setCustomWeightGrams] = useState('10');
@@ -24,6 +51,61 @@ export const PricingCalculatorScreen = () => {
       }
     }
   };
+
+  // Today + trailing-30-day insights, reused from the same function Insights uses
+  // (so "today so far" and net profit always match what the Insights tab shows —
+  // no separate/parallel profit math here).
+  const insightsArgs = { sales, saleItems, salePayments, pigments, customers, suppliers, shrinkageLogs, stockReceipts };
+  const todayInsights = useMemo(
+    () => calculateBusinessInsights({ ...insightsArgs, timeRange: 'TODAY' }),
+    [sales, saleItems, salePayments, pigments, customers, suppliers, shrinkageLogs, stockReceipts]
+  );
+  const monthInsights = useMemo(
+    () => calculateBusinessInsights({ ...insightsArgs, timeRange: 'MONTH' }),
+    [sales, saleItems, salePayments, pigments, customers, suppliers, shrinkageLogs, stockReceipts]
+  );
+
+  // Auto-suggested target = average net profit per day-with-a-sale over the last 30 days.
+  // Only used to prefill the input the first time; editing it overrides and persists.
+  const suggestedTargetCents = useMemo(() => {
+    const daySet = new Set(
+      (sales || [])
+        .filter(s => s.status === 'COMPLETED' || !s.status || s.status === 'PAID')
+        .map(s => {
+          const ts = s.created_at || s.timestamp || s.date;
+          return ts ? new Date(ts).toDateString() : null;
+        })
+        .filter(Boolean)
+    );
+    const dayCount = daySet.size;
+    return dayCount > 0 ? Math.round(monthInsights.netProfitCents / dayCount) : 10000; // fallback $100
+  }, [sales, monthInsights.netProfitCents]);
+
+  const dailyTargetCents = useMemo(() => {
+    const val = parseFloat(dailyTargetInput);
+    return isNaN(val) || val < 0 ? suggestedTargetCents : Math.round(val * 100);
+  }, [dailyTargetInput, suggestedTargetCents]);
+
+  // Persist target whenever it's a real (non-empty) user value
+  useEffect(() => {
+    if (dailyTargetInput !== '') {
+      localStorage.setItem(TARGET_STORAGE_KEY, String(dailyTargetCents));
+    }
+  }, [dailyTargetCents, dailyTargetInput]);
+
+  const netProfitSoFarCents = todayInsights.netProfitCents;
+  const gapCents = dailyTargetCents - netProfitSoFarCents;
+  const targetHit = gapCents <= 0;
+
+  const floorMarginPct = businessType === 'WHOLESALE' ? FLOOR_MARGIN_WHOLESALE_PCT : FLOOR_MARGIN_RETAIL_PCT;
+  const stretchMarginPct = floorMarginPct + STRETCH_MARGIN_BAND_PCT;
+
+  // Heuristic, not an optimizer: the further behind target you are (as a fraction of
+  // the target itself), the closer the "on pace" suggestion is pushed toward stretch.
+  // Already past target -> collapses to the floor (no need to push margins once the
+  // day's covered).
+  const behindRatio = targetHit ? 0 : Math.min(1, Math.max(0, gapCents / Math.max(1, dailyTargetCents)));
+  const onPaceMarginPct = floorMarginPct + behindRatio * STRETCH_MARGIN_BAND_PCT;
 
   // When a pigment is selected, auto-fill its cost per gram (WAC)
   const handlePigmentSelect = (e) => {
@@ -76,17 +158,36 @@ export const PricingCalculatorScreen = () => {
    * Mode = 'markup':
    *   Given cost + target markup: Price = Cost * (1 + Markup%)
    */
+  const priceFromMargin = (totalCost, marginPct) => {
+    const marginDecimal = marginPct / 100;
+    return marginDecimal >= 1 ? 0 : totalCost / (1 - marginDecimal);
+  };
+
   const calculateRow = (weightGrams) => {
     const totalCost = costPerGram * weightGrams;
 
+    if (calcMode === 'target') {
+      const floorPrice = priceFromMargin(totalCost, floorMarginPct);
+      const onPacePrice = priceFromMargin(totalCost, onPaceMarginPct);
+      const stretchPrice = priceFromMargin(totalCost, stretchMarginPct);
+      const suggestedPrice = onPacePrice; // used for "add to cart" / custom-weight quote
+
+      return {
+        weightGrams,
+        totalCostCents: Math.round(totalCost * 100),
+        floorPriceCents: Math.round(floorPrice * 100),
+        onPacePriceCents: Math.round(onPacePrice * 100),
+        stretchPriceCents: Math.round(stretchPrice * 100),
+        suggestedPriceCents: Math.round(suggestedPrice * 100),
+        profitCents: Math.round((suggestedPrice - totalCost) * 100),
+        markupPct: totalCost > 0 ? ((suggestedPrice - totalCost) / totalCost) * 100 : 0,
+        marginPct: onPaceMarginPct
+      };
+    }
+
     let suggestedPrice = 0;
     if (calcMode === 'margin') {
-      const marginDecimal = targetPercent / 100;
-      if (marginDecimal >= 1) {
-        suggestedPrice = 0; // Prevent divide by zero or negative
-      } else {
-        suggestedPrice = totalCost / (1 - marginDecimal);
-      }
+      suggestedPrice = priceFromMargin(totalCost, targetPercent);
     } else {
       const markupDecimal = targetPercent / 100;
       suggestedPrice = totalCost * (1 + markupDecimal);
@@ -115,13 +216,13 @@ export const PricingCalculatorScreen = () => {
         ...calc
       };
     });
-  }, [costPerGram, calcMode, targetPercent]);
+  }, [costPerGram, calcMode, targetPercent, floorMarginPct, onPaceMarginPct, stretchMarginPct]);
 
   // Single custom weight calculation
   const customCalc = useMemo(() => {
     const w = parseFloat(customWeightGrams) || 0;
     return calculateRow(w);
-  }, [customWeightGrams, costPerGram, calcMode, targetPercent]);
+  }, [customWeightGrams, costPerGram, calcMode, targetPercent, floorMarginPct, onPaceMarginPct, stretchMarginPct]);
 
   // Handle adding calculated custom item to POS Cart
   const handleAddToCart = () => {
@@ -228,56 +329,132 @@ export const PricingCalculatorScreen = () => {
                 >
                   Markup %
                 </button>
+                <button
+                  type="button"
+                  className={`toggle-option ${calcMode === 'target' ? 'active' : ''}`}
+                  onClick={() => handleSetCalcMode('target')}
+                  style={{ padding: '4px 10px', fontSize: '12px' }}
+                >
+                  🎯 Target
+                </button>
               </div>
             </div>
 
-            <input
-              type="number"
-              step="1"
-              min="0"
-              max={calcMode === 'margin' ? '99' : '1000'}
-              className="form-input text-large font-bold"
-              value={targetPercentInput}
-              onChange={e => setTargetPercentInput(e.target.value)}
-              placeholder="50"
-            />
-            <span className="label-small text-muted" style={{ display: 'block', marginTop: '4px' }}>
-              {calcMode === 'margin' ? 'Desired Gross Margin %' : 'Desired Cost Markup %'}
-            </span>
+            {calcMode === 'target' ? (
+              <>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  className="form-input text-large font-bold"
+                  value={dailyTargetInput}
+                  onChange={e => setDailyTargetInput(e.target.value)}
+                  placeholder={String(Math.round(suggestedTargetCents / 100))}
+                />
+                <span className="label-small text-muted" style={{ display: 'block', marginTop: '4px' }}>
+                  Today's net profit target ($) — auto-suggested from your 30-day average, editable.
+                </span>
+              </>
+            ) : (
+              <>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  max={calcMode === 'margin' ? '99' : '1000'}
+                  className="form-input text-large font-bold"
+                  value={targetPercentInput}
+                  onChange={e => setTargetPercentInput(e.target.value)}
+                  placeholder="50"
+                />
+                <span className="label-small text-muted" style={{ display: 'block', marginTop: '4px' }}>
+                  {calcMode === 'margin' ? 'Desired Gross Margin %' : 'Desired Cost Markup %'}
+                </span>
+              </>
+            )}
           </div>
         </div>
 
-        {/* Quick Percent Presets */}
-        <div className="mt-md pt-sm" style={{ borderTop: '1px solid var(--market-border-light)' }}>
-          <div className="preset-pills-container flex-wrap gap-xs align-center">
-            <span className="label-small text-muted" style={{ marginRight: '8px' }}>
-              {calcMode === 'margin' ? 'Margin Presets (<100%):' : 'Markup Presets:'}
-            </span>
-            {(calcMode === 'margin'
-              ? [20, 30, 40, 50, 60, 70, 75, 80, 90]
-              : [25, 50, 75, 100, 150, 200, 300, 400]
-            ).map(val => (
+        {calcMode === 'target' ? (
+          <div className="mt-md pt-sm" style={{ borderTop: '1px solid var(--market-border-light)' }}>
+            <div className="pricing-toggle" style={{ display: 'inline-flex' }}>
               <button
-                key={val}
                 type="button"
-                className={`preset-pill ${parseFloat(targetPercentInput) === val ? 'active' : ''}`}
-                onClick={() => setTargetPercentInput(String(val))}
+                className={`toggle-option ${businessType === 'RETAIL' ? 'active' : ''}`}
+                onClick={() => setBusinessType('RETAIL')}
+                style={{ padding: '4px 10px', fontSize: '12px' }}
               >
-                {val}% {calcMode === 'margin' ? 'Margin' : 'Markup'}
+                Retail floor (65%)
               </button>
-            ))}
+              <button
+                type="button"
+                className={`toggle-option ${businessType === 'WHOLESALE' ? 'active' : ''}`}
+                onClick={() => setBusinessType('WHOLESALE')}
+                style={{ padding: '4px 10px', fontSize: '12px' }}
+              >
+                Wholesale floor (50%)
+              </button>
+            </div>
+
+            <div className="grid-3col gap-md mt-md">
+              <div className="stat-card p-sm" style={{ background: '#fff', borderRadius: 'var(--radius-md)' }}>
+                <div className="label-small text-muted">Net Profit Today</div>
+                <div className="title-medium font-bold">{formatCents(netProfitSoFarCents)}</div>
+              </div>
+              <div className="stat-card p-sm" style={{ background: '#fff', borderRadius: 'var(--radius-md)' }}>
+                <div className="label-small text-muted">Target</div>
+                <div className="title-medium font-bold">{formatCents(dailyTargetCents)}</div>
+              </div>
+              <div className="stat-card p-sm" style={{ background: targetHit ? '#e8f5e9' : '#fff8e1', borderRadius: 'var(--radius-md)' }}>
+                <div className="label-small text-muted">{targetHit ? 'Past Target By' : 'Gap Remaining'}</div>
+                <div className={`title-medium font-bold ${targetHit ? 'text-success' : ''}`}>
+                  {targetHit ? '+' : ''}{formatCents(Math.abs(gapCents))}
+                </div>
+              </div>
+            </div>
+            <p className="label-small text-muted mt-sm">
+              Suggested margins below range from your {floorMarginPct}% floor up to a {stretchMarginPct}% stretch —
+              pushed toward stretch the further behind target you are today. These are suggestions, not
+              auto-applied prices.
+            </p>
           </div>
-        </div>
+        ) : (
+          <div className="mt-md pt-sm" style={{ borderTop: '1px solid var(--market-border-light)' }}>
+            <div className="preset-pills-container flex-wrap gap-xs align-center">
+              <span className="label-small text-muted" style={{ marginRight: '8px' }}>
+                {calcMode === 'margin' ? 'Margin Presets (<100%):' : 'Markup Presets:'}
+              </span>
+              {(calcMode === 'margin'
+                ? [20, 30, 40, 50, 60, 70, 75, 80, 90]
+                : [25, 50, 75, 100, 150, 200, 300, 400]
+              ).map(val => (
+                <button
+                  key={val}
+                  type="button"
+                  className={`preset-pill ${parseFloat(targetPercentInput) === val ? 'active' : ''}`}
+                  onClick={() => setTargetPercentInput(String(val))}
+                >
+                  {val}% {calcMode === 'margin' ? 'Margin' : 'Markup'}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Main Weight Tier Output Table */}
       <div className="card mb-lg p-md">
         <div className="flex-between align-center mb-md">
           <h3 className="title-medium">
-            📊 Weight Tier Pricing Matrix (${costPerGram.toFixed(2)}/g @ {targetPercent}% {calcMode.toUpperCase()})
+            📊 Weight Tier Pricing Matrix (${costPerGram.toFixed(2)}/g
+            {calcMode === 'target'
+              ? ` @ ${floorMarginPct}–${stretchMarginPct}% TARGET`
+              : ` @ ${targetPercent}% ${calcMode.toUpperCase()}`})
           </h3>
           <span className="label-small text-muted">
-            Formulas: Price = {calcMode === 'margin' ? 'Cost / (1 − Margin%)' : 'Cost × (1 + Markup%)'}
+            {calcMode === 'target'
+              ? 'Price = Cost / (1 − Margin%), margin picked per-tier from the floor/pace/stretch band'
+              : `Formulas: Price = ${calcMode === 'margin' ? 'Cost / (1 − Margin%)' : 'Cost × (1 + Markup%)'}`}
           </span>
         </div>
 
@@ -287,14 +464,34 @@ export const PricingCalculatorScreen = () => {
               <tr>
                 <th>Weight Step</th>
                 <th>Total Cost</th>
-                <th>Suggested Price</th>
-                <th>Markup %</th>
-                <th>Margin %</th>
-                <th>Profit ($)</th>
+                {calcMode === 'target' ? (
+                  <>
+                    <th>Floor</th>
+                    <th>On Pace</th>
+                    <th>Stretch</th>
+                  </>
+                ) : (
+                  <>
+                    <th>Suggested Price</th>
+                    <th>Markup %</th>
+                    <th>Margin %</th>
+                    <th>Profit ($)</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
-              {tableRows.map(row => (
+              {calcMode === 'target' ? tableRows.map(row => (
+                <tr key={row.label}>
+                  <td className="font-bold">{row.label} ({row.grams}g)</td>
+                  <td className="text-muted">{formatCents(row.totalCostCents)}</td>
+                  <td>{formatCents(row.floorPriceCents)}</td>
+                  <td className="font-bold text-primary" style={{ fontSize: '1.05rem' }}>
+                    {formatCents(row.onPacePriceCents)}
+                  </td>
+                  <td>{formatCents(row.stretchPriceCents)}</td>
+                </tr>
+              )) : tableRows.map(row => (
                 <tr key={row.label}>
                   <td className="font-bold">{row.label} ({row.grams}g)</td>
                   <td className="text-muted">{formatCents(row.totalCostCents)}</td>
@@ -342,7 +539,7 @@ export const PricingCalculatorScreen = () => {
               />
             </div>
             <div className="stat-card p-sm" style={{ background: '#fff', borderRadius: 'var(--radius-md)', flex: 1 }}>
-              <div className="label-small text-muted">Suggested Price</div>
+              <div className="label-small text-muted">{calcMode === 'target' ? 'On-Pace Price' : 'Suggested Price'}</div>
               <div className="title-medium font-bold text-primary">{formatCents(customCalc.suggestedPriceCents)}</div>
             </div>
             <div className="stat-card p-sm" style={{ background: '#fff', borderRadius: 'var(--radius-md)', flex: 1 }}>

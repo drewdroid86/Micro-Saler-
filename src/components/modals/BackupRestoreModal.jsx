@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { usePos } from '../../context/PosContext';
 
 export const BackupRestoreModal = () => {
-  const { closeModal, openModal, exportBackup, importBackup, showToast, repo, refreshAllData } = usePos();
+  const { closeModal, openModal, exportBackup, importBackup, showToast, repo, refreshAllData, lastBackupTime } = usePos();
 
   const [selectedFile, setSelectedFile] = useState(null);
   const [parsedBackup, setParsedBackup] = useState(null);
@@ -63,8 +63,13 @@ export const BackupRestoreModal = () => {
         <div style={{ background: 'var(--market-bg)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
           <h3 style={{ margin: '0 0 8px 0', fontSize: '1.1rem', color: 'var(--text-color)' }}>📥 Export Ledger Backup</h3>
           <p className="body-medium text-muted" style={{ margin: '0 0 12px 0' }}>
-            Download a full local JSON backup containing all 10 object stores (pigments, receipts, customers, sales, payments, returns, and audit logs).
+            Download a full local JSON backup containing all 15 object stores (pigments, receipts, customers, ledger, prepayments, sales, payments, returns, suppliers, tabs, shrinkage, and audit logs). Automated backups also trigger every 30 minutes.
           </p>
+          {lastBackupTime && (
+            <div style={{ fontSize: '0.85rem', color: 'var(--market-text-secondary, #9e9e9e)', marginBottom: '12px' }}>
+              🕒 <strong>Last Backed Up:</strong> {new Date(lastBackupTime).toLocaleString()}
+            </div>
+          )}
           <button className="btn btn-primary" onClick={exportBackup} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
             <span>📥</span> Download Ledger Backup (.json)
           </button>

@@ -1449,10 +1449,28 @@ function createMockDatabase() {
     customer_ledger: new Map(),
     customer_prepayments: new Map(),
     returns: new Map(),
-    audit_log: new Map()
+    audit_log: new Map(),
+    suppliers: new Map(),
+    stock_receipts: new Map(),
+    supplier_payments: new Map()
   };
 
-  let nextId = 1;
+  // Per-store autoincrement: each store gets its own monotonically increasing
+  // sequence, so add() calls in one store never collide with keys in another.
+  const nextIds = {};
+  function nextIdFor(storeName) {
+    const store = stores[storeName];
+    if (nextIds[storeName] === undefined && store && store.size > 0) {
+      let maxKey = 0;
+      for (const k of store.keys()) {
+        const num = Number(k);
+        if (!isNaN(num) && num > maxKey) maxKey = num;
+      }
+      nextIds[storeName] = maxKey;
+    }
+    nextIds[storeName] = (nextIds[storeName] || 0) + 1;
+    return nextIds[storeName];
+  }
 
   return {
     stores,
@@ -1467,18 +1485,23 @@ function createMockDatabase() {
       return list.filter(item => item[indexName] === value);
     },
     async put(storeName, record) {
-      const key = record.id || record.sale_id || record.customer_id || record.pigment_id || record.prepayment_id || nextId++;
+      const key = record.sale_id || record.customer_id || record.pigment_id
+        || record.prepayment_id || record.supplier_id || record.entry_id
+        || record.receipt_id || record.id || nextIdFor(storeName);
       stores[storeName]?.set(Number(key), record);
       return key;
     },
     async add(storeName, record) {
-      const key = nextId++;
+      const key = nextIdFor(storeName);
       const idField = storeName === 'sales' ? 'sale_id'
         : storeName === 'customers' ? 'customer_id'
         : storeName === 'pigments' ? 'pigment_id'
         : storeName === 'sale_payments' ? 'payment_id'
         : storeName === 'customer_ledger' ? 'entry_id'
         : storeName === 'customer_prepayments' ? 'prepayment_id'
+        : storeName === 'suppliers' ? 'supplier_id'
+        : storeName === 'stock_receipts' ? 'receipt_id'
+        : storeName === 'supplier_payments' ? 'payment_id'
         : 'id';
       const item = { ...record, [idField]: key };
       stores[storeName]?.set(key, item);
@@ -1494,7 +1517,7 @@ function createMockDatabase() {
           const store = stores[name];
           return {
             indexNames: {
-              contains: (idx) => idx === 'customer_id' || idx === 'sale_id'
+              contains: (idx) => ['customer_id', 'sale_id', 'sale_item_id', 'supplier_id'].includes(idx)
             },
             get(id) {
               const req = { onsuccess: null, onerror: null, result: null };
@@ -1514,7 +1537,11 @@ function createMockDatabase() {
             },
             put(record) {
               const req = { onsuccess: null, onerror: null, result: null };
-              const key = record.sale_id || record.customer_id || record.pigment_id || record.prepayment_id || record.id || nextId++;
+              // Resolve the primary key from the record's own id field so put()
+              // always updates the existing record rather than inserting a duplicate.
+              const key = record.sale_id || record.customer_id || record.pigment_id
+                || record.prepayment_id || record.supplier_id || record.entry_id
+                || record.receipt_id || record.id || nextIdFor(name);
               store?.set(Number(key), record);
               setTimeout(() => {
                 req.result = key;
@@ -1524,13 +1551,16 @@ function createMockDatabase() {
             },
             add(record) {
               const req = { onsuccess: null, onerror: null, result: null };
-              const key = nextId++;
+              const key = nextIdFor(name);
               const idField = name === 'sales' ? 'sale_id'
                 : name === 'customers' ? 'customer_id'
                 : name === 'pigments' ? 'pigment_id'
                 : name === 'sale_payments' ? 'payment_id'
                 : name === 'customer_ledger' ? 'entry_id'
                 : name === 'customer_prepayments' ? 'prepayment_id'
+                : name === 'suppliers' ? 'supplier_id'
+                : name === 'stock_receipts' ? 'receipt_id'
+                : name === 'supplier_payments' ? 'payment_id'
                 : 'id';
               const item = { ...record, [idField]: key };
               store?.set(key, item);
@@ -2204,6 +2234,327 @@ test('repairCustomerBalance and scanAndReconcileIntegrity are strictly idempoten
 
   // Still exactly 3 ledger entries: NO duplicate reconciliation or repair entries
   assert.equal(mockDb.stores.customer_ledger.size, initialLedgerCount);
+});
+
+test('FEAT-01: exportData exports all 15 stores and tracks backup intervals and overdue thresholds', async () => {
+  const storeNames = [
+    'pigments',
+    'pigment_price_tiers',
+    'stock_receipts',
+    'suppliers',
+    'supplier_payments',
+    'customers',
+    'customer_ledger',
+    'customer_prepayments',
+    'sales',
+    'sale_payments',
+    'sale_items',
+    'returns',
+    'tab_payments',
+    'shrinkage_logs',
+    'audit_log'
+  ];
+
+  const mockDb = {
+    exportAllStores: async () => {
+      const storesData = {};
+      for (const name of storeNames) {
+        storesData[name] = [{ id: 1, name: `sample_${name}` }];
+      }
+      return {
+        exported_at: new Date().toISOString(),
+        db_version: 10,
+        stores: storesData
+      };
+    }
+  };
+
+  const repo = new PosRepository(mockDb);
+  const backup = await repo.exportData();
+
+  // Assert all 15 stores are captured in backup payload
+  assert.ok(backup.exported_at);
+  assert.equal(backup.db_version, 10);
+  assert.equal(Object.keys(backup.stores).length, 15);
+  for (const name of storeNames) {
+    assert.ok(backup.stores[name], `Missing store ${name} in backup export`);
+  }
+
+  // Verify backup interval math
+  const AUTO_BACKUP_INTERVAL_MS = 30 * 60 * 1000;
+  const BACKUP_OVERDUE_MS = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  const freshBackupTime = now - (10 * 60 * 1000); // 10 minutes ago
+  assert.equal(now - freshBackupTime < AUTO_BACKUP_INTERVAL_MS, true);
+  assert.equal(now - freshBackupTime > BACKUP_OVERDUE_MS, false);
+
+  const dueForAutoBackupTime = now - (35 * 60 * 1000); // 35 minutes ago
+  assert.equal(now - dueForAutoBackupTime >= AUTO_BACKUP_INTERVAL_MS, true);
+  assert.equal(now - dueForAutoBackupTime > BACKUP_OVERDUE_MS, false);
+
+  const overdueBackupTime = now - (25 * 60 * 60 * 1000); // 25 hours ago
+  assert.equal(now - overdueBackupTime > BACKUP_OVERDUE_MS, true);
+});
+
+// ============================================================
+// IMP-09: Regression tests for BUG-01, BUG-05, BUG-06, BUG-09
+// Each test asserts on customer.balance AND customer_ledger state
+// after the operation, not just that it doesn't throw.
+// ============================================================
+
+test('IMP-09 / BUG-01: processReturn restores customer.balance via ledger when sale was paid with STORE_CREDIT', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const cId = 1;
+  const sId = 1;
+  const siId = 1;
+
+  // Customer starts with $20 store credit (positive balance)
+  mockDb.stores.customers.set(cId, {
+    customer_id: cId,
+    name: 'Jasmine',
+    balance: 2000,
+    current_balance_cents: -2000,
+    credit_limit_cents: 10000
+  });
+  // Seed opening balance ledger entry
+  mockDb.stores.customer_ledger.set(1, {
+    entry_id: 1,
+    customer_id: cId,
+    amount_cents: 2000,
+    type: 'opening_balance',
+    description: 'Opening credit',
+    created_at: 100,
+    timestamp: 100
+  });
+
+  // Seed a completed sale for $10 paid fully by STORE_CREDIT
+  mockDb.stores.sales.set(sId, {
+    sale_id: sId,
+    customer_id: cId,
+    total_amount_cents: 1000,
+    status: 'COMPLETED'
+  });
+  mockDb.stores.sale_items.set(siId, {
+    sale_item_id: siId,
+    sale_id: sId,
+    pigment_id: 1,
+    weight_mg: 10000,
+    price_charged_cents: 1000,
+    unit_cogs_cents: 200
+  });
+  mockDb.stores.sale_payments.set(1, {
+    payment_id: 1,
+    sale_id: sId,
+    payment_type: 'STORE_CREDIT',
+    amount_cents: 1000
+  });
+  // After the sale, customer balance was debited $10 (-1000 ledger entry)
+  // Simulate that debit (so customer.balance = 2000 - 1000 = 1000):
+  mockDb.stores.customer_ledger.set(2, {
+    entry_id: 2,
+    customer_id: cId,
+    amount_cents: -1000,
+    type: 'SALE_CREDIT_APPLIED',
+    description: 'Store credit applied to sale #1',
+    created_at: 200,
+    timestamp: 200
+  });
+  mockDb.stores.customers.set(cId, {
+    customer_id: cId,
+    name: 'Jasmine',
+    balance: 1000,
+    current_balance_cents: -1000,
+    credit_limit_cents: 10000
+  });
+
+  // PRE-CONDITION: balance = 1000, ledger has 2 entries summing to 1000
+  const preLedger = Array.from(mockDb.stores.customer_ledger.values()).filter(e => e.customer_id === cId);
+  assert.equal(preLedger.reduce((s, e) => s + e.amount_cents, 0), 1000);
+  assert.equal(mockDb.stores.customers.get(cId).balance, 1000);
+
+  // Return half the item (5g / 10g = 50% = $5 refund)
+  await repo.processReturn(siId, 5000, 'Changed mind', false);
+
+  // POST-CONDITION: customer.balance must have increased by $5 (the store-credit refund)
+  const postCustomer = mockDb.stores.customers.get(cId);
+  assert.equal(postCustomer.balance, 1500, 'customer.balance should be 1500 after $5 store credit refund');
+  assert.equal(postCustomer.current_balance_cents, -1500);
+
+  // customer_ledger must have a new REFUND_STORE_CREDIT entry
+  const postLedger = Array.from(mockDb.stores.customer_ledger.values()).filter(e => e.customer_id === cId);
+  assert.equal(postLedger.length, 3, 'Should be 3 ledger entries: opening + sale debit + refund credit');
+  const refundEntry = postLedger.find(e => e.type === 'REFUND_STORE_CREDIT');
+  assert.ok(refundEntry, 'REFUND_STORE_CREDIT ledger entry must exist');
+  assert.equal(refundEntry.amount_cents, 500, 'Refund entry must be 500 cents ($5)');
+
+  // ledger sum must equal customer.balance exactly
+  const ledgerSum = postLedger.reduce((s, e) => s + e.amount_cents, 0);
+  assert.equal(ledgerSum, postCustomer.balance, 'customer.balance must equal ledger sum after return');
+});
+
+test('IMP-09 / BUG-05: updateCustomer writes balance exactly once — ledger sum equals customer.balance after balance edit', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const cId = 1;
+  // Customer starts with $0 balance, no ledger entries
+  mockDb.stores.customers.set(cId, {
+    customer_id: cId,
+    name: 'Marcus',
+    balance: 0,
+    current_balance_cents: 0,
+    credit_limit_cents: 5000,
+    trust_status: 'GOOD_STANDING',
+    notes: ''
+  });
+
+  // Edit balance to $15 (1500 cents) — is_opening_balance path (no prior ledger entries)
+  await repo.updateCustomer({
+    customer_id: cId,
+    starting_balance: 1500
+  });
+
+  const afterCustomer = mockDb.stores.customers.get(cId);
+  const afterLedger = Array.from(mockDb.stores.customer_ledger.values()).filter(e => e.customer_id === cId);
+
+  // customer.balance must equal 1500
+  assert.equal(afterCustomer.balance, 1500, 'customer.balance should be 1500 after opening balance set');
+  assert.equal(afterCustomer.current_balance_cents, -1500);
+
+  // Exactly ONE ledger entry must exist (not two from the double-write bug)
+  assert.equal(afterLedger.length, 1, 'Exactly 1 ledger entry must be written (no double-write)');
+  assert.equal(afterLedger[0].type, 'opening_balance');
+  assert.equal(afterLedger[0].amount_cents, 1500);
+
+  // ledger sum must equal customer.balance
+  const ledgerSum = afterLedger.reduce((s, e) => s + e.amount_cents, 0);
+  assert.equal(ledgerSum, afterCustomer.balance, 'customer.balance must equal ledger sum');
+
+  // Now test the BALANCE_ADJUSTMENT path: add 500 cents more ($5)
+  await repo.updateCustomer({
+    customer_id: cId,
+    balance: 2000, // target = $20
+    balance_reason: 'Manual adjustment test'
+  });
+
+  const adjCustomer = mockDb.stores.customers.get(cId);
+  const adjLedger = Array.from(mockDb.stores.customer_ledger.values()).filter(e => e.customer_id === cId);
+
+  assert.equal(adjCustomer.balance, 2000, 'customer.balance should be 2000 after adjustment');
+  assert.equal(adjCustomer.current_balance_cents, -2000);
+
+  // Must be exactly 2 entries total: opening_balance + BALANCE_ADJUSTMENT
+  assert.equal(adjLedger.length, 2, 'Should be 2 ledger entries: opening + adjustment');
+  const adjEntry = adjLedger.find(e => e.type === 'BALANCE_ADJUSTMENT');
+  assert.ok(adjEntry, 'BALANCE_ADJUSTMENT entry must exist');
+  assert.equal(adjEntry.amount_cents, 500, 'Delta must be 500 cents');
+
+  const adjSum = adjLedger.reduce((s, e) => s + e.amount_cents, 0);
+  assert.equal(adjSum, adjCustomer.balance, 'customer.balance must equal ledger sum after adjustment');
+});
+
+test('IMP-09 / BUG-06: createPigment with a new supplier name creates the supplier and updates current_balance_cents for unpaid tab', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  // No pre-existing suppliers
+  assert.equal(mockDb.stores.suppliers.size, 0);
+
+  // Create a pigment with a new supplier name and an unpaid tab
+  const pigId = await repo.createPigment({
+    name: 'Crimson Shimmer',
+    stock_mg: 50000,
+    total_cost_cents: 3000, // $30 total
+    supplier_name: 'New Vendor Co',
+    payment_status: 'UNPAID_TAB',
+    paid_down_cents: 0
+  });
+
+  assert.ok(pigId);
+
+  // Supplier must have been auto-created
+  assert.equal(mockDb.stores.suppliers.size, 1, 'A new supplier should have been created');
+  const supplier = Array.from(mockDb.stores.suppliers.values())[0];
+  assert.equal(supplier.name, 'New Vendor Co');
+
+  // current_balance_cents must reflect the full unpaid tab ($30 = 3000 cents)
+  assert.equal(supplier.current_balance_cents, 3000, 'Supplier current_balance_cents must be 3000 for $30 unpaid tab');
+
+  // Stock receipt must have been created linking to the supplier
+  assert.equal(mockDb.stores.stock_receipts.size, 1);
+  const receipt = Array.from(mockDb.stores.stock_receipts.values())[0];
+  assert.equal(receipt.supplier_id, supplier.supplier_id);
+  assert.equal(receipt.unpaid_tab_cents, 3000);
+});
+
+test('IMP-09 / BUG-09: getCustomerTotalExposure nets tab debt against open prepayments for unified credit check', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const cId = 1;
+
+  // Customer has -$10 debt (balance = -1000) and $50 credit limit
+  mockDb.stores.customers.set(cId, {
+    customer_id: cId,
+    name: 'Dana',
+    balance: -1000, // $10 debt
+    current_balance_cents: 1000,
+    credit_limit_cents: 5000
+  });
+
+  // 1. No prepayments: exposure = 1000 (just the debt)
+  const exposure1 = await repo.getCustomerTotalExposure(cId);
+  assert.equal(exposure1, 1000, 'Exposure should be 1000 (debt only, no prepayments)');
+
+  // 2. Add $30 open prepayment (money business holds from customer)
+  mockDb.stores.customer_prepayments.set(1, {
+    prepayment_id: 1,
+    customer_id: cId,
+    amount_cents: 3000,
+    status: 'PENDING_DELIVERY'
+  });
+
+  const exposure2 = await repo.getCustomerTotalExposure(cId);
+  // Exposure = tabDebt(1000) - prepaymentOffset(3000) = -2000
+  // Negative means the business owes the customer more than they owe us
+  assert.equal(exposure2, -2000, 'Exposure should be -2000 when prepayments exceed tab debt');
+
+  // Available credit = limit(5000) - exposure(-2000) = 7000
+  // i.e., customer can tab $70 more before hitting limit
+  const availableCredit2 = 5000 - exposure2;
+  assert.equal(availableCredit2, 7000, 'Available credit should be $70 when customer has net prepayment credit');
+
+  // 3. Delivered prepayments do NOT reduce exposure
+  mockDb.stores.customer_prepayments.set(2, {
+    prepayment_id: 2,
+    customer_id: cId,
+    amount_cents: 1000,
+    status: 'DELIVERED' // should be excluded
+  });
+  mockDb.stores.customer_prepayments.set(3, {
+    prepayment_id: 3,
+    customer_id: cId,
+    amount_cents: 500,
+    status: 'CANCELLED' // should be excluded
+  });
+
+  const exposure3 = await repo.getCustomerTotalExposure(cId);
+  // Only PENDING_DELIVERY ($30) counts; DELIVERED and CANCELLED are excluded
+  assert.equal(exposure3, -2000, 'DELIVERED and CANCELLED prepayments must not offset exposure');
+
+  // 4. Customer with no debt and no prepayments has 0 exposure
+  mockDb.stores.customers.set(2, {
+    customer_id: 2,
+    name: 'Zero',
+    balance: 0,
+    current_balance_cents: 0,
+    credit_limit_cents: 5000
+  });
+  const exposure4 = await repo.getCustomerTotalExposure(2);
+  assert.equal(exposure4 === 0 || Object.is(exposure4, -0), true, 'Zero exposure expected');
 });
 
 

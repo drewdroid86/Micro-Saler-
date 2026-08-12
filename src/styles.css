@@ -204,6 +204,26 @@ body {
   transform: translateY(-1px);
 }
 
+.backup-warning-badge {
+  background: rgba(239, 68, 68, 0.25);
+  border: 1px solid rgba(239, 68, 68, 0.7);
+  color: #ffcdd2;
+  padding: 5px 10px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  animation: glowPulse 2s infinite;
+  transition: all 0.2s ease;
+}
+.backup-warning-badge:hover {
+  background: rgba(239, 68, 68, 0.4);
+  transform: translateY(-1px);
+}
+
 .nav-tabs {
   flex-shrink: 0;
   display: flex;
@@ -1928,6 +1948,9 @@ body {
 .gap-md { gap: var(--spacing-md); }
 .gap-lg { gap: var(--spacing-lg); }
 
+.flex-wrap { flex-wrap: wrap; }
+.align-center { align-items: center; }
+
 .mt-xs { margin-top: var(--spacing-xs); }
 .mt-sm { margin-top: var(--spacing-sm); }
 .mt-md { margin-top: var(--spacing-md); }
@@ -2005,7 +2028,9 @@ body {
 
 .preset-pills-container {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: var(--spacing-xs);
   margin-top: var(--spacing-xs);
 }
 

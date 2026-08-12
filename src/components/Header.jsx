@@ -2,7 +2,7 @@ import React from 'react';
 import { usePos } from '../context/PosContext';
 
 export const Header = () => {
-  const { openModal } = usePos();
+  const { openModal, isBackupOverdue, lastBackupTime } = usePos();
   return (
     <header className="top-header">
       <div className="header-brand">
@@ -10,6 +10,15 @@ export const Header = () => {
         <span>MICRO SALER</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        {isBackupOverdue && (
+          <button
+            className="backup-warning-badge"
+            onClick={() => openModal('backupRestore')}
+            title={lastBackupTime ? `Last backup > 24h ago (${new Date(lastBackupTime).toLocaleString()}). Click to backup now.` : 'No backups saved yet! Click to backup now.'}
+          >
+            ⚠️ Backup Overdue (&gt;24h)
+          </button>
+        )}
         <button 
           className="header-btn" 
           onClick={() => openModal('backupRestore')}

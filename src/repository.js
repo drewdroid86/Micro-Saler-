@@ -404,6 +404,97 @@ export class PosRepository {
     this.db = db;
   }
 
+  /**
+   * BUG-06 / IMP-08: Shared supplier resolution helper.
+   * Resolves an existing supplier by id or name, or creates a new one.
+   * Used by both restockPigment() and createPigment() to ensure supplier
+   * auto-creation is handled identically from both code paths.
+   * @param {IDBTransaction} tx - The current IDB transaction (must include 'suppliers' store)
+   * @param {number|null} supplierId
+   * @param {string|null} supplierName
+   * @returns {Promise<number|null>} supplier_id or null
+   */
+  async _resolveOrCreateSupplierInTx(tx, supplierId, supplierName) {
+    const suppliersStore = tx.objectStore('suppliers');
+    let sId = supplierId ? Number(supplierId) : null;
+    if (!sId && supplierName && supplierName.trim()) {
+      const trimmedName = supplierName.trim();
+      const allSuppliers = await new Promise((resolve, reject) => {
+        const req = suppliersStore.getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+      const existingSupplier = allSuppliers.find(s => s.name.toLowerCase() === trimmedName.toLowerCase());
+      if (existingSupplier) {
+        sId = existingSupplier.supplier_id;
+      } else {
+        // Auto-create new supplier to capture debt and ledger tracking
+        sId = await new Promise((resolve, reject) => {
+          const req = suppliersStore.add({
+            name: trimmedName,
+            contact_info: '',
+            current_balance_cents: 0,
+            created_at: new Date().toISOString()
+          });
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+      }
+    }
+    return sId;
+  }
+
+  /**
+   * BUG-06 / IMP-08: Shared supplier balance writer.
+   * All mutations to supplier.current_balance_cents must go through here;
+   * direct field assignments in put() calls are forbidden.
+   * @param {IDBTransaction} tx - The current IDB transaction (must include 'suppliers' store)
+   * @param {number} supplierId
+   * @param {number} addCents - Amount to add (positive = increases debt owed to supplier)
+   */
+  async _updateSupplierBalanceInTx(tx, supplierId, addCents) {
+    const suppliersStore = tx.objectStore('suppliers');
+    const supplier = await new Promise((resolve, reject) => {
+      const req = suppliersStore.get(Number(supplierId));
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    if (supplier) {
+      supplier.current_balance_cents = (supplier.current_balance_cents || 0) + addCents;
+      suppliersStore.put(supplier);
+    }
+  }
+
+  /**
+   * BUG-09: Unified credit exposure calculation.
+   * Returns the net tab-debt minus the business's open prepayment liabilities
+   * for a customer, so that the credit limit check in completeSale() accounts
+   * for money the business already holds from the customer.
+   *
+   * Exposure = -(customer.balance) — open prepayment amounts
+   * Positive exposure = net amount still owed by the customer above what we hold.
+   * @param {number} customerId
+   * @returns {Promise<number>} netExposureCents (positive = customer owes us)
+   */
+  async getCustomerTotalExposure(customerId) {
+    const customer = await this.db.getById('customers', Number(customerId));
+    if (!customer) return 0;
+    // customer.balance: positive = store credit, negative = debt
+    // Debt exposure = -(balance). If balance is -500 (debt), exposure = +500.
+    const tabDebtExposure = -(Number(customer.balance) || 0);
+    let prepaymentOffset = 0;
+    try {
+      const allPrepayments = await this.db.getAll('customer_prepayments');
+      const openPrepayments = allPrepayments.filter(p =>
+        p.customer_id === Number(customerId) &&
+        !['DELIVERED', 'CANCELLED', 'VOIDED'].includes(p.status)
+      );
+      // Money business holds from customer reduces effective debt exposure
+      prepaymentOffset = openPrepayments.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
+    } catch (_) {}
+    return tabDebtExposure - prepaymentOffset;
+  }
+
   async restockPigment(pigmentId, receivedMg, totalCostCents, supplierName, paymentStatus = 'PAID', supplierId = null, paidDownCents = 0) {
     const pId = Number(pigmentId);
     const validReceivedMg = Number(receivedMg);
@@ -435,32 +526,8 @@ export class PosRepository {
         pigment.total_cost_cents += totalCostCents;
         pigmentsStore.put(pigment);
 
-        // Resolve supplier ID
-        let sId = supplierId ? Number(supplierId) : null;
-        if (!sId && supplierName && supplierName.trim()) {
-          const trimmedName = supplierName.trim();
-          const allSuppliers = await new Promise((resolve, reject) => {
-            const req = suppliersStore.getAll();
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = () => reject(req.error);
-          });
-          const existing = allSuppliers.find(s => s.name.toLowerCase() === trimmedName.toLowerCase());
-          if (existing) {
-            sId = existing.supplier_id;
-          } else {
-            // Auto-create new supplier to capture supplier debt and ledger tracking
-            sId = await new Promise((resolve, reject) => {
-              const req = suppliersStore.add({
-                name: trimmedName,
-                contact_info: '',
-                current_balance_cents: 0,
-                created_at: new Date().toISOString()
-              });
-              req.onsuccess = () => resolve(req.result);
-              req.onerror = () => reject(req.error);
-            });
-          }
-        }
+        // BUG-06: Resolve or auto-create supplier via shared helper (same logic as createPigment path).
+        const sId = await this._resolveOrCreateSupplierInTx(tx, supplierId, supplierName);
 
         const safePaidDown = paymentStatus === 'PAID'
           ? totalCostCents
@@ -468,17 +535,9 @@ export class PosRepository {
 
         const unpaidTabCents = paymentStatus === 'PAID' ? 0 : Math.max(0, totalCostCents - safePaidDown);
 
-        // Update supplier balance if unpaid tab
+        // Update supplier balance if unpaid tab via shared helper (single-writer discipline)
         if (unpaidTabCents > 0 && sId) {
-          const supplier = await new Promise((resolve, reject) => {
-            const req = suppliersStore.get(sId);
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
-          });
-          if (supplier) {
-            supplier.current_balance_cents = (supplier.current_balance_cents || 0) + unpaidTabCents;
-            suppliersStore.put(supplier);
-          }
+          await this._updateSupplierBalanceInTx(tx, sId, unpaidTabCents);
         }
 
         const statusLabel = paymentStatus === 'PAID'
@@ -786,13 +845,11 @@ export class PosRepository {
         .filter(p => p.payment_type === 'HOUSE_TAB')
         .reduce((sum, p) => sum + p.amount_cents, 0);
 
-      let customerPrepayments = [];
-      try {
-        customerPrepayments = await this.db.getAll('customer_prepayments');
-      } catch (_) {}
-
-      const balInfo = calculateCustomerBalance(customer, customerPrepayments);
-      const availableCredit = balInfo.availableCreditCents;
+      // BUG-09: Credit exposure netting — tab debt is checked against the unified exposure
+      // (customer.balance + outstanding open prepayments), not just customer.balance alone.
+      const netExposureCents = await this.getCustomerTotalExposure(Number(customerId));
+      const creditLimitCents = Number(customer.credit_limit_cents) || 0;
+      const availableCredit = creditLimitCents - netExposureCents;
 
       if (tabAmount > availableCredit && !isCreditOverride) {
         throw new Error(`Credit limit exceeded. Available: $${(availableCredit/100).toFixed(2)}, Requested: $${(tabAmount/100).toFixed(2)}. Enable Handshake Override.`);
@@ -971,65 +1028,108 @@ export class PosRepository {
       throw new Error('Return weight must be greater than zero');
     }
     const siId = Number(saleItemId);
-    return await this.db.runTransaction(['sale_items', 'returns', 'pigments'], 'readwrite', async (tx) => {
-      const saleItemsStore = tx.objectStore('sale_items');
-      const returnsStore = tx.objectStore('returns');
-      const pigmentsStore = tx.objectStore('pigments');
+    return await this.db.runTransaction(
+      ['sales', 'sale_items', 'sale_payments', 'returns', 'pigments', 'customers', 'customer_ledger'],
+      'readwrite',
+      async (tx) => {
+        const salesStore = tx.objectStore('sales');
+        const saleItemsStore = tx.objectStore('sale_items');
+        const salePaymentsStore = tx.objectStore('sale_payments');
+        const returnsStore = tx.objectStore('returns');
+        const pigmentsStore = tx.objectStore('pigments');
 
-      const saleItem = await new Promise((resolve, reject) => {
-        const req = saleItemsStore.get(siId);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
-      if (!saleItem) throw new Error(`SaleItem ${saleItemId} not found`);
-
-      const existingReturns = await new Promise((resolve, reject) => {
-        const req = returnsStore.index('sale_item_id').getAll(siId);
-        req.onsuccess = () => resolve(req.result || []);
-        req.onerror = () => reject(req.error);
-      });
-      const alreadyReturnedMg = existingReturns.reduce((sum, r) => sum + r.mg_returned, 0);
-      const maxEligible = saleItem.weight_mg - alreadyReturnedMg;
-
-      if (mgReturned > maxEligible) {
-        throw new Error(`Cannot return ${formatMgToGrams(mgReturned)} — max eligible is ${formatMgToGrams(maxEligible)}`);
-      }
-
-      const proportionalRefundCents = saleItem.weight_mg > 0
-        ? Math.round((saleItem.price_charged_cents / saleItem.weight_mg) * mgReturned)
-        : 0;
-
-      const returnId = await new Promise((resolve, reject) => {
-        const req = returnsStore.add({
-          sale_item_id: siId,
-          mg_returned: mgReturned,
-          refund_amount_cents: proportionalRefundCents,
-          restock_to_inventory: restockToInventory,
-          reason,
-          created_at: Date.now(),
-        });
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
-
-      if (restockToInventory && saleItem.pigment_id > 0) {
-        const pigment = await new Promise((resolve, reject) => {
-          const req = pigmentsStore.get(Number(saleItem.pigment_id));
+        const saleItem = await new Promise((resolve, reject) => {
+          const req = saleItemsStore.get(siId);
           req.onsuccess = () => resolve(req.result);
           req.onerror = () => reject(req.error);
         });
-        if (pigment) {
-          const proportionalCogs = saleItem.weight_mg > 0
-            ? Math.floor((saleItem.unit_cogs_cents / saleItem.weight_mg) * mgReturned)
-            : 0;
-          pigment.stock_mg += mgReturned;
-          pigment.total_cost_cents += proportionalCogs;
-          pigmentsStore.put(pigment);
-        }
-      }
+        if (!saleItem) throw new Error(`SaleItem ${saleItemId} not found`);
 
-      return returnId;
-    });
+        const existingReturns = await new Promise((resolve, reject) => {
+          const req = returnsStore.index('sale_item_id').getAll(siId);
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+        const alreadyReturnedMg = existingReturns.reduce((sum, r) => sum + r.mg_returned, 0);
+        const maxEligible = saleItem.weight_mg - alreadyReturnedMg;
+
+        if (mgReturned > maxEligible) {
+          throw new Error(`Cannot return ${formatMgToGrams(mgReturned)} — max eligible is ${formatMgToGrams(maxEligible)}`);
+        }
+
+        const proportionalRefundCents = saleItem.weight_mg > 0
+          ? Math.round((saleItem.price_charged_cents / saleItem.weight_mg) * mgReturned)
+          : 0;
+
+        const returnId = await new Promise((resolve, reject) => {
+          const req = returnsStore.add({
+            sale_item_id: siId,
+            mg_returned: mgReturned,
+            refund_amount_cents: proportionalRefundCents,
+            restock_to_inventory: restockToInventory,
+            reason,
+            created_at: Date.now(),
+          });
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+
+        if (restockToInventory && saleItem.pigment_id > 0) {
+          const pigment = await new Promise((resolve, reject) => {
+            const req = pigmentsStore.get(Number(saleItem.pigment_id));
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          if (pigment) {
+            const proportionalCogs = saleItem.weight_mg > 0
+              ? Math.floor((saleItem.unit_cogs_cents / saleItem.weight_mg) * mgReturned)
+              : 0;
+            pigment.stock_mg += mgReturned;
+            pigment.total_cost_cents += proportionalCogs;
+            pigmentsStore.put(pigment);
+          }
+        }
+
+        // BUG-01: Restore store credit balance when original sale used STORE_CREDIT payment.
+        // _applyLedgerEntryInTx is the sole writer of customer.balance — no direct field assignment.
+        if (proportionalRefundCents > 0 && saleItem.sale_id) {
+          const salePayments = await new Promise((resolve, reject) => {
+            const req = salePaymentsStore.index('sale_id').getAll(Number(saleItem.sale_id));
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+          });
+          const storeCreditPayments = salePayments.filter(p => p.payment_type === 'STORE_CREDIT');
+          if (storeCreditPayments.length > 0) {
+            // Determine the sale's customer
+            const sale = await new Promise((resolve, reject) => {
+              const req = salesStore.get(Number(saleItem.sale_id));
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => reject(req.error);
+            });
+            if (sale && sale.customer_id) {
+              // Proportionally refund only the store-credit portion of the original sale
+              const totalSaleStoreCreditCents = storeCreditPayments.reduce((s, p) => s + (p.amount_cents || 0), 0);
+              const totalSaleAmountCents = saleItem.price_charged_cents || proportionalRefundCents;
+              const storeCreditFraction = totalSaleAmountCents > 0
+                ? Math.min(1, totalSaleStoreCreditCents / totalSaleAmountCents)
+                : 1;
+              const storeCreditRefundCents = Math.round(proportionalRefundCents * storeCreditFraction);
+              if (storeCreditRefundCents > 0) {
+                await this._applyLedgerEntryInTx(tx, {
+                  customerId: sale.customer_id,
+                  amountCents: storeCreditRefundCents,
+                  type: 'REFUND_STORE_CREDIT',
+                  description: `Store credit restored for return on sale #${saleItem.sale_id}`,
+                  saleId: saleItem.sale_id
+                });
+              }
+            }
+          }
+        }
+
+        return returnId;
+      }
+    );
   }
 
   async voidSale(saleId, reason) {
@@ -1731,15 +1831,6 @@ export class PosRepository {
     });
 
     if (data.stock_mg > 0 || data.total_cost_cents > 0) {
-      let sId = data.supplier_id ? Number(data.supplier_id) : null;
-      if (!sId && data.supplier_name && data.supplier_name.trim()) {
-        const allSuppliers = await this.db.getAllSuppliers();
-        const existing = allSuppliers.find(s => s.name.toLowerCase() === data.supplier_name.trim().toLowerCase());
-        if (existing) {
-          sId = existing.supplier_id;
-        }
-      }
-
       const totalCostCents = data.total_cost_cents || 0;
       const paymentStatus = data.payment_status || 'PAID';
       const paidDownCents = data.paid_down_cents || 0;
@@ -1750,37 +1841,56 @@ export class PosRepository {
 
       const unpaidTabCents = paymentStatus === 'PAID' ? 0 : Math.max(0, totalCostCents - safePaidDown);
 
-      if (unpaidTabCents > 0 && sId) {
-        await this.db.updateSupplierBalance(sId, unpaidTabCents);
-      }
-
       const statusLabel = paymentStatus === 'PAID'
         ? 'PAID'
         : safePaidDown > 0
           ? `PARTIAL ($${(safePaidDown / 100).toFixed(2)} Paid / $${(unpaidTabCents / 100).toFixed(2)} Owed)`
           : 'UNPAID_TAB';
 
-      const receiptId = await this.db.add('stock_receipts', {
-        pigment_id: Number(pigmentId),
-        received_mg: data.stock_mg || 0,
-        total_cost_cents: totalCostCents,
-        paid_down_cents: safePaidDown,
-        unpaid_tab_cents: unpaidTabCents,
-        supplier_name: data.supplier_name || '',
-        supplier_id: sId,
-        payment_status: statusLabel,
-        received_at: Date.now(),
-      });
+      // BUG-06: Run supplier resolution + balance update + receipt creation in a single
+      // transaction so new suppliers created here always get their debt tracked correctly.
+      // _resolveOrCreateSupplierInTx handles both lookup and auto-creation;
+      // _updateSupplierBalanceInTx is the sole writer of supplier.current_balance_cents.
+      await this.db.runTransaction(
+        ['suppliers', 'stock_receipts', 'supplier_payments'],
+        'readwrite',
+        async (tx) => {
+          const receiptsStore = tx.objectStore('stock_receipts');
+          const suppPayStore = tx.objectStore('supplier_payments');
 
-      if (safePaidDown > 0 && sId && paymentStatus !== 'PAID') {
-        await this.db.add('supplier_payments', {
-          supplier_id: sId,
-          amount_cents: safePaidDown,
-          payment_type: 'DOWN_PAYMENT',
-          notes: `Initial stock purchase down payment for receipt #${receiptId}`,
-          created_at: Date.now(),
-        });
-      }
+          const sId = await this._resolveOrCreateSupplierInTx(tx, data.supplier_id || null, data.supplier_name || null);
+
+          if (unpaidTabCents > 0 && sId) {
+            await this._updateSupplierBalanceInTx(tx, sId, unpaidTabCents);
+          }
+
+          const receiptId = await new Promise((resolve, reject) => {
+            const req = receiptsStore.add({
+              pigment_id: Number(pigmentId),
+              received_mg: data.stock_mg || 0,
+              total_cost_cents: totalCostCents,
+              paid_down_cents: safePaidDown,
+              unpaid_tab_cents: unpaidTabCents,
+              supplier_name: data.supplier_name || '',
+              supplier_id: sId,
+              payment_status: statusLabel,
+              received_at: Date.now(),
+            });
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+
+          if (safePaidDown > 0 && sId && paymentStatus !== 'PAID') {
+            suppPayStore.add({
+              supplier_id: sId,
+              amount_cents: safePaidDown,
+              payment_type: 'DOWN_PAYMENT',
+              notes: `Initial stock purchase down payment for receipt #${receiptId}`,
+              created_at: Date.now(),
+            });
+          }
+        }
+      );
     }
 
     return pigmentId;
@@ -1903,21 +2013,17 @@ export class PosRepository {
         }
 
         const now = Date.now();
-        const ledgerRecord = {
-          customer_id: cId,
-          amount_cents: startingBal,
+        // BUG-05: Use _applyLedgerEntryInTx as sole writer of customer.balance;
+        // direct field assignment removed from spread below.
+        const updatedCustOpen = await this._applyLedgerEntryInTx(tx, {
+          customerId: cId,
+          amountCents: startingBal,
           type: 'opening_balance',
           description: data.starting_balance_notes || data.notes || (startingBal > 0 ? 'Opening credit balance' : 'Opening debt balance'),
-          sale_id: null,
-          created_at: now,
           timestamp: now
-        };
-
-        await new Promise((resolve, reject) => {
-          const req = ledgerStore.add(ledgerRecord);
-          req.onsuccess = () => resolve(req.result);
-          req.onerror = () => reject(req.error);
         });
+        existing.balance = updatedCustOpen ? updatedCustOpen.balance : startingBal;
+        existing.current_balance_cents = updatedCustOpen ? updatedCustOpen.current_balance_cents : -startingBal;
 
         await new Promise((resolve, reject) => {
           const req = auditStore.add({
@@ -1944,22 +2050,20 @@ export class PosRepository {
         const delta = targetBal - prevBal;
         if (delta !== 0) {
           const now = Date.now();
-          const ledgerRecord = {
-            customer_id: cId,
-            amount_cents: delta,
+          // BUG-05: _applyLedgerEntryInTx is the sole writer of customer.balance.
+          // The direct `balance`/`current_balance_cents` assignment in the spread below
+          // has been removed; `existing` is updated here from the returned record.
+          const updatedCustAdj = await this._applyLedgerEntryInTx(tx, {
+            customerId: cId,
+            amountCents: delta,
             type: 'BALANCE_ADJUSTMENT',
             description: data.balance_notes
               ? `Balance adjustment: ${data.balance_notes}`
               : (data.balance_reason ? `Balance adjustment (${data.balance_reason})` : 'Balance updated via customer edit'),
-            sale_id: null,
-            created_at: now,
             timestamp: now
-          };
-          await new Promise((resolve, reject) => {
-            const req = ledgerStore.add(ledgerRecord);
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
           });
+          existing.balance = updatedCustAdj ? updatedCustAdj.balance : targetBal;
+          existing.current_balance_cents = updatedCustAdj ? updatedCustAdj.current_balance_cents : -targetBal;
 
           await new Promise((resolve, reject) => {
             const req = auditStore.add({
@@ -1993,6 +2097,10 @@ export class PosRepository {
           : (existing.customer_type || (existing.is_wholesale ? 'WHOLESALE' : 'RETAIL')));
       const isWholesale = custType === 'WHOLESALE';
 
+      // BUG-05: balance and current_balance_cents are NOT set here directly.
+      // They have already been updated on `existing` by _applyLedgerEntryInTx above
+      // (or left unchanged if no balance delta occurred). Spreading `existing` here
+      // carries the already-correct values without a redundant second write.
       const updated = {
         ...existing,
         name: data.name !== undefined ? data.name : existing.name,
@@ -2000,8 +2108,6 @@ export class PosRepository {
         customer_type: custType,
         is_wholesale: isWholesale,
         credit_limit_cents: data.credit_limit_cents !== undefined ? Number(data.credit_limit_cents) : existing.credit_limit_cents,
-        balance: targetBal,
-        current_balance_cents: -targetBal, // Legacy compatibility
         trust_status: data.trust_status !== undefined ? data.trust_status : existing.trust_status,
         notes: data.notes !== undefined ? data.notes : (existing.notes || '')
       };
