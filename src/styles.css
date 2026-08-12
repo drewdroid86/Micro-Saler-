@@ -465,7 +465,7 @@ body {
   border: 1px solid var(--market-border);
   border-radius: var(--radius-md);
   font-family: inherit;
-  font-size: 15px;
+  font-size: 16px;
   color: var(--market-text-primary);
   background-color: var(--market-surface);
   transition: all var(--transition-fast);

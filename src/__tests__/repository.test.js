@@ -20,6 +20,7 @@ import {
   calculateCustomerBalance,
   calculateMerchantFeeCents,
   DEFAULT_MERCHANT_FEE_RATES,
+  calcWacCogs,
   PosRepository
 } from '../repository.js';
 
@@ -123,6 +124,26 @@ test('WAC formula calculates weighted cost basis accurately', () => {
   assert.equal(newStockMg, 20000);
   assert.equal(newTotalCostCents, 8000);
   assert.equal(newWacPerGramCents, 400); // $4.00/g average
+});
+
+test('IMP-01: calcWacCogs computes weighted cost of goods sold accurately with zero/null safety', () => {
+  const pigment = { stock_mg: 20000, total_cost_cents: 8000 }; // $4/g
+  
+  // 5g (5000mg) should be $20.00 (2000 cents)
+  assert.equal(calcWacCogs(pigment, 5000), 2000);
+  
+  // 1g (1000mg) should be $4.00 (400 cents)
+  assert.equal(calcWacCogs(pigment, 1000), 400);
+
+  // Rounding check: 1/3 cent rounds properly
+  const oddPigment = { stock_mg: 3000, total_cost_cents: 100 }; // 100/3000 = 1/30 cents/mg
+  assert.equal(calcWacCogs(oddPigment, 100), 3); // 3.33 -> 3
+
+  // Zero / negative / null safety
+  assert.equal(calcWacCogs(null, 5000), 0);
+  assert.equal(calcWacCogs(pigment, 0), 0);
+  assert.equal(calcWacCogs(pigment, -500), 0);
+  assert.equal(calcWacCogs({ stock_mg: 0, total_cost_cents: 500 }, 1000), 0);
 });
 
 test('Partial restock down payment calculates tab liability correctly', () => {
@@ -736,6 +757,30 @@ test('validateCompletedSale allows +-1 cent payment tolerance', () => {
   assert.equal(validateCompletedSale(saleMinusOne).isValid, true);
   assert.equal(validateCompletedSale(salePlusOne).isValid, true);
   assert.equal(validateCompletedSale(saleOffTwo).isValid, false);
+});
+
+test('IMP-02: completeSale reconciles +-1 cent split payment discrepancy inline with zero database drift', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  mockDb.stores.pigments.set(1, { pigment_id: 1, name: 'Sapphire', stock_mg: 50000, total_cost_cents: 5000 });
+
+  const cart = [{ pigment_id: 1, weight_mg: 5000, price_charged_cents: 3000, unit_cogs_cents: 500 }];
+  // Payments sum to $29.99 (3000 - 1 cent rounding error)
+  const payments = [
+    { payment_type: 'CASH', amount_cents: 1499 },
+    { payment_type: 'DIGITAL', amount_cents: 1500 }
+  ];
+
+  const saleId = await repo.completeSale(null, cart, payments);
+  assert.ok(saleId);
+
+  const sale = mockDb.stores.sales.get(saleId);
+  const storedPayments = Array.from(mockDb.stores.sale_payments.values()).filter(p => p.sale_id === saleId);
+
+  assert.equal(sale.total_amount_cents, 3000);
+  const paymentSum = storedPayments.reduce((sum, p) => sum + p.amount_cents, 0);
+  assert.equal(paymentSum, 3000, 'Persisted payments must equal total_amount_cents exactly with zero rounding drift');
 });
 
 test('Cart stock aggregation logic blocks adding items exceeding total stock across cart', () => {
@@ -2555,6 +2600,61 @@ test('IMP-09 / BUG-09: getCustomerTotalExposure nets tab debt against open prepa
   });
   const exposure4 = await repo.getCustomerTotalExposure(2);
   assert.equal(exposure4 === 0 || Object.is(exposure4, -0), true, 'Zero exposure expected');
+});
+
+test('BUG-02: completeSale sets prepayment_id for PREPAID_DELIVERY and voidSale restores prepayment to PENDING_DELIVERY', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const cId = 1;
+  mockDb.stores.customers.set(cId, {
+    customer_id: cId,
+    name: 'Elena',
+    balance: 0,
+    current_balance_cents: 0,
+    credit_limit_cents: 5000
+  });
+  mockDb.stores.pigments.set(1, {
+    pigment_id: 1,
+    name: 'Obsidian',
+    stock_mg: 50000,
+    total_cost_cents: 5000
+  });
+  mockDb.stores.customer_prepayments.set(1, {
+    prepayment_id: 1,
+    customer_id: cId,
+    pigment_id: 1,
+    weight_mg: 5000,
+    amount_cents: 3000,
+    status: 'PENDING_DELIVERY'
+  });
+
+  // 1. Complete sale using PREPAID_DELIVERY tender
+  const cart = [{ pigment_id: 1, weight_mg: 5000, price_charged_cents: 3000, unit_cogs_cents: 500 }];
+  const payments = [{ payment_type: 'PREPAID_DELIVERY', amount_cents: 3000, prepayment_id: 1 }];
+
+  const saleId = await repo.completeSale(cId, cart, payments);
+  assert.ok(saleId);
+
+  const sale = mockDb.stores.sales.get(saleId);
+  assert.equal(sale.prepayment_id, 1, 'Sale record must have matched prepayment_id');
+
+  const fulfilledPrep = mockDb.stores.customer_prepayments.get(1);
+  assert.equal(fulfilledPrep.status, 'FULFILLED');
+
+  // 2. Void the sale
+  await repo.voidSale(saleId, 'Customer cancelled delivery');
+
+  // Prepayment must be restored to PENDING_DELIVERY
+  const restoredPrep = mockDb.stores.customer_prepayments.get(1);
+  assert.equal(restoredPrep.status, 'PENDING_DELIVERY', 'Prepayment status must be restored to PENDING_DELIVERY on void');
+  assert.equal(restoredPrep.fulfilled_at, undefined);
+
+  // Customer balance must equal ledger sum
+  const cust = mockDb.stores.customers.get(cId);
+  const ledger = Array.from(mockDb.stores.customer_ledger.values()).filter(e => e.customer_id === cId);
+  const ledgerSum = ledger.reduce((sum, e) => sum + e.amount_cents, 0);
+  assert.equal(cust.balance, ledgerSum, 'Customer balance must equal ledger sum after void');
 });
 
 

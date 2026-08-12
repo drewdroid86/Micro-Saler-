@@ -10,6 +10,22 @@ export function formatCents(cents) {
   return `$${(c / 100).toFixed(2)}`;
 }
 
+/**
+ * IMP-01: Calculates the Weighted Average Cost (WAC) COGS in cents for a given weight in milligrams.
+ * @param {Object} pigment - Pigment record containing stock_mg and total_cost_cents
+ * @param {number} weightMg - Weight in milligrams
+ * @returns {number} Cost of Goods Sold in cents (rounded to nearest integer)
+ */
+export function calcWacCogs(pigment, weightMg) {
+  const safeMg = Number(weightMg) || 0;
+  if (!pigment || !pigment.stock_mg || pigment.stock_mg <= 0 || safeMg <= 0) {
+    return 0;
+  }
+  const totalCostCents = Number(pigment.total_cost_cents) || 0;
+  const stockMg = Number(pigment.stock_mg);
+  return Math.round((totalCostCents / stockMg) * safeMg);
+}
+
 export function calculateCustomerBalance(customer, prepayments = []) {
   if (!customer) {
     return {
@@ -795,9 +811,7 @@ export class PosRepository {
         throw new Error(`Cannot log shrinkage of ${mgLost}mg — only ${pigment.stock_mg}mg in stock`);
       }
 
-      const cogsLossCents = pigment.stock_mg > 0
-        ? Math.floor((pigment.total_cost_cents / pigment.stock_mg) * mgLost)
-        : 0;
+      const cogsLossCents = calcWacCogs(pigment, mgLost);
 
       pigment.stock_mg = Math.max(0, pigment.stock_mg - mgLost);
       pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - cogsLossCents);
@@ -835,13 +849,25 @@ export class PosRepository {
       throw new Error(`Sale validation failed: ${validation.errors.join(' ')}`);
     }
 
-    const hasHouseTab = payments.some(p => p.payment_type === 'HOUSE_TAB');
+    // IMP-02: Strict payment reconciliation inline before commit.
+    // If a 1-cent split-tender rounding discrepancy exists between items and payments,
+    // adjust payment list inline so persisted records have exact parity (diff = 0)
+    // without creating silent rounding drift or flagging future auto-repair.
+    const discrepancy = totalSaleAmountCents - totalPaymentsCents;
+    const safePayments = payments.map(p => ({ ...p }));
+    if (Math.abs(discrepancy) === 1 && safePayments.length > 0) {
+      const targetIdx = safePayments.findIndex(p => p.payment_type !== 'HOUSE_TAB' && (p.amount_cents + discrepancy) > 0);
+      const adjIdx = targetIdx !== -1 ? targetIdx : safePayments.length - 1;
+      safePayments[adjIdx].amount_cents += discrepancy;
+    }
+
+    const hasHouseTab = safePayments.some(p => p.payment_type === 'HOUSE_TAB');
     if (hasHouseTab) {
       if (!customerId) throw new Error('Customer is required for HOUSE_TAB payment');
       const customer = await this.db.getById('customers', Number(customerId));
       if (!customer) throw new Error(`Customer ${customerId} not found`);
 
-      const tabAmount = payments
+      const tabAmount = safePayments
         .filter(p => p.payment_type === 'HOUSE_TAB')
         .reduce((sum, p) => sum + p.amount_cents, 0);
 
@@ -857,7 +883,11 @@ export class PosRepository {
     }
 
     // Atomic IndexedDB multi-store transaction with in-transaction inventory reads & stock validation
+    const hasPrepaidDelivery = safePayments.some(p => p.payment_type === 'PREPAID_DELIVERY');
     const storeNames = ['sales', 'sale_items', 'sale_payments', 'pigments', 'customers', 'customer_ledger', 'audit_log'];
+    if (hasPrepaidDelivery) {
+      storeNames.push('customer_prepayments');
+    }
     const now = Date.now();
     let createdSaleId = null;
 
@@ -868,6 +898,7 @@ export class PosRepository {
       const pigmentsStore = tx.objectStore('pigments');
       const customersStore = tx.objectStore('customers');
       const auditStore = tx.objectStore('audit_log');
+      const prepStore = hasPrepaidDelivery ? tx.objectStore('customer_prepayments') : null;
 
       // 1. Read & validate all pigments inside the transaction lock.
       // Aggregate requested weight per pigment FIRST so that multiple cart
@@ -913,6 +944,40 @@ export class PosRepository {
         });
       }
 
+      // BUG-02: Resolve prepayment_id when PREPAID_DELIVERY is processed
+      let matchedPrepaymentId = null;
+      const prepaidPayment = safePayments.find(p => p.payment_type === 'PREPAID_DELIVERY');
+      if (prepaidPayment) {
+        if (prepaidPayment.prepayment_id) {
+          matchedPrepaymentId = Number(prepaidPayment.prepayment_id);
+          if (prepStore) {
+            const prep = await new Promise((resolve, reject) => {
+              const req = prepStore.get(matchedPrepaymentId);
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => reject(req.error);
+            });
+            if (prep) {
+              prep.status = 'FULFILLED';
+              prep.fulfilled_at = now;
+              prepStore.put(prep);
+            }
+          }
+        } else if (customerId && prepStore) {
+          const custPreps = await new Promise((resolve, reject) => {
+            const req = prepStore.index('customer_id').getAll(Number(customerId));
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+          });
+          const openPrep = custPreps.find(p => p.status === 'PENDING_DELIVERY');
+          if (openPrep) {
+            matchedPrepaymentId = Number(openPrep.prepayment_id);
+            openPrep.status = 'FULFILLED';
+            openPrep.fulfilled_at = now;
+            prepStore.put(openPrep);
+          }
+        }
+      }
+
       // 3. Write sale record
       createdSaleId = await new Promise((resolve, reject) => {
         const req = salesStore.add({
@@ -925,6 +990,7 @@ export class PosRepository {
           is_credit_override: isCreditOverride,
           needs_reconciliation: false,
           reconciliation_status: 'RECONCILED',
+          prepayment_id: matchedPrepaymentId || null,
           created_at: now,
         });
         req.onsuccess = () => resolve(req.result);
@@ -938,7 +1004,7 @@ export class PosRepository {
         if (pId > 0) {
           const pigment = pigmentCache.get(pId);
           const liveUnitCogs = pigment && pigment.stock_mg > 0
-            ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * item.weight_mg)
+            ? calcWacCogs(pigment, item.weight_mg)
             : (item.unit_cogs_cents || 0);
 
           saleItemsStore.add({
@@ -974,7 +1040,7 @@ export class PosRepository {
       }
 
       // 5. Write payments and update customer ledger/balance
-      for (const payment of payments) {
+      for (const payment of safePayments) {
         const calculatedFee = payment.merchant_fee_cents !== undefined && payment.merchant_fee_cents !== null
           ? Number(payment.merchant_fee_cents) || 0
           : (payment.payment_type === 'DIGITAL' ? calculateMerchantFeeCents(payment.digital_provider, payment.amount_cents) : 0);
@@ -1237,10 +1303,11 @@ export class PosRepository {
         }
 
         // Restore prepayment if this sale originated from a fulfilled prepayment
-        if (sale.prepayment_id) {
+        const prepIdToRestore = sale.prepayment_id || payments.find(p => p.payment_type === 'PREPAID_DELIVERY')?.prepayment_id;
+        if (prepIdToRestore) {
           const prepStore = tx.objectStore('customer_prepayments');
           const prepayment = await new Promise((resolve, reject) => {
-            const req = prepStore.get(Number(sale.prepayment_id));
+            const req = prepStore.get(Number(prepIdToRestore));
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
           });
@@ -2207,9 +2274,7 @@ export class PosRepository {
             throw new Error(`Insufficient stock for ${pigment.name}. Available: ${formatMgToGrams(pigment.stock_mg)}, Required: ${formatMgToGrams(item.weight_mg)}.`);
           }
 
-          const unitCogsCents = pigment.stock_mg > 0
-            ? Math.round((pigment.total_cost_cents / pigment.stock_mg) * item.weight_mg)
-            : 0;
+          const unitCogsCents = calcWacCogs(pigment, item.weight_mg);
 
           pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
           pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - unitCogsCents);

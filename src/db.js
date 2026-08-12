@@ -1,7 +1,7 @@
 /**
  * @fileoverview IndexedDB database layer for Micro Saler POS (React Version).
  * Replaces Android Room database with a Promise-based IndexedDB wrapper.
- * Database version: 7, 14 object stores.
+ * Database version: 10, 15 object stores.
  */
 
 const DB_NAME = 'MicroSalerDB';
@@ -48,15 +48,14 @@ export default class MicroSalerDB {
           if (event.oldVersion < 9) {
             if (db.objectStoreNames.contains('sales')) {
               const salesStore = transaction.objectStore('sales');
-              salesStore.openCursor().onsuccess = (cursorEvent) => {
-                const cursor = cursorEvent.target.result;
-                if (cursor) {
-                  const record = cursor.value;
+              const req = salesStore.getAll();
+              req.onsuccess = () => {
+                const sales = req.result || [];
+                for (const record of sales) {
                   if (!record.sale_type) {
                     record.sale_type = record.pricing_mode || 'RETAIL';
-                    cursor.update(record);
+                    salesStore.put(record);
                   }
-                  cursor.continue();
                 }
               };
             }
@@ -68,27 +67,27 @@ export default class MicroSalerDB {
               const ledgerStore = db.objectStoreNames.contains('customer_ledger')
                 ? transaction.objectStore('customer_ledger')
                 : null;
-              custStore.openCursor().onsuccess = (cursorEvent) => {
-                const cursor = cursorEvent.target.result;
-                if (cursor) {
-                  const record = cursor.value;
+              const req = custStore.getAll();
+              req.onsuccess = () => {
+                const customers = req.result || [];
+                const now = Date.now();
+                for (const record of customers) {
                   const legacyDebt = Number(record.current_balance_cents) || 0;
                   if (record.balance === undefined) {
                     record.balance = -legacyDebt;
                     record.current_balance_cents = legacyDebt;
-                    cursor.update(record);
+                    custStore.put(record);
                     if (ledgerStore && legacyDebt !== 0) {
                       ledgerStore.add({
                         customer_id: Number(record.customer_id),
                         amount_cents: -legacyDebt,
                         type: 'opening_balance',
                         description: 'Legacy pre-v1.4.0 opening balance migration',
-                        created_at: Date.now(),
-                        timestamp: Date.now()
+                        created_at: now,
+                        timestamp: now
                       });
                     }
                   }
-                  cursor.continue();
                 }
               };
             }
