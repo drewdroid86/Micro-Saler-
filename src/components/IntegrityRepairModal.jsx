@@ -21,8 +21,16 @@ export const IntegrityRepairModal = () => {
     setIsRepairing(true);
     try {
       const result = await repairDataIntegrity();
-      showToast(`Auto-repair complete: ${result.repairedCount || 0} record(s) repaired, ${result.flaggedCount || 0} need manual review.`, 'success');
-      if ((result.flaggedCount || 0) === 0) {
+      const repCount = result?.repairedCount || 0;
+      const flgCount = result?.flaggedCount || 0;
+      const custRepCount = result?.customerRepairedCount || 0;
+      const custFlgCount = result?.customerFlaggedCount || 0;
+
+      showToast(
+        `Auto-repair complete: ${repCount} record(s) repaired, ${flgCount} need manual review, ${custRepCount} customer balance(s) repaired, ${custFlgCount} customer(s) need manual review.`,
+        'success'
+      );
+      if (flgCount === 0 && custFlgCount === 0) {
         closeModal();
       }
     } catch (err) {

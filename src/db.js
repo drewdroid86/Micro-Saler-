@@ -5,7 +5,7 @@
  */
 
 const DB_NAME = 'MicroSalerDB';
-export const DB_VERSION = 10;
+export const DB_VERSION = 11;
 
 export default class MicroSalerDB {
   constructor() {
@@ -88,6 +88,38 @@ export default class MicroSalerDB {
                       });
                     }
                   }
+                }
+              };
+            }
+          }
+
+          if (event.oldVersion < 11) {
+            if (db.objectStoreNames.contains('customer_ledger') && db.objectStoreNames.contains('customers')) {
+              const custStore = transaction.objectStore('customers');
+              const ledgerStore = transaction.objectStore('customer_ledger');
+              const custReq = custStore.get(6);
+              custReq.onsuccess = () => {
+                const cust = custReq.result;
+                if (cust) {
+                  const req = ledgerStore.getAll();
+                  req.onsuccess = () => {
+                    const entries = req.result || [];
+                    const hasDoryFix = entries.some(e => Number(e.customer_id) === 6 && Number(e.sale_id) === 15 && e.type === 'SALE_DEBT');
+                    if (!hasDoryFix) {
+                      const now = Date.now();
+                      ledgerStore.add({
+                        customer_id: 6,
+                        amount_cents: -1000,
+                        type: 'SALE_DEBT',
+                        description: 'Backfill: house tab charge for Sale #15 (missing from original split payment)',
+                        sale_id: 15,
+                        tab_payment_id: null,
+                        prepayment_id: null,
+                        created_at: now,
+                        timestamp: now
+                      });
+                    }
+                  };
                 }
               };
             }

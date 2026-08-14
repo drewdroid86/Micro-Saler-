@@ -16,7 +16,6 @@ import {
   calculateBusinessInsights,
   filterCustomers,
   getAllCustomerNames,
-  filterCustomerSuggestions,
   calculateCustomerBalance,
   calculateMerchantFeeCents,
   DEFAULT_MERCHANT_FEE_RATES,
@@ -906,7 +905,7 @@ test('getAllCustomerNames pulls distinct sorted customer names from the customer
   assert.deepEqual(emptyNames, []);
 });
 
-test('filterCustomerSuggestions (CustomerNameInput filtering) applies startsWith, >= 2 chars, and max 5 limits', () => {
+test('IMP-11: filterCustomers supports substring searching for customer autocomplete and checkout input', () => {
   const sampleCustomers = [
     { customer_id: 1, name: 'Alexander Great' },
     { customer_id: 2, name: 'Alex Smith' },
@@ -918,38 +917,35 @@ test('filterCustomerSuggestions (CustomerNameInput filtering) applies startsWith
     { customer_id: 8, name: 'Charlie Brown' }
   ];
 
-  // 1. Inputs under 2 characters return empty array
-  assert.deepEqual(filterCustomerSuggestions(sampleCustomers, ''), []);
-  assert.deepEqual(filterCustomerSuggestions(sampleCustomers, 'a'), []);
-  assert.deepEqual(filterCustomerSuggestions(sampleCustomers, ' A '), []);
-  assert.deepEqual(filterCustomerSuggestions(null, 'Al'), []);
-  assert.deepEqual(filterCustomerSuggestions(sampleCustomers, null), []);
+  // 1. Substring in middle matches (typing "smith" finds "Alex Smith")
+  const smithMatches = filterCustomers(sampleCustomers, 'smith');
+  assert.equal(smithMatches.length, 1);
+  assert.equal(smithMatches[0].name, 'Alex Smith');
 
-  // 2. Case-insensitive startsWith matching
-  const alMatches = filterCustomerSuggestions(sampleCustomers, 'al');
-  // There are 6 matching 'Alex...', but max limit is 5
-  assert.equal(alMatches.length, 5);
-  assert.deepEqual(alMatches.map(c => c.name), [
-    'Alexander Great',
+  // 2. Substring in last name matches (typing "Ross" finds "Bob Ross")
+  const rossMatches = filterCustomers(sampleCustomers, 'Ross');
+  assert.equal(rossMatches.length, 1);
+  assert.equal(rossMatches[0].name, 'Bob Ross');
+
+  // 3. Prefix matching ranks before substring matching
+  const alMatches = filterCustomers(sampleCustomers, 'al');
+  assert.equal(alMatches.length, 6);
+  assert.deepEqual(alMatches.slice(0, 5).map(c => c.name), [
     'Alex Smith',
     'Alexa Bliss',
-    'Alexis Sanchez',
-    'Alexandre Dumas'
+    'Alexander Great',
+    'Alexandre Dumas',
+    'Alexei Navalny'
   ]);
 
-  // 3. Trimming and case insensitivity
-  const bobMatches = filterCustomerSuggestions(sampleCustomers, '  bOB  ');
+  // 4. Case-insensitivity and trimming
+  const bobMatches = filterCustomers(sampleCustomers, '  bOB  ');
   assert.equal(bobMatches.length, 1);
   assert.equal(bobMatches[0].name, 'Bob Ross');
 
-  // 4. Substring in middle does NOT match startsWith
-  const rossMatches = filterCustomerSuggestions(sampleCustomers, 'Ross');
-  assert.equal(rossMatches.length, 0);
-
-  // 5. Exact prefix match with exactly 2 chars
-  const chMatches = filterCustomerSuggestions(sampleCustomers, 'Ch');
-  assert.equal(chMatches.length, 1);
-  assert.equal(chMatches[0].name, 'Charlie Brown');
+  // 5. Empty or null safety
+  assert.deepEqual(filterCustomers(null, 'Al'), []);
+  assert.equal(filterCustomers(sampleCustomers, '').length, sampleCustomers.length);
 });
 
 test('calculateCustomerBalance correctly calculates debt, store credit, prepayments, and available credit', () => {
@@ -2223,11 +2219,11 @@ test('repairCustomerBalance and scanAndReconcileIntegrity are strictly idempoten
     timestamp: 1000
   });
 
-  // 3. Customer record with historical drift: balance says 9999, current_balance_cents says 4444 (drifted from true ledger sum 1500)
+  // 3. Customer record with dual-field drift: balance matches ledger sum 1500, but current_balance_cents says 4444 (drifted)
   mockDb.stores.customers.set(cId, {
     customer_id: cId,
     name: 'Complex Customer',
-    balance: 9999,
+    balance: 1500,
     current_balance_cents: 4444
   });
 
@@ -2279,6 +2275,74 @@ test('repairCustomerBalance and scanAndReconcileIntegrity are strictly idempoten
 
   // Still exactly 3 ledger entries: NO duplicate reconciliation or repair entries
   assert.equal(mockDb.stores.customer_ledger.size, initialLedgerCount);
+});
+
+test('BUG-10: repairCustomerBalance flags non-trivial balance-to-ledger drift for manual review and records previous_balance_cents in audit log', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const cId = 6;
+  // Seed customer with $55 debt (-5500 cents balance)
+  mockDb.stores.customers.set(cId, {
+    customer_id: cId,
+    name: 'Dory',
+    balance: -5500,
+    current_balance_cents: 5500
+  });
+
+  // Ledger only has -$45.00 (-4500 cents), so there is a $10.00 gap (1000 cents)
+  mockDb.stores.customer_ledger.set(1, {
+    entry_id: 1,
+    customer_id: cId,
+    amount_cents: -4500,
+    type: 'opening_balance',
+    description: 'Initial balance',
+    created_at: 100,
+    timestamp: 100
+  });
+
+  // 1. Verify before repair detects discrepancy
+  const preCheck = await repo.verifyCustomerBalance(cId);
+  assert.equal(preCheck.is_valid, false);
+  assert.equal(preCheck.ledger_sum, -4500);
+  assert.equal(preCheck.current_balance, -5500);
+  assert.equal(preCheck.discrepancy, -1000);
+
+  // 2. Scan and repair: MUST NOT auto-overwrite balance, MUST flag for manual review
+  const scanResult = await repo.scanAndReconcileIntegrity();
+  assert.equal(scanResult.customerRepairedCount, 0);
+  assert.equal(scanResult.customerFlaggedCount, 1);
+
+  // 3. Customer balance is preserved (debt not forgiven)
+  const custAfter = mockDb.stores.customers.get(cId);
+  assert.equal(custAfter.balance, -5500);
+  assert.equal(custAfter.current_balance_cents, 5500);
+
+  // 4. Audit log has NEEDS_RECONCILIATION entry
+  const audits = Array.from(mockDb.stores.audit_log.values());
+  const flaggedAudit = audits.find(a => a.entity_type === 'Customer' && a.action === 'INTEGRITY_NEEDS_RECONCILIATION');
+  assert.ok(flaggedAudit);
+  const auditDetails = JSON.parse(flaggedAudit.details_json);
+  assert.equal(auditDetails.previous_balance_cents, -5500);
+  assert.equal(auditDetails.ledger_sum, -4500);
+  assert.equal(auditDetails.difference_cents, 1000);
+
+  // 5. Test audit log on successful repair includes previous_balance_cents
+  const cId2 = 7;
+  mockDb.stores.customers.set(cId2, {
+    customer_id: cId2,
+    name: 'Legacy Alice',
+    current_balance_cents: 3000
+  });
+
+  await repo.repairCustomerBalance(cId2);
+  const repairAudit = Array.from(mockDb.stores.audit_log.values()).find(
+    a => a.entity_type === 'Customer' && a.entity_id === cId2 && a.action === 'CUSTOMER_BALANCE_INTEGRITY_REPAIR'
+  );
+  assert.ok(repairAudit);
+  const repairDetails = JSON.parse(repairAudit.details_json);
+  assert.equal(repairDetails.previous_balance_cents, -3000);
+  assert.equal(repairDetails.repaired_balance, -3000);
 });
 
 test('FEAT-01: exportData exports all 15 stores and tracks backup intervals and overdue thresholds', async () => {

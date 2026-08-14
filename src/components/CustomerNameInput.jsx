@@ -1,22 +1,25 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { formatCents, filterCustomerSuggestions, calculateCustomerBalance } from '../repository';
+import { formatCents, filterCustomers, calculateCustomerBalance } from '../repository';
 
 /**
- * Highlight matching prefix in suggestion text
+ * Highlight matched query in suggestion text (exact, prefix, or substring)
  */
-function HighlightPrefix({ text, query }) {
+function HighlightMatch({ text, query }) {
   if (!query || !text) return <span>{text}</span>;
   const q = query.trim().toLowerCase();
   const lower = text.toLowerCase();
-  if (!lower.startsWith(q)) return <span>{text}</span>;
+  const index = lower.indexOf(q);
+  if (index === -1) return <span>{text}</span>;
 
-  const match = text.substring(0, q.length);
-  const rest = text.substring(q.length);
+  const before = text.substring(0, index);
+  const match = text.substring(index, index + q.length);
+  const after = text.substring(index + q.length);
 
   return (
     <span>
+      {before}
       <strong className="customer-name-match">{match}</strong>
-      {rest}
+      {after}
     </span>
   );
 }
@@ -24,7 +27,7 @@ function HighlightPrefix({ text, query }) {
 /**
  * CustomerNameInput Component
  * 
- * Controlled input for customer name with in-memory startsWith filtering (>= 2 chars, max 5 suggestions).
+ * Controlled input for customer name with ranked substring filtering (>= 2 chars, max 5 suggestions).
  * Selecting a suggestion fills the input and attaches the full customer record (id, balance, credit limit, prepayments).
  * Free-text typed names without exact match are treated as new customer input without hardcoding database writes.
  */
@@ -58,9 +61,10 @@ export const CustomerNameInput = ({
     return map;
   }, [customerPrepayments]);
 
-  // Compute filtered suggestions in-memory (starts-with, max 5)
+  // Compute filtered suggestions in-memory (ranked exact/prefix/substring matcher, max 5)
   const suggestions = useMemo(() => {
-    return filterCustomerSuggestions(customers, value);
+    if (!value || value.trim().length < 2) return [];
+    return filterCustomers(customers, value).slice(0, 5);
   }, [customers, value]);
 
   // Close suggestions when input length drops below 2 chars
@@ -331,7 +335,7 @@ export const CustomerNameInput = ({
                   <div className="customer-suggestion-text">
                     <div className="flex-center gap-xs" style={{ justifyContent: 'flex-start' }}>
                       <span className="customer-suggestion-name">
-                        <HighlightPrefix text={c.name} query={value} />
+                        <HighlightMatch text={c.name} query={value} />
                       </span>
                       {(c.customer_type === 'WHOLESALE' || c.is_wholesale) ? (
                         <span className="badge badge-vip" style={{ fontSize: '10px', padding: '1px 5px' }}>

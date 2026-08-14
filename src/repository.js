@@ -1764,11 +1764,11 @@ export class PosRepository {
 
       let targetBalance = 0;
       let repairReason = '';
+      const legacyDebt = Number(customer.current_balance_cents) || 0;
+      const recordedBal = customer.balance !== undefined ? Number(customer.balance) : -legacyDebt;
 
       if (entries.length === 0) {
         // Case 1: Pre-v1.4.0 legacy customer with no ledger records yet
-        const legacyDebt = Number(customer.current_balance_cents) || 0;
-        const recordedBal = customer.balance !== undefined ? Number(customer.balance) : -legacyDebt;
         targetBalance = recordedBal !== 0 ? recordedBal : -legacyDebt;
 
         if (targetBalance !== 0) {
@@ -1787,8 +1787,51 @@ export class PosRepository {
         }
         repairReason = `Initialized canonical opening_balance ledger entry (${targetBalance} cents) for legacy customer`;
       } else {
-        // Case 2: Customer has ledger entries - sum of ledger is absolute source of truth
-        targetBalance = entries.reduce((sum, e) => sum + (Number(e.amount_cents) || 0), 0);
+        // Case 2: Customer has ledger entries - verify drift before overwriting
+        const ledgerSum = entries.reduce((sum, e) => sum + (Number(e.amount_cents) || 0), 0);
+        const drift = Math.abs(recordedBal - ledgerSum);
+
+        if (drift > 1) {
+          // Non-trivial drift between ledger and recorded balance. Flag for manual review to avoid silently forgiving debt or erasing credit.
+          await new Promise((resolve, reject) => {
+            const req = auditStore.add({
+              entity_type: 'Customer',
+              entity_id: cId,
+              action: 'INTEGRITY_NEEDS_RECONCILIATION',
+              details_json: JSON.stringify({
+                customer_id: cId,
+                customer_name: customer.name,
+                previous_balance_cents: recordedBal,
+                ledger_sum: ledgerSum,
+                difference_cents: drift,
+                reason: `Customer balance (${recordedBal} cents) deviates from ledger history (${ledgerSum} cents) by ${drift} cents — manual review required`,
+                repair_status: 'NEEDS_RECONCILIATION',
+                timestamp: now
+              }),
+              created_at: now,
+              timestamp: now
+            });
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+
+          return {
+            customer_id: cId,
+            customer_name: customer.name,
+            recorded_balance: recordedBal,
+            ledger_sum: ledgerSum,
+            difference_cents: drift,
+            flagged: true,
+            needs_reconciliation: true,
+            is_valid: false,
+            has_dual_field_drift: (customer.balance !== undefined && customer.current_balance_cents !== undefined)
+              ? (recordedBal !== -legacyDebt)
+              : false
+          };
+        }
+
+        // Trivial rounding difference (drift <= 1 cent) or pure dual-field drift repair
+        targetBalance = ledgerSum;
         repairReason = `Aligned customer balance to ledger sum (${targetBalance} cents)`;
       }
 
@@ -1802,6 +1845,7 @@ export class PosRepository {
         action: 'CUSTOMER_BALANCE_INTEGRITY_REPAIR',
         details_json: JSON.stringify({
           customer_id: cId,
+          previous_balance_cents: recordedBal,
           repaired_balance: targetBalance,
           reason: repairReason,
           timestamp: now
@@ -1812,6 +1856,7 @@ export class PosRepository {
 
       return {
         customer_id: cId,
+        repaired: true,
         repaired_balance: targetBalance,
         legacy_debt_cents: customer.current_balance_cents,
         is_valid: true,
@@ -2625,17 +2670,22 @@ export class PosRepository {
     // Also scan all customers for ledger discrepancy and dual-field drift
     const allCustomers = await this.db.getAll('customers');
     let customerRepairedCount = 0;
+    let customerFlaggedCount = 0;
 
     for (const cust of allCustomers) {
       const cId = Number(cust.customer_id);
       const verification = await this.verifyCustomerBalance(cId);
       if (!verification.is_valid || verification.has_dual_field_drift) {
-        await this.repairCustomerBalance(cId);
-        customerRepairedCount++;
+        const repairResult = await this.repairCustomerBalance(cId);
+        if (repairResult && repairResult.flagged) {
+          customerFlaggedCount++;
+        } else {
+          customerRepairedCount++;
+        }
       }
     }
 
-    return { repairedCount, flaggedCount, customerRepairedCount };
+    return { repairedCount, flaggedCount, customerRepairedCount, customerFlaggedCount };
   }
 
   async repairDataIntegrity() {
@@ -3427,19 +3477,4 @@ export async function getAllCustomerNames(dbOrRepo) {
     return Array.from(names).sort((a, b) => a.localeCompare(b));
   }
   return [];
-}
-
-/**
- * Filter cached customer list for suggestions (case-insensitive startsWith, min length 2, up to 5 items).
- * @param {Array} customers - Cached list of customer records
- * @param {string} input - Customer name input string
- * @returns {Array} Array of up to 5 matching customer records
- */
-export function filterCustomerSuggestions(customers = [], input = '') {
-  if (!Array.isArray(customers) || !input || typeof input !== 'string') return [];
-  const q = input.trim().toLowerCase();
-  if (q.length < 2) return [];
-  return customers
-    .filter(c => c && typeof c.name === 'string' && c.name.trim().toLowerCase().startsWith(q))
-    .slice(0, 5);
 }
