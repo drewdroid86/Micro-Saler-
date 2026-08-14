@@ -131,9 +131,6 @@ export const CustomerNameInput = ({
     if (onChange) {
       onChange(typedText, customerPayload);
     }
-    if (onSelectCustomer) {
-      onSelectCustomer(customerPayload);
-    }
 
     if (trimmed.length >= 2) {
       setIsOpen(true);
