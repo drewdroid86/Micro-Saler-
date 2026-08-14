@@ -221,129 +221,138 @@ export const CheckoutScreen = () => {
         </div>
       )}
 
-      <div className="grid-2col mb-md">
-        {safePigments.map(p => {
-          const isSelected = selectedPigment && selectedPigment.pigment_id === p.pigment_id;
-          return (
-            <div
-              key={p.pigment_id}
-              className={`pigment-grid-card ${isSelected ? 'selected' : ''}`}
-              onClick={() => setSelectedPigment(p)}
-            >
-              <div className="color-swatch" style={{ backgroundColor: p.color_code }} />
-              <div className="pigment-info">
-                <div className="pigment-name">{p.name}</div>
-                <div className="pigment-finish">{p.finish_type}</div>
-                <div className={`pigment-stock ${p.stock_mg < 10000 ? 'low-stock' : ''}`}>
-                  {formatMgToGrams(p.stock_mg)} in stock
+      {/* Responsive Split Container: Catalog & Presets on Left, Sticky Cart & Actions on Right (>=900px) */}
+      <div className="checkout-split-container">
+        {/* Left Pane: Product Catalog & Weight Presets */}
+        <div className="checkout-catalog-pane">
+          <div className="grid-2col mb-md">
+            {safePigments.map(p => {
+              const isSelected = selectedPigment && selectedPigment.pigment_id === p.pigment_id;
+              return (
+                <div
+                  key={p.pigment_id}
+                  className={`pigment-grid-card ${isSelected ? 'selected' : ''}`}
+                  onClick={() => setSelectedPigment(p)}
+                >
+                  <div className="color-swatch" style={{ backgroundColor: p.color_code }} />
+                  <div className="pigment-info">
+                    <div className="pigment-name">{p.name}</div>
+                    <div className="pigment-finish">{p.finish_type}</div>
+                    <div className={`pigment-stock ${p.stock_mg < 10000 ? 'low-stock' : ''}`}>
+                      {formatMgToGrams(p.stock_mg)} in stock
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="weight-presets mb-md">
-        {presets.map(preset => {
-          const isTierSet = hasTierOverride(preset.mg);
-          return (
-            <button
-              key={preset.label}
-              className={`weight-preset-btn ${isTierSet ? 'has-tier-override' : ''}`}
-              onClick={() => handlePresetClick(preset.mg)}
-              style={{ position: 'relative' }}
-            >
-              {preset.label}
-              {isTierSet && (
-                <span
-                  className="tier-badge-dot"
-                  title="Fixed preset tier price active"
-                  style={{
-                    position: 'absolute',
-                    top: '3px',
-                    right: '3px',
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '50%',
-                    backgroundColor: 'var(--market-primary, #3b82f6)'
-                  }}
-                />
-              )}
-            </button>
-          );
-        })}
-        <button className="weight-preset-btn active" onClick={handleCustomClick}>
-          Custom
-        </button>
-      </div>
-
-      <div className="cart-summary mb-md">
-        <div className="card-header">
-          <h3 className="title-medium">Cart</h3>
-          {cart.length > 0 && (
-            <button className="btn btn-ghost btn-sm text-error" onClick={clearCart}>
-              Clear Cart
-            </button>
-          )}
-        </div>
-        <div className="card-body">
-          {safeCart.length === 0 ? (
-            <div className="cart-empty">Cart is empty</div>
-          ) : (
-            safeCart.map((item, index) => (
-              <CartItem
-                key={item.cartItemId || index}
-                item={item}
-                index={index}
-                onRemove={() => removeFromCart(index)}
-                openModal={openModal}
-              />
-            ))
-          )}
-        </div>
-
-        <div className="cart-margin">
-          <span>COGS: {formatCents(totalCogs)}</span>
-          <span>Est. Margin: <strong className="margin-value">{margin}%</strong></span>
-        </div>
-
-        <div className="cart-total flex-between" style={{ alignItems: 'center' }}>
-          <div className="flex-center gap-xs">
-            <span>Total Transaction Price</span>
-            {safeCart.length > 0 && (
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={() => openModal('editCartTotal')}
-                title="Set/override total transaction price"
-                style={{ padding: '2px 8px', fontSize: '0.8rem', background: 'var(--market-surface-variant)', border: '1px solid var(--market-border)' }}
-              >
-                ✏️ Edit Total
-              </button>
-            )}
-            {safeCart.length > 0 && (
-              <button
-                className="btn btn-ghost btn-sm text-muted"
-                onClick={resetCartPrices}
-                title="Reset line item prices to standard rates"
-                style={{ padding: '2px 6px', fontSize: '0.75rem' }}
-              >
-                🔄 Reset
-              </button>
-            )}
+              );
+            })}
           </div>
-          <span style={{ fontSize: '1.4rem', fontWeight: '900', color: 'var(--market-green-primary)' }}>
-            {formatCents(totalCharged)}
-          </span>
-        </div>
-      </div>
 
-      <div className="checkout-bottom-actions">
-        <button className="btn btn-collect-cash" onClick={quickCollectCash}>
-          💵 COLLECT CASH
-        </button>
-        <button className="btn btn-primary btn-block" onClick={() => openModal('paymentDrawer')}>
-          Digital / Tab / Split
-        </button>
+          <div className="weight-presets mb-md">
+            {presets.map(preset => {
+              const isTierSet = hasTierOverride(preset.mg);
+              return (
+                <button
+                  key={preset.label}
+                  className={`weight-preset-btn ${isTierSet ? 'has-tier-override' : ''}`}
+                  onClick={() => handlePresetClick(preset.mg)}
+                  style={{ position: 'relative' }}
+                >
+                  {preset.label}
+                  {isTierSet && (
+                    <span
+                      className="tier-badge-dot"
+                      title="Fixed preset tier price active"
+                      style={{
+                        position: 'absolute',
+                        top: '3px',
+                        right: '3px',
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        backgroundColor: 'var(--market-primary, #3b82f6)'
+                      }}
+                    />
+                  )}
+                </button>
+              );
+            })}
+            <button className="weight-preset-btn active" onClick={handleCustomClick}>
+              Custom
+            </button>
+          </div>
+        </div>
+
+        {/* Right Pane: Sticky Cart Summary & Action/Checkout Buttons */}
+        <div className="checkout-cart-pane">
+          <div className="cart-summary mb-md">
+            <div className="card-header">
+              <h3 className="title-medium">Cart</h3>
+              {cart.length > 0 && (
+                <button className="btn btn-ghost btn-sm text-error" onClick={clearCart}>
+                  Clear Cart
+                </button>
+              )}
+            </div>
+            <div className="card-body">
+              {safeCart.length === 0 ? (
+                <div className="cart-empty">Cart is empty</div>
+              ) : (
+                safeCart.map((item, index) => (
+                  <CartItem
+                    key={item.cartItemId || index}
+                    item={item}
+                    index={index}
+                    onRemove={() => removeFromCart(index)}
+                    openModal={openModal}
+                  />
+                ))
+              )}
+            </div>
+
+            <div className="cart-margin">
+              <span>COGS: {formatCents(totalCogs)}</span>
+              <span>Est. Margin: <strong className="margin-value">{margin}%</strong></span>
+            </div>
+
+            <div className="cart-total flex-between" style={{ alignItems: 'center' }}>
+              <div className="flex-center gap-xs">
+                <span>Total Transaction Price</span>
+                {safeCart.length > 0 && (
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => openModal('editCartTotal')}
+                    title="Set/override total transaction price"
+                    style={{ padding: '2px 8px', fontSize: '0.8rem', background: 'var(--market-surface-variant)', border: '1px solid var(--market-border)' }}
+                  >
+                    ✏️ Edit Total
+                  </button>
+                )}
+                {safeCart.length > 0 && (
+                  <button
+                    className="btn btn-ghost btn-sm text-muted"
+                    onClick={resetCartPrices}
+                    title="Reset line item prices to standard rates"
+                    style={{ padding: '2px 6px', fontSize: '0.75rem' }}
+                  >
+                    🔄 Reset
+                  </button>
+                )}
+              </div>
+              <span style={{ fontSize: '1.4rem', fontWeight: '900', color: 'var(--market-green-primary)' }}>
+                {formatCents(totalCharged)}
+              </span>
+            </div>
+          </div>
+
+          <div className="checkout-bottom-actions">
+            <button className="btn btn-collect-cash" onClick={quickCollectCash}>
+              💵 COLLECT CASH
+            </button>
+            <button className="btn btn-primary btn-block" onClick={() => openModal('paymentDrawer')}>
+              Digital / Tab / Split
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

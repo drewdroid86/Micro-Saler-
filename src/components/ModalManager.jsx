@@ -381,8 +381,8 @@ export const ModalManager = () => {
     );
   }
 
-  if (modal.name === 'HELP' || modal.name === 'help' || modal.name === 'userGuide') {
-    return <HelpModal initialSection={modal.data?.section || modal.data?.initialSection || (typeof modal.data === 'string' ? modal.data : null)} />;
+  if (modal.name === 'HELP' || modal.name === 'help' || modal.name === 'userGuide' || modal === 'HELP' || modal === 'help') {
+    return <HelpModal initialSection={modal?.data?.section || modal?.data?.initialSection || (typeof modal?.data === 'string' ? modal.data : null)} />;
   }
 
   const safeCart = cart || [];

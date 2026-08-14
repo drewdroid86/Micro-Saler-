@@ -11,6 +11,17 @@ export const HelpModal = ({ initialSection }) => {
   const [copiedText, setCopiedText] = useState('');
   const bodyRef = useRef(null);
 
+  // Keyboard ESC support
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        closeModal();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [closeModal]);
+
   useEffect(() => {
     if (propSection) {
       setSelectedCategory(propSection);
@@ -62,18 +73,26 @@ export const HelpModal = ({ initialSection }) => {
       <div
         className="modal help-modal-card"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="help-modal-title"
       >
         {/* Header */}
         <div className="modal-header flex-between">
           <div className="help-modal-title-group">
             <span className="help-modal-icon">❓</span>
             <div>
-              <h2 className="help-modal-title">Micro Saler — User Guide & Help</h2>
-              <div className="body-small text-muted">Quick reference, workflows & register glossary</div>
+              <h2 id="help-modal-title" className="help-modal-title">Micro Saler — User Guide & Help</h2>
+              <div className="body-small text-muted">Quick reference, workflows & register glossary (Esc to close)</div>
             </div>
           </div>
-          <button className="modal-close" onClick={closeModal} title="Close Guide" aria-label="Close Guide">
-            &times;
+          <button
+            className="modal-close"
+            onClick={closeModal}
+            title="Close Guide (Esc)"
+            aria-label="Close Guide"
+          >
+            ✕
           </button>
         </div>
 
@@ -84,7 +103,7 @@ export const HelpModal = ({ initialSection }) => {
             <input
               type="text"
               className="form-input help-modal-search-input"
-              placeholder="Search topics (e.g. Margin, WAC, Tab, Return, Split, Shrinkage)..."
+              placeholder="Search topics & glossary (e.g. Margin, WAC, Tab, Return, Split, Shrinkage)..."
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
@@ -92,6 +111,7 @@ export const HelpModal = ({ initialSection }) => {
                   setSelectedCategory('ALL');
                 }
               }}
+              autoFocus
             />
             {searchQuery && (
               <button
@@ -99,13 +119,14 @@ export const HelpModal = ({ initialSection }) => {
                 className="customer-name-clear-btn help-modal-search-clear"
                 onClick={() => setSearchQuery('')}
                 title="Clear Search"
+                aria-label="Clear Search"
               >
-                &times;
+                ✕
               </button>
             )}
           </div>
 
-          {/* Mobile / Tablet Category Pills */}
+          {/* Mobile Category Pills (< 768px) */}
           <div className="help-modal-pills-row">
             <button
               type="button"
@@ -127,9 +148,9 @@ export const HelpModal = ({ initialSection }) => {
           </div>
         </div>
 
-        {/* Split Container: Desktop Sidebar + Content Reader */}
+        {/* Split Container: Desktop Sidebar + Content Reader (>= 768px) */}
         <div className="help-modal-split-container">
-          {/* Desktop Left Sidebar */}
+          {/* Desktop Left Sidebar: Table of Contents + Topic Selector */}
           <aside className="help-modal-sidebar-desktop">
             <div className="body-small font-weight-bold text-muted px-xs py-xs" style={{ letterSpacing: '0.5px' }}>
               TABLE OF CONTENTS
@@ -158,7 +179,7 @@ export const HelpModal = ({ initialSection }) => {
             ))}
           </aside>
 
-          {/* Scrollable Content Body */}
+          {/* Scrollable Content Body Reader */}
           <div className="modal-body help-modal-body" ref={bodyRef}>
             {copiedText && (
               <div className="p-xs mb-sm text-center font-weight-bold text-success" style={{ background: 'rgba(46, 125, 50, 0.12)', borderRadius: '6px', fontSize: '12px' }}>
