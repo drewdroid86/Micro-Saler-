@@ -1,0 +1,320 @@
+import React, { useState, useMemo, useRef } from 'react';
+import { usePos } from '../../context/PosContext';
+import { USER_GUIDE_SECTIONS } from '../../data/userGuideData';
+
+export const HelpModal = () => {
+  const { closeModal } = usePos();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('ALL');
+  const bodyRef = useRef(null);
+
+  // Filter sections based on search query or selected category
+  const filteredSections = useMemo(() => {
+    const q = (searchQuery || '').trim().toLowerCase();
+    let sections = USER_GUIDE_SECTIONS;
+
+    if (selectedCategory !== 'ALL') {
+      sections = sections.filter(s => s.id === selectedCategory);
+    }
+
+    if (q) {
+      sections = sections.filter(s => {
+        if (s.title.toLowerCase().includes(q)) return true;
+        if (s.summary.toLowerCase().includes(q)) return true;
+        if (s.keywords.some(k => k.toLowerCase().includes(q))) return true;
+        if (s.terms && s.terms.some(t => t.term.toLowerCase().includes(q) || t.def.toLowerCase().includes(q))) return true;
+        if (s.faqList && s.faqList.some(f => f.q.toLowerCase().includes(q) || f.a.toLowerCase().includes(q))) return true;
+        return false;
+      });
+    }
+
+    return sections;
+  }, [searchQuery, selectedCategory]);
+
+  const handleSelectCategory = (catId) => {
+    setSelectedCategory(catId);
+    if (bodyRef.current) {
+      bodyRef.current.scrollTop = 0;
+    }
+  };
+
+  return (
+    <div className="modal-overlay active" onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
+      <div
+        className="modal help-modal-card"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="modal-header flex-between">
+          <div className="help-modal-title-group">
+            <span className="help-modal-icon">❓</span>
+            <div>
+              <h2 className="help-modal-title">Micro Saler — User Guide & Help</h2>
+              <div className="body-small text-muted">Quick reference, workflows & register glossary</div>
+            </div>
+          </div>
+          <button className="modal-close" onClick={closeModal} title="Close Guide" aria-label="Close Guide">
+            &times;
+          </button>
+        </div>
+
+        {/* Search & Category Pills Bar */}
+        <div className="help-modal-search-bar">
+          <div className="help-modal-search-wrapper">
+            <span className="help-modal-search-icon">🔍</span>
+            <input
+              type="text"
+              className="form-input help-modal-search-input"
+              placeholder="Search topics (e.g. Margin, WAC, Tab, Return, Split)..."
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (e.target.value && selectedCategory !== 'ALL') {
+                  setSelectedCategory('ALL');
+                }
+              }}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className="customer-name-clear-btn help-modal-search-clear"
+                onClick={() => setSearchQuery('')}
+                title="Clear Search"
+              >
+                &times;
+              </button>
+            )}
+          </div>
+
+          <div className="help-modal-pills-row">
+            <button
+              type="button"
+              onClick={() => handleSelectCategory('ALL')}
+              className={`help-pill ${selectedCategory === 'ALL' ? 'active' : ''}`}
+            >
+              🌟 All Topics
+            </button>
+            {USER_GUIDE_SECTIONS.map((sec) => (
+              <button
+                key={sec.id}
+                type="button"
+                onClick={() => handleSelectCategory(sec.id)}
+                className={`help-pill ${selectedCategory === sec.id ? 'active' : ''}`}
+              >
+                {sec.icon} {sec.shortTitle || sec.title}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Scrollable Content Body */}
+        <div className="modal-body help-modal-body" ref={bodyRef}>
+          {filteredSections.length === 0 ? (
+            <div className="text-center p-xl text-muted">
+              <div style={{ fontSize: '2rem', marginBottom: '8px' }}>🔍</div>
+              <h3 style={{ margin: '0 0 6px 0', color: 'var(--market-text)' }}>No matching topics found</h3>
+              <p className="body-small">Try searching for <em>Tab, Margin, WAC, Return, Restock,</em> or <em>Backup</em>.</p>
+              <button className="btn btn-secondary mt-md" onClick={() => { setSearchQuery(''); setSelectedCategory('ALL'); }}>
+                Clear Filter
+              </button>
+            </div>
+          ) : (
+            filteredSections.map((section) => (
+              <article key={section.id} className="help-section-card">
+                {/* Section Header */}
+                <div className="help-section-header">
+                  <span className="help-section-icon">{section.icon}</span>
+                  <div>
+                    <h3 className="help-section-title">{section.title}</h3>
+                    <p className="help-section-summary">{section.summary}</p>
+                  </div>
+                </div>
+
+                {/* Section Content */}
+                <div className="help-section-content">
+                  {/* Steps (Quick Start) */}
+                  {section.steps && (
+                    <div className="help-steps-list">
+                      {section.steps.map((st) => (
+                        <div key={st.step} className="help-step-item">
+                          <div className="help-step-number">{st.step}</div>
+                          <div className="help-step-body">
+                            <strong className="help-step-title">{st.title}</strong>
+                            <p className="help-step-desc">{st.desc}</p>
+                          </div>
+                        </div>
+                      ))}
+                      {section.note && (
+                        <div className="help-callout-note mt-sm">
+                          💡 <em>{section.note}</em>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tabs Overview Table */}
+                  {section.tabsTable && (
+                    <div className="help-table-responsive">
+                      <table className="help-table">
+                        <thead>
+                          <tr>
+                            <th>Tab</th>
+                            <th>Purpose & Key Features</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {section.tabsTable.map((t, idx) => (
+                            <tr key={idx}>
+                              <td className="help-table-tab-name">
+                                <span style={{ marginRight: '6px' }}>{t.icon}</span>
+                                <strong>{t.tab}</strong>
+                              </td>
+                              <td className="help-table-tab-desc">{t.purpose}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Payment Methods Grid */}
+                  {section.paymentMethods && (
+                    <div className="help-grid-cards">
+                      {section.paymentMethods.map((pm, idx) => (
+                        <div key={idx} className="help-sub-card">
+                          <div className="help-sub-card-title">
+                            <span>{pm.icon}</span>
+                            <strong>{pm.name}</strong>
+                          </div>
+                          <p className="help-sub-card-desc">{pm.desc}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Balance Rules */}
+                  {section.balanceRules && (
+                    <div>
+                      <div className="help-balance-grid mb-sm">
+                        {section.balanceRules.map((br, idx) => (
+                          <div key={idx} className={`help-balance-card ${br.type}`}>
+                            <strong className="help-balance-label">{br.label}</strong>
+                            <div className="help-balance-meaning">{br.meaning}</div>
+                            <p className="help-balance-desc">{br.desc}</p>
+                          </div>
+                        ))}
+                      </div>
+                      {section.details && (
+                        <ul className="help-bullets-list">
+                          {section.details.map((d, idx) => (
+                            <li key={idx}>{d}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Pricing Modes */}
+                  {section.modes && (
+                    <div className="help-grid-cards">
+                      {section.modes.map((m, idx) => (
+                        <div key={idx} className="help-sub-card">
+                          <strong className="help-sub-card-title text-primary">{m.name}</strong>
+                          <div className="body-small font-weight-bold mt-xs">{m.formula}</div>
+                          <div className="body-small text-muted mt-xs">Presets: {m.presets}</div>
+                          <div className="help-example-box mt-xs">
+                            <small><strong>Example:</strong> {m.example}</small>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Inventory / Shrinkage Items */}
+                  {section.items && (
+                    <div className="help-grid-cards">
+                      {section.items.map((item, idx) => (
+                        <div key={idx} className="help-sub-card">
+                          <strong className="help-sub-card-title">{item.title}</strong>
+                          <p className="help-sub-card-desc">{item.desc}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Plain Text Sections (Suppliers, etc) */}
+                  {section.text && (
+                    <p className="help-text-block">{section.text}</p>
+                  )}
+
+                  {/* Insights / Reports sub-sections */}
+                  {section.sections && (
+                    <div className="help-bullets-block">
+                      {section.sections.map((secItem, idx) => (
+                        <div key={idx} className="mb-sm">
+                          <strong>{secItem.title}:</strong> <span className="text-muted">{secItem.desc}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Alert Box */}
+                  {section.alert && (
+                    <div className={`help-alert-box ${section.alert.type} mt-sm`}>
+                      <strong>{section.alert.type === 'warning' ? '⚠️' : 'ℹ️'} {section.alert.title}</strong>
+                      <p className="body-small mt-xs mb-none">{section.alert.text}</p>
+                    </div>
+                  )}
+
+                  {/* FAQ List */}
+                  {section.faqList && (
+                    <div className="help-faq-list">
+                      {section.faqList.map((faq, idx) => (
+                        <div key={idx} className="help-faq-item">
+                          <div className="help-faq-q">❓ {faq.q}</div>
+                          <div className="help-faq-a">{faq.a}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Glossary Table */}
+                  {section.terms && (
+                    <div className="help-table-responsive">
+                      <table className="help-table help-glossary-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: '160px' }}>Term</th>
+                            <th>Definition</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {section.terms.map((t, idx) => (
+                            <tr key={idx}>
+                              <td className="help-glossary-term"><strong>{t.term}</strong></td>
+                              <td className="help-glossary-def">{t.def}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="modal-footer flex-between">
+          <span className="body-small text-muted">
+            100% Offline Guide &bull; Micro Saler
+          </span>
+          <button className="btn btn-primary" onClick={closeModal}>
+            Done / Close Guide
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};

@@ -6,7 +6,7 @@ import { EditCartItemModal } from './modals/EditCartItemModal';
 import { BackupRestoreModal } from './modals/BackupRestoreModal';
 import { EditCartTotalModal } from './modals/EditCartTotalModal';
 import { IntegrityRepairModal } from './IntegrityRepairModal';
-import { UserGuideModal } from './modals/UserGuideModal';
+import { HelpModal } from './modals/HelpModal';
 
 const PRESET_TIERS = [
   { label: '¼g', weight_mg: 250 },
@@ -381,8 +381,8 @@ export const ModalManager = () => {
     );
   }
 
-  if (modal.name === 'userGuide') {
-    return <UserGuideModal />;
+  if (modal.name === 'HELP' || modal.name === 'help' || modal.name === 'userGuide') {
+    return <HelpModal />;
   }
 
   const safeCart = cart || [];

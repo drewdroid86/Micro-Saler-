@@ -21,10 +21,10 @@ export const Header = () => {
         )}
         <button 
           className="header-btn" 
-          onClick={() => openModal('userGuide')}
+          onClick={() => openModal('HELP')}
           title="Micro Saler User Guide & Quick Reference"
         >
-          📖 Guide
+          ❓ Guide
         </button>
         <button 
           className="header-btn" 
