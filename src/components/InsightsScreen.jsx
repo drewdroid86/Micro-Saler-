@@ -237,7 +237,14 @@ export const InsightsScreen = () => {
             ))}
           </div>
 
-          {/* Export Report Actions */}
+          {/* Guide & Export Report Actions */}
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => openModal('HELP', { section: 'insights-reports' })}
+            title="Open Business Insights & KPIs Guide"
+          >
+            ❓ Insights Guide
+          </button>
           <button className="btn btn-secondary btn-sm" onClick={handleDownloadCSV} title="Export Insights Report to CSV">
             📥 Download CSV
           </button>

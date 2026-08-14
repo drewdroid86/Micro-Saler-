@@ -164,18 +164,29 @@ export const CheckoutScreen = () => {
           onOpenCustomerPicker={() => openModal('customerPicker')}
         />
 
-        <div className="pricing-toggle">
+        <div className="flex-center gap-xs">
+          <div className="pricing-toggle">
+            <button
+              className={`toggle-option ${pricingMode === 'RETAIL' ? 'active' : ''}`}
+              onClick={() => (changePricingMode ? changePricingMode('RETAIL') : setPricingMode('RETAIL'))}
+            >
+              RETAIL
+            </button>
+            <button
+              className={`toggle-option ${pricingMode === 'WHOLESALE' ? 'active' : ''}`}
+              onClick={() => (changePricingMode ? changePricingMode('WHOLESALE') : setPricingMode('WHOLESALE'))}
+            >
+              WHOLESALE
+            </button>
+          </div>
           <button
-            className={`toggle-option ${pricingMode === 'RETAIL' ? 'active' : ''}`}
-            onClick={() => (changePricingMode ? changePricingMode('RETAIL') : setPricingMode('RETAIL'))}
+            type="button"
+            className="btn btn-ghost btn-sm"
+            style={{ padding: '6px 10px', fontSize: '12px' }}
+            onClick={() => openModal('HELP', { section: 'quick-start' })}
+            title="Checkout & Register Quick Guide"
           >
-            RETAIL
-          </button>
-          <button
-            className={`toggle-option ${pricingMode === 'WHOLESALE' ? 'active' : ''}`}
-            onClick={() => (changePricingMode ? changePricingMode('WHOLESALE') : setPricingMode('WHOLESALE'))}
-          >
-            WHOLESALE
+            ❓ Guide
           </button>
         </div>
       </div>

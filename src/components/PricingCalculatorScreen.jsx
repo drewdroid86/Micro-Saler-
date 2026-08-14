@@ -22,7 +22,8 @@ export const PricingCalculatorScreen = () => {
     customers,
     suppliers,
     shrinkageLogs,
-    stockReceipts
+    stockReceipts,
+    openModal
   } = usePos();
   const activePigments = (pigments || []).filter(p => !p.is_archived && p.is_active !== false);
 
@@ -139,71 +140,57 @@ export const PricingCalculatorScreen = () => {
     { label: '1g', grams: 1 },
     { label: '1.5g', grams: 1.5 },
     { label: '1.75g', grams: 1.75 },
-    { label: '3.5g', grams: 3.5 },
-    { label: '5g', grams: 5 },
-    { label: '7g', grams: 7 },
-    { label: '10g', grams: 10 },
-    { label: '14g', grams: 14 },
-    { label: '25g', grams: 25 },
-    { label: '28g', grams: 28 },
-    { label: '50g', grams: 50 },
-    { label: '100g', grams: 100 }
+    { label: '3.5g (⅛ oz)', grams: 3.5 },
+    { label: '7g (¼ oz)', grams: 7 },
+    { label: '14g (½ oz)', grams: 14 },
+    { label: '28g (1 oz)', grams: 28 }
   ];
 
-  /**
-   * Price calculation formula:
-   * Total Cost = costPerGram * weightGrams
-   * Mode = 'margin':
-   *   Given cost + target margin: Price = Cost / (1 - Margin%)
-   * Mode = 'markup':
-   *   Given cost + target markup: Price = Cost * (1 + Markup%)
-   */
-  const priceFromMargin = (totalCost, marginPct) => {
-    const marginDecimal = marginPct / 100;
-    return marginDecimal >= 1 ? 0 : totalCost / (1 - marginDecimal);
-  };
-
-  const calculateRow = (weightGrams) => {
-    const totalCost = costPerGram * weightGrams;
-
-    if (calcMode === 'target') {
-      const floorPrice = priceFromMargin(totalCost, floorMarginPct);
-      const onPacePrice = priceFromMargin(totalCost, onPaceMarginPct);
-      const stretchPrice = priceFromMargin(totalCost, stretchMarginPct);
-      const suggestedPrice = onPacePrice; // used for "add to cart" / custom-weight quote
-
+  // Core pricing calculations per weight row
+  const calculateRow = (weightInGrams) => {
+    if (weightInGrams <= 0 || costPerGram <= 0) {
       return {
-        weightGrams,
-        totalCostCents: Math.round(totalCost * 100),
-        floorPriceCents: Math.round(floorPrice * 100),
-        onPacePriceCents: Math.round(onPacePrice * 100),
-        stretchPriceCents: Math.round(stretchPrice * 100),
-        suggestedPriceCents: Math.round(suggestedPrice * 100),
-        profitCents: Math.round((suggestedPrice - totalCost) * 100),
-        markupPct: totalCost > 0 ? ((suggestedPrice - totalCost) / totalCost) * 100 : 0,
-        marginPct: onPaceMarginPct
+        cogsDollars: '0.00',
+        suggestedPriceDollars: '0.00',
+        suggestedPriceCents: 0,
+        profitDollars: '0.00',
+        marginPercent: 0,
+        markupPercent: 0
       };
     }
 
-    let suggestedPrice = 0;
-    if (calcMode === 'margin') {
-      suggestedPrice = priceFromMargin(totalCost, targetPercent);
+    const cogsDollars = weightInGrams * costPerGram;
+    let suggestedPriceDollars = 0;
+
+    if (calcMode === 'target') {
+      // In Target Mode: use the daily-pace margin target (derived from floor + progress)
+      const targetMarginDecimal = onPaceMarginPct / 100;
+      suggestedPriceDollars = targetMarginDecimal < 1 ? cogsDollars / (1 - targetMarginDecimal) : 0;
+    } else if (calcMode === 'margin') {
+      // Margin Formula: Price = COGS / (1 - Margin%)
+      const marginDecimal = targetPercent / 100;
+      if (marginDecimal < 1) {
+        suggestedPriceDollars = cogsDollars / (1 - marginDecimal);
+      } else {
+        suggestedPriceDollars = 0; // Margin >= 100% is undefined
+      }
     } else {
+      // Markup Formula: Price = COGS * (1 + Markup%)
       const markupDecimal = targetPercent / 100;
-      suggestedPrice = totalCost * (1 + markupDecimal);
+      suggestedPriceDollars = cogsDollars * (1 + markupDecimal);
     }
 
-    const profit = suggestedPrice - totalCost;
-    const markupPct = totalCost > 0 ? (profit / totalCost) * 100 : 0;
-    const marginPct = suggestedPrice > 0 ? (profit / suggestedPrice) * 100 : 0;
+    const profitDollars = suggestedPriceDollars - cogsDollars;
+    const marginPercent = suggestedPriceDollars > 0 ? (profitDollars / suggestedPriceDollars) * 100 : 0;
+    const markupPercent = cogsDollars > 0 ? (profitDollars / cogsDollars) * 100 : 0;
 
     return {
-      weightGrams,
-      totalCostCents: Math.round(totalCost * 100),
-      suggestedPriceCents: Math.round(suggestedPrice * 100),
-      profitCents: Math.round(profit * 100),
-      markupPct,
-      marginPct
+      cogsDollars: cogsDollars.toFixed(2),
+      suggestedPriceDollars: suggestedPriceDollars.toFixed(2),
+      suggestedPriceCents: Math.round(suggestedPriceDollars * 100),
+      profitDollars: profitDollars.toFixed(2),
+      marginPercent: Math.round(marginPercent),
+      markupPercent: Math.round(markupPercent)
     };
   };
 
@@ -259,6 +246,13 @@ export const PricingCalculatorScreen = () => {
             Calculate target selling prices, profit margins, and markup across standard weight tiers.
           </p>
         </div>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => openModal('HELP', { section: 'pricing-calculator' })}
+          title="Open Margin vs Markup Pricing Guide"
+        >
+          ❓ Pricing Guide
+        </button>
       </div>
 
       {/* Input Form Controls Card */}

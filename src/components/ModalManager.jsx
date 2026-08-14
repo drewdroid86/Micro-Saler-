@@ -382,7 +382,7 @@ export const ModalManager = () => {
   }
 
   if (modal.name === 'HELP' || modal.name === 'help' || modal.name === 'userGuide') {
-    return <HelpModal />;
+    return <HelpModal initialSection={modal.data?.section || modal.data?.initialSection || (typeof modal.data === 'string' ? modal.data : null)} />;
   }
 
   const safeCart = cart || [];

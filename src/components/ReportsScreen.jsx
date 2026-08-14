@@ -54,23 +54,32 @@ export const ReportsScreen = () => {
           <p className="body-small text-muted">Profit & Loss, Accounts Receivable (Who Owes Me), Accounts Payable (What I Owe)</p>
         </div>
 
-        <div className="flex-center gap-xs" style={{ background: 'var(--market-surface-variant)', padding: '4px', borderRadius: 'var(--radius-md)' }}>
-          {[
-            { id: 'TODAY', label: 'Today' },
-            { id: 'WEEK', label: '7 Days' },
-            { id: 'MONTH', label: '30 Days' },
-            { id: 'YTD', label: 'YTD' },
-            { id: 'ALL', label: 'All Time' }
-          ].map(btn => (
-            <button
-              key={btn.id}
-              className={`btn btn-sm ${timeRange === btn.id ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setTimeRange(btn.id)}
-              style={{ fontSize: '0.85rem', padding: '6px 12px' }}
-            >
-              {btn.label}
-            </button>
-          ))}
+        <div className="flex-center gap-xs" style={{ flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => openModal('HELP', { section: 'insights-reports' })}
+            title="Open Reports & P&L Guide"
+          >
+            ❓ Reports Guide
+          </button>
+          <div className="flex-center gap-xs" style={{ background: 'var(--market-surface-variant)', padding: '4px', borderRadius: 'var(--radius-md)' }}>
+            {[
+              { id: 'TODAY', label: 'Today' },
+              { id: 'WEEK', label: '7 Days' },
+              { id: 'MONTH', label: '30 Days' },
+              { id: 'YTD', label: 'YTD' },
+              { id: 'ALL', label: 'All Time' }
+            ].map(btn => (
+              <button
+                key={btn.id}
+                className={`btn btn-sm ${timeRange === btn.id ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setTimeRange(btn.id)}
+                style={{ fontSize: '0.85rem', padding: '6px 12px' }}
+              >
+                {btn.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

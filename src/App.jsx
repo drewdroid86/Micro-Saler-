@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { usePos } from './context/PosContext';
 import { Header } from './components/Header';
 import { NavTabs } from './components/NavTabs';
@@ -15,7 +15,23 @@ import { ModalManager } from './components/ModalManager';
 import { Toast } from './components/Toast';
 
 export function App() {
-  const { currentTab, loading, loadingError, isDbBlocked, retryDbInit } = usePos();
+  const { currentTab, loading, loadingError, isDbBlocked, retryDbInit, openModal } = usePos();
+
+  // Global hotkey: Pressing ? or F1 opens the User Guide & Help Modal
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const tag = document.activeElement?.tagName;
+      const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || document.activeElement?.isContentEditable;
+      if (isInput) return;
+
+      if (e.key === '?' || (e.shiftKey && e.key === '/') || e.key === 'F1') {
+        e.preventDefault();
+        openModal('HELP');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [openModal]);
 
   if (loadingError || isDbBlocked) {
     return (
