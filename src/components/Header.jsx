@@ -21,6 +21,13 @@ export const Header = () => {
         )}
         <button 
           className="header-btn" 
+          onClick={() => openModal('userGuide')}
+          title="Micro Saler User Guide & Quick Reference"
+        >
+          📖 Guide
+        </button>
+        <button 
+          className="header-btn" 
           onClick={() => openModal('backupRestore')}
           title="Backup & Restore Ledger Data"
         >
