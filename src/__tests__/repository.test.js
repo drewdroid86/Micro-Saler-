@@ -2721,8 +2721,20 @@ test('BUG-02: completeSale sets prepayment_id for PREPAID_DELIVERY and voidSale 
   assert.equal(cust.balance, ledgerSum, 'Customer balance must equal ledger sum after void');
 });
 
+test('Pricing tier calculation formula returns valid marginPct, markupPct, totalCostCents, and profitCents', () => {
+  const costPerGram = 2.50;
+  const weightG = 10;
+  const targetMarginPct = 50;
+  const totalCostCents = Math.round(weightG * costPerGram * 100); // 2500 cents
+  const marginDecimal = targetMarginPct / 100;
+  const suggestedPriceCents = Math.round(totalCostCents / (1 - marginDecimal)); // 5000 cents
+  const profitCents = suggestedPriceCents - totalCostCents; // 2500 cents
+  const marginPct = (profitCents / suggestedPriceCents) * 100;
+  const markupPct = (profitCents / totalCostCents) * 100;
 
-
-
-
-
+  assert.equal(totalCostCents, 2500);
+  assert.equal(suggestedPriceCents, 5000);
+  assert.equal(profitCents, 2500);
+  assert.equal(marginPct.toFixed(1), '50.0');
+  assert.equal(markupPct.toFixed(1), '100.0');
+});

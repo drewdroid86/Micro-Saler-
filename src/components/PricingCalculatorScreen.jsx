@@ -148,49 +148,61 @@ export const PricingCalculatorScreen = () => {
 
   // Core pricing calculations per weight row
   const calculateRow = (weightInGrams) => {
+    const totalCostCents = Math.round(weightInGrams * costPerGram * 100);
+    const cogsDollars = (totalCostCents / 100).toFixed(2);
+
     if (weightInGrams <= 0 || costPerGram <= 0) {
       return {
         cogsDollars: '0.00',
+        totalCostCents: 0,
         suggestedPriceDollars: '0.00',
         suggestedPriceCents: 0,
         profitDollars: '0.00',
-        marginPercent: 0,
-        markupPercent: 0
+        profitCents: 0,
+        marginPct: 0,
+        markupPct: 0,
+        floorPriceCents: 0,
+        onPacePriceCents: 0,
+        stretchPriceCents: 0
       };
     }
 
-    const cogsDollars = weightInGrams * costPerGram;
-    let suggestedPriceDollars = 0;
+    const floorDecimal = floorMarginPct / 100;
+    const onPaceDecimal = onPaceMarginPct / 100;
+    const stretchDecimal = stretchMarginPct / 100;
+
+    const floorPriceCents = floorDecimal < 1 ? Math.round(totalCostCents / (1 - floorDecimal)) : 0;
+    const onPacePriceCents = onPaceDecimal < 1 ? Math.round(totalCostCents / (1 - onPaceDecimal)) : 0;
+    const stretchPriceCents = stretchDecimal < 1 ? Math.round(totalCostCents / (1 - stretchDecimal)) : 0;
+
+    let suggestedPriceCents = 0;
 
     if (calcMode === 'target') {
-      // In Target Mode: use the daily-pace margin target (derived from floor + progress)
-      const targetMarginDecimal = onPaceMarginPct / 100;
-      suggestedPriceDollars = targetMarginDecimal < 1 ? cogsDollars / (1 - targetMarginDecimal) : 0;
+      suggestedPriceCents = onPacePriceCents;
     } else if (calcMode === 'margin') {
-      // Margin Formula: Price = COGS / (1 - Margin%)
       const marginDecimal = targetPercent / 100;
-      if (marginDecimal < 1) {
-        suggestedPriceDollars = cogsDollars / (1 - marginDecimal);
-      } else {
-        suggestedPriceDollars = 0; // Margin >= 100% is undefined
-      }
+      suggestedPriceCents = marginDecimal < 1 ? Math.round(totalCostCents / (1 - marginDecimal)) : 0;
     } else {
-      // Markup Formula: Price = COGS * (1 + Markup%)
       const markupDecimal = targetPercent / 100;
-      suggestedPriceDollars = cogsDollars * (1 + markupDecimal);
+      suggestedPriceCents = Math.round(totalCostCents * (1 + markupDecimal));
     }
 
-    const profitDollars = suggestedPriceDollars - cogsDollars;
-    const marginPercent = suggestedPriceDollars > 0 ? (profitDollars / suggestedPriceDollars) * 100 : 0;
-    const markupPercent = cogsDollars > 0 ? (profitDollars / cogsDollars) * 100 : 0;
+    const profitCents = suggestedPriceCents - totalCostCents;
+    const marginPct = suggestedPriceCents > 0 ? (profitCents / suggestedPriceCents) * 100 : 0;
+    const markupPct = totalCostCents > 0 ? (profitCents / totalCostCents) * 100 : 0;
 
     return {
-      cogsDollars: cogsDollars.toFixed(2),
-      suggestedPriceDollars: suggestedPriceDollars.toFixed(2),
-      suggestedPriceCents: Math.round(suggestedPriceDollars * 100),
-      profitDollars: profitDollars.toFixed(2),
-      marginPercent: Math.round(marginPercent),
-      markupPercent: Math.round(markupPercent)
+      cogsDollars,
+      totalCostCents,
+      suggestedPriceDollars: (suggestedPriceCents / 100).toFixed(2),
+      suggestedPriceCents,
+      profitDollars: (profitCents / 100).toFixed(2),
+      profitCents,
+      marginPct,
+      markupPct,
+      floorPriceCents,
+      onPacePriceCents,
+      stretchPriceCents
     };
   };
 

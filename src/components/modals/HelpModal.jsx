@@ -4,7 +4,7 @@ import { USER_GUIDE_SECTIONS } from '../../data/userGuideData';
 
 export const HelpModal = ({ initialSection }) => {
   const { modal, closeModal } = usePos();
-  const propSection = initialSection || modal?.data?.section || modal?.data?.initialSection || (typeof modal?.data === 'string' ? modal.data : null);
+  const propSection = initialSection || modal?.payload?.section || modal?.payload?.initialSection || modal?.data?.section || modal?.data?.initialSection || (typeof modal?.payload === 'string' ? modal.payload : (typeof modal?.data === 'string' ? modal.data : null));
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState(propSection || 'ALL');

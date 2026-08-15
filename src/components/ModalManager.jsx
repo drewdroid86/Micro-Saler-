@@ -382,7 +382,7 @@ export const ModalManager = () => {
   }
 
   if (modal.name === 'HELP' || modal.name === 'help' || modal.name === 'userGuide' || modal === 'HELP' || modal === 'help') {
-    return <HelpModal initialSection={modal?.data?.section || modal?.data?.initialSection || (typeof modal?.data === 'string' ? modal.data : null)} />;
+    return <HelpModal initialSection={modal?.payload?.section || modal?.payload?.initialSection || modal?.data?.section || modal?.data?.initialSection || (typeof modal?.payload === 'string' ? modal.payload : (typeof modal?.data === 'string' ? modal.data : null))} />;
   }
 
   const safeCart = cart || [];
