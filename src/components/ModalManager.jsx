@@ -2125,7 +2125,7 @@ export const ModalManager = () => {
                             type="number"
                             step="0.01"
                             min="0"
-                            placeholder={editRetailPrice ? `MSRP $${(Number(editRetailPrice) * (preset.weight_mg / 1000)).toFixed(2)}` : "Retail MSRP $"}
+                            placeholder={editRetail && !isNaN(Number(editRetail)) && Number(editRetail) > 0 ? `MSRP $${(Number(editRetail) * (preset.weight_mg / 1000)).toFixed(2)}` : "Retail MSRP $"}
                             className="form-input"
                             style={{ padding: '3px 6px', fontSize: '12px' }}
                             value={inputVal.retail || ''}
@@ -2143,7 +2143,7 @@ export const ModalManager = () => {
                             type="number"
                             step="0.01"
                             min="0"
-                            placeholder={editWholesalePrice ? `Wholesale $${(Number(editWholesalePrice) * (preset.weight_mg / 1000)).toFixed(2)}` : "Wholesale $"}
+                            placeholder={editWholesale && !isNaN(Number(editWholesale)) && Number(editWholesale) > 0 ? `Wholesale $${(Number(editWholesale) * (preset.weight_mg / 1000)).toFixed(2)}` : "Wholesale $"}
                             className="form-input"
                             style={{ padding: '3px 6px', fontSize: '12px' }}
                             value={inputVal.wholesale || ''}
