@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
 import { usePos } from '../../context/PosContext';
-import { formatCents } from '../../repository';
+import { formatCents, calculateRecommendedMsrpCents } from '../../repository';
 
 export const EditCartTotalModal = () => {
-  const { cart, closeModal, overrideCartTotal, showToast } = usePos();
+  const { cart, closeModal, overrideCartTotal, showToast, priceTiers } = usePos();
   const safeCart = cart || [];
   const currentCalculatedTotalCents = safeCart.reduce((sum, item) => sum + (item.price_charged_cents || 0), 0);
+  const totalMsrpCents = safeCart.reduce(
+    (sum, item) => sum + calculateRecommendedMsrpCents(item.pigment, item.weight_mg, priceTiers),
+    0
+  );
 
   const [inputVal, setInputVal] = useState(
     currentCalculatedTotalCents > 0 ? (currentCalculatedTotalCents / 100).toFixed(2) : ''
@@ -49,10 +53,26 @@ export const EditCartTotalModal = () => {
           </p>
 
           <div className="card card-static p-sm mb-md" style={{ background: 'var(--market-surface-variant)' }}>
-            <div className="flex-between body-small">
+            <div className="flex-between body-small mb-xs">
               <span>Calculated Item Subtotal:</span>
               <strong>{formatCents(currentCalculatedTotalCents)}</strong>
             </div>
+            {totalMsrpCents > 0 && (
+              <div className="flex-between body-small">
+                <span>Recommended MSRP Total:</span>
+                <div className="flex-center gap-xs">
+                  <strong className="text-primary">{formatCents(totalMsrpCents)}</strong>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ padding: '1px 6px', fontSize: '11px', background: 'var(--market-surface)', border: '1px solid var(--market-border)' }}
+                    onClick={() => setInputVal((totalMsrpCents / 100).toFixed(2))}
+                  >
+                    Use MSRP
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="form-group mb-md">

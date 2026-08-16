@@ -141,6 +141,7 @@ export const PricingCalculatorScreen = () => {
     { label: '1.5g', grams: 1.5 },
     { label: '1.75g', grams: 1.75 },
     { label: '3.5g (⅛ oz)', grams: 3.5 },
+    { label: '5g', grams: 5 },
     { label: '7g (¼ oz)', grams: 7 },
     { label: '14g (½ oz)', grams: 14 },
     { label: '28g (1 oz)', grams: 28 }
@@ -478,7 +479,7 @@ export const PricingCalculatorScreen = () => {
                   </>
                 ) : (
                   <>
-                    <th>Suggested Price</th>
+                    <th>Suggested Price (MSRP)</th>
                     <th>Markup %</th>
                     <th>Margin %</th>
                     <th>Profit ($)</th>
@@ -545,7 +546,7 @@ export const PricingCalculatorScreen = () => {
               />
             </div>
             <div className="stat-card p-sm" style={{ background: '#fff', borderRadius: 'var(--radius-md)', flex: 1 }}>
-              <div className="label-small text-muted">{calcMode === 'target' ? 'On-Pace Price' : 'Suggested Price'}</div>
+              <div className="label-small text-muted">{calcMode === 'target' ? 'On-Pace Price' : 'Suggested MSRP'}</div>
               <div className="title-medium font-bold text-primary">{formatCents(customCalc.suggestedPriceCents)}</div>
             </div>
             <div className="stat-card p-sm" style={{ background: '#fff', borderRadius: 'var(--radius-md)', flex: 1 }}>

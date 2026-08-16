@@ -294,6 +294,28 @@ export function getMatchedTier(pigment, weightMg) {
   return sortedTiers.find(t => weightMg >= Number(t.min_weight_mg)) || null;
 }
 
+export function calculateRecommendedMsrpCents(pigment, weightMg = 0, priceTiers = []) {
+  if (!pigment) return 0;
+  const safeWeightMg = Math.max(0, Number(weightMg) || 0);
+  if (safeWeightMg <= 0) return 0;
+
+  const presetTier = priceTiers?.find(
+    t => Number(t.pigment_id) === Number(pigment.pigment_id) && Number(t.weight_mg) === Number(safeWeightMg)
+  );
+
+  if (presetTier) {
+    const tierRetail = presetTier.retail_price_cents;
+    if (tierRetail !== null && tierRetail !== undefined && !isNaN(tierRetail) && Number(tierRetail) > 0) {
+      return Number(tierRetail);
+    }
+  }
+
+  const weightGrams = safeWeightMg / GRAM_TO_MG;
+  const retailRatePerGramCents = getEffectivePricePerGramCents(pigment, safeWeightMg, 'RETAIL');
+  const pkgCents = pigment.default_pkg_cents || 0;
+  return Math.round(weightGrams * retailRatePerGramCents) + pkgCents;
+}
+
 export function calculatePricingBreakdown({
   pigment,
   weightMg = 0,
@@ -342,6 +364,8 @@ export function calculatePricingBreakdown({
     effectiveRatePerGramCents = weightGrams > 0 ? Math.round(totalPriceCents / weightGrams) : 0;
   }
 
+  const msrpCents = calculateRecommendedMsrpCents(pigment, safeWeightMg, priceTiers);
+
   let costPerGramCents = 0;
   if (customCostPerGramCents !== null && customCostPerGramCents !== undefined && !isNaN(customCostPerGramCents)) {
     costPerGramCents = Number(customCostPerGramCents);
@@ -365,6 +389,7 @@ export function calculatePricingBreakdown({
     effectiveRatePerOzCents,
     matchedTier,
     totalPriceCents,
+    msrpCents,
     cogsCents,
     grossProfitCents,
     marginPercent,

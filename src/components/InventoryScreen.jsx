@@ -317,7 +317,7 @@ export const InventoryScreen = () => {
                       </strong>
                     </div>
                     <div>
-                      <div className="label-small text-muted">Retail/g</div>
+                      <div className="label-small text-muted">MSRP / Retail/g</div>
                       <strong className="body-medium">{formatCents(selectedPigment.retail_price_per_gram_cents)}</strong>
                     </div>
                     <div>
@@ -354,7 +354,7 @@ export const InventoryScreen = () => {
                         <thead>
                           <tr>
                             <th>Weight</th>
-                            <th>Retail Price</th>
+                            <th>Retail Price (MSRP)</th>
                             <th>Wholesale Price</th>
                           </tr>
                         </thead>

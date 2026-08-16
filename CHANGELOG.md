@@ -5,6 +5,28 @@ All notable changes to the **Micro Saler POS** project will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-08-16
+
+### 🚀 Added
+- **5g Weight Tier**:
+  - Added standard `5g` (5,000 mg) weight preset to Checkout register quick-add buttons.
+  - Added `5g` fixed tier pricing override support in pigment editor (`ModalManager.jsx` `PRESET_TIERS`).
+  - Added `5g` matrix row in Pricing Calculator screen (`PricingCalculatorScreen.jsx`).
+  - Updated User Guide and Help walkthroughs with 5g preset reference.
+- **Recommended MSRP (Manufacturer's Suggested Retail Price) Display**:
+  - New `calculateRecommendedMsrpCents` repository function computing standard retail pricing with fixed tier overrides and packaging costs.
+  - **Checkout Screen**:
+    - Selected pigment banner displays real-time Recommended MSRP (`Rec. MSRP: $X.XX/g`) and Wholesale rate comparison.
+    - Quick weight preset buttons display calculated price/MSRP for selected pigment with detailed tooltips.
+    - Cart items display `Rec. MSRP` and green savings callout if selling below retail/MSRP (e.g. wholesale or custom discount).
+    - Cart breakdown displays `Rec. MSRP Total` alongside COGS and Estimated Margin with total transaction savings vs MSRP.
+  - **Custom Weight Modal**: Real-time Recommended MSRP quote and one-click "Use MSRP" button when entering custom gram weights.
+  - **Edit Cart Item Modal**: Real-time Recommended MSRP quote and "Use MSRP" button.
+  - **Edit Cart Total Modal**: Displays standard Recommended MSRP Total and quick "Use MSRP" preset button.
+  - **Inventory & Pricing Calculator Screens**: Clarified MSRP/Retail labels on pricing tables and quick quote estimators.
+
+---
+
 ## [1.4.0] - 2026-08-09
 
 ### 🚀 Added

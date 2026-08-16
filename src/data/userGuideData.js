@@ -15,7 +15,7 @@ export const USER_GUIDE_SECTIONS = [
     keywords: ['checkout', 'sale', 'cart', 'preset', 'fast', 'cash', 'register', 'weight'],
     steps: [
       { step: 1, title: 'Checkout tab (🛒)', desc: "Tap the pigment you're selling." },
-      { step: 2, title: 'Pick a weight preset', desc: 'Select ¼g, ½g, ¾g, 1g, 1.5g, 1.75g, 3.5g... or enter a custom weight.' },
+      { step: 2, title: 'Pick a weight preset', desc: 'Select ¼g, ½g, ¾g, 1g, 1.5g, 1.75g, 3.5g, 5g... or enter a custom weight.' },
       { step: 3, title: 'Add more items', desc: 'Repeat for additional pigments — items stack directly in the cart.' },
       { step: 4, title: 'Tap Checkout', desc: 'Choose how they are paying (Cash / Digital / Tab / Store Credit / Prepaid — or split across multiple), then confirm.' },
       { step: 5, title: 'Done!', desc: 'Stock, sale records, and customer balance/ledger update automatically in one atomic step.' }

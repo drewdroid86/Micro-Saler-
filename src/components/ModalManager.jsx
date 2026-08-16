@@ -16,6 +16,7 @@ const PRESET_TIERS = [
   { label: '1.5g', weight_mg: 1500 },
   { label: '1.75g', weight_mg: 1750 },
   { label: '3.5g', weight_mg: 3500 },
+  { label: '5g', weight_mg: 5000 },
   { label: '7g', weight_mg: 7000 },
   { label: '14g', weight_mg: 14000 },
   { label: '28g', weight_mg: 28000 }
@@ -2124,7 +2125,7 @@ export const ModalManager = () => {
                             type="number"
                             step="0.01"
                             min="0"
-                            placeholder="Retail $"
+                            placeholder={editRetailPrice ? `MSRP $${(Number(editRetailPrice) * (preset.weight_mg / 1000)).toFixed(2)}` : "Retail MSRP $"}
                             className="form-input"
                             style={{ padding: '3px 6px', fontSize: '12px' }}
                             value={inputVal.retail || ''}
@@ -2142,7 +2143,7 @@ export const ModalManager = () => {
                             type="number"
                             step="0.01"
                             min="0"
-                            placeholder="Wholesale $"
+                            placeholder={editWholesalePrice ? `Wholesale $${(Number(editWholesalePrice) * (preset.weight_mg / 1000)).toFixed(2)}` : "Wholesale $"}
                             className="form-input"
                             style={{ padding: '3px 6px', fontSize: '12px' }}
                             value={inputVal.wholesale || ''}

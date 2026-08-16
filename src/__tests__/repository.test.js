@@ -12,6 +12,7 @@ import {
   mgToGrams,
   mgToOz,
   calculatePricingBreakdown,
+  calculateRecommendedMsrpCents,
   getMatchedTier,
   calculateBusinessInsights,
   filterCustomers,
@@ -2738,3 +2739,57 @@ test('Pricing tier calculation formula returns valid marginPct, markupPct, total
   assert.equal(marginPct.toFixed(1), '50.0');
   assert.equal(markupPct.toFixed(1), '100.0');
 });
+
+test('calculateRecommendedMsrpCents computes retail price, 5g tier, packaging, and respects preset overrides', () => {
+  const pigment = {
+    pigment_id: 1,
+    name: 'Sample Diamond Dust',
+    retail_price_per_gram_cents: 800, // $8/g
+    wholesale_price_per_gram_cents: 450, // $4.50/g
+    default_pkg_cents: 50, // $0.50 packaging
+    stock_mg: 100000,
+    total_cost_cents: 20000
+  };
+
+  // 1. Standard 5g (5000 mg) calculation: 5g * $8 + $0.50 pkg = $40.50 (4050 cents)
+  const msrp5g = calculateRecommendedMsrpCents(pigment, 5000);
+  assert.equal(msrp5g, 4050);
+
+  // 2. Standard 1g (1000 mg) calculation: 1g * $8 + $0.50 = $8.50 (850 cents)
+  const msrp1g = calculateRecommendedMsrpCents(pigment, 1000);
+  assert.equal(msrp1g, 850);
+
+  // 3. Preset price tier override on 5g (5000 mg)
+  const priceTiers = [
+    { pigment_id: 1, weight_mg: 5000, retail_price_cents: 3500, wholesale_price_cents: 2000 }
+  ];
+  const msrp5gOverride = calculateRecommendedMsrpCents(pigment, 5000, priceTiers);
+  assert.equal(msrp5gOverride, 3500, 'Preset tier override should be returned when present');
+
+  // 4. Sliding tier brackets (min_weight_mg)
+  const pigmentWithSlidingTiers = {
+    ...pigment,
+    default_pkg_cents: 0,
+    price_tiers: [
+      { min_weight_mg: 5000, retail_price_per_gram_cents: 700, wholesale_price_per_gram_cents: 400 }
+    ]
+  };
+  const msrpSliding5g = calculateRecommendedMsrpCents(pigmentWithSlidingTiers, 5000);
+  assert.equal(msrpSliding5g, 3500); // 5g * $7/g = $35.00
+
+  // 5. Zero and null safety
+  assert.equal(calculateRecommendedMsrpCents(null, 5000), 0);
+  assert.equal(calculateRecommendedMsrpCents(pigment, 0), 0);
+  assert.equal(calculateRecommendedMsrpCents(pigment, -500), 0);
+
+  // 6. calculatePricingBreakdown returns msrpCents
+  const breakdown = calculatePricingBreakdown({
+    pigment,
+    weightMg: 5000,
+    pricingMode: 'WHOLESALE',
+    priceTiers
+  });
+  assert.equal(breakdown.totalPriceCents, 2000, 'Wholesale price from preset tier');
+  assert.equal(breakdown.msrpCents, 3500, 'MSRP reflects retail value');
+});
+

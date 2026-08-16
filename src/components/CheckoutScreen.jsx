@@ -1,17 +1,34 @@
 import React, { useState, useEffect } from 'react';
 import { usePos } from '../context/PosContext';
-import { formatCents, formatMgToGrams } from '../repository';
+import { formatCents, formatMgToGrams, calculateRecommendedMsrpCents, getEffectivePricePerGramCents } from '../repository';
 import { CustomerNameInput } from './CustomerNameInput';
 
-const CartItem = ({ item, index, onRemove, openModal }) => {
+const CartItem = ({ item, index, onRemove, openModal, priceTiers }) => {
+  const itemMsrp = calculateRecommendedMsrpCents(item.pigment, item.weight_mg, priceTiers);
+  const isDiscounted = itemMsrp > (item.price_charged_cents || 0);
+
   return (
     <div className="cart-item">
       <div className="cart-item-details">
-        <span className="cart-item-title">{item.pigment.name}</span>
-        <span className="cart-item-meta">{formatMgToGrams(item.weight_mg)}</span>
+        <span className="cart-item-title">{item.pigment?.name || 'Item'}</span>
+        <span className="cart-item-meta">
+          {formatMgToGrams(item.weight_mg)}
+          {itemMsrp > 0 && (
+            <span style={{ marginLeft: '6px', opacity: 0.85 }}>
+              • Rec. MSRP: {formatCents(itemMsrp)}
+            </span>
+          )}
+        </span>
       </div>
       <div className="flex-center gap-sm">
-        <span className="cart-item-price">{formatCents(item.price_charged_cents)}</span>
+        <div style={{ textAlign: 'right' }}>
+          <span className="cart-item-price">{formatCents(item.price_charged_cents)}</span>
+          {isDiscounted && (
+            <div style={{ fontSize: '11px', color: 'var(--market-green-primary)', fontWeight: '600' }}>
+              Save {formatCents(itemMsrp - (item.price_charged_cents || 0))}
+            </div>
+          )}
+        </div>
         <button
           className="cart-item-action-btn"
           onClick={() => openModal('editCartItem', { item, index })}
@@ -78,6 +95,7 @@ export const CheckoutScreen = () => {
     { label: '1.5g', mg: 1500 },
     { label: '1.75g', mg: 1750 },
     { label: '3.5g', mg: 3500 },
+    { label: '5g', mg: 5000 },
     { label: '7g', mg: 7000 },
     { label: '14g', mg: 14000 },
     { label: '28g', mg: 28000 }
@@ -91,6 +109,21 @@ export const CheckoutScreen = () => {
     if (!tier) return false;
     const val = pricingMode === 'RETAIL' ? tier.retail_price_cents : tier.wholesale_price_cents;
     return val !== null && val !== undefined && !isNaN(val) && Number(val) > 0;
+  };
+
+  const getPresetPrice = (presetMg) => {
+    if (!selectedPigment) return null;
+    const tier = (priceTiers || []).find(
+      t => Number(t.pigment_id) === Number(selectedPigment.pigment_id) && Number(t.weight_mg) === Number(presetMg)
+    );
+    if (tier) {
+      const val = pricingMode === 'RETAIL' ? tier.retail_price_cents : tier.wholesale_price_cents;
+      if (val !== null && val !== undefined && !isNaN(val) && Number(val) > 0) {
+        return Number(val);
+      }
+    }
+    const rate = getEffectivePricePerGramCents(selectedPigment, presetMg, pricingMode);
+    return Math.round((presetMg / 1000) * rate) + (selectedPigment.default_pkg_cents || 0);
   };
 
   const handlePresetClick = (mg) => {
@@ -113,6 +146,7 @@ export const CheckoutScreen = () => {
   const safePigments = pigments || [];
   const totalCharged = safeCart.reduce((sum, item) => sum + (item.price_charged_cents || 0), 0);
   const totalCogs = safeCart.reduce((sum, item) => sum + (item.unit_cogs_cents || 0), 0);
+  const totalMsrp = safeCart.reduce((sum, item) => sum + calculateRecommendedMsrpCents(item.pigment, item.weight_mg, priceTiers), 0);
   const margin = totalCharged > 0 ? Math.round(((totalCharged - totalCogs) / totalCharged) * 100) : 0;
 
   return (
@@ -247,17 +281,44 @@ export const CheckoutScreen = () => {
             })}
           </div>
 
+          {selectedPigment && (
+            <div className="card mb-xs flex-between" style={{ padding: '6px 12px', background: 'var(--market-surface-variant)', borderRadius: '6px', alignItems: 'center', fontSize: '12px' }}>
+              <div className="flex-center gap-xs">
+                <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: selectedPigment.color_code, display: 'inline-block' }} />
+                <strong>{selectedPigment.name}</strong>
+                <span className="text-muted">({selectedPigment.finish_type})</span>
+              </div>
+              <div className="flex-center gap-xs">
+                <span className="text-muted">Rec. MSRP:</span>
+                <strong className="text-primary">{formatCents(selectedPigment.retail_price_per_gram_cents)}/g</strong>
+                {pricingMode === 'WHOLESALE' && (
+                  <span className="text-muted" style={{ marginLeft: '4px' }}>
+                    | Wholesale: <strong>{formatCents(selectedPigment.wholesale_price_per_gram_cents)}/g</strong>
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="weight-presets mb-md">
             {presets.map(preset => {
               const isTierSet = hasTierOverride(preset.mg);
+              const presetPrice = selectedPigment ? getPresetPrice(preset.mg) : null;
+              const presetMsrp = selectedPigment ? calculateRecommendedMsrpCents(selectedPigment, preset.mg, priceTiers) : null;
               return (
                 <button
                   key={preset.label}
                   className={`weight-preset-btn ${isTierSet ? 'has-tier-override' : ''}`}
                   onClick={() => handlePresetClick(preset.mg)}
-                  style={{ position: 'relative' }}
+                  title={selectedPigment ? `${preset.label} (${formatMgToGrams(preset.mg)}) • MSRP: ${formatCents(presetMsrp)}${pricingMode === 'WHOLESALE' ? ` | Wholesale: ${formatCents(presetPrice)}` : ''}` : preset.label}
+                  style={{ position: 'relative', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minWidth: '58px' }}
                 >
-                  {preset.label}
+                  <span>{preset.label}</span>
+                  {presetPrice !== null && (
+                    <span style={{ fontSize: '10px', fontWeight: '500', opacity: 0.85, lineHeight: 1, marginTop: '2px' }}>
+                      {formatCents(presetPrice)}
+                    </span>
+                  )}
                   {isTierSet && (
                     <span
                       className="tier-badge-dot"
@@ -276,7 +337,7 @@ export const CheckoutScreen = () => {
                 </button>
               );
             })}
-            <button className="weight-preset-btn active" onClick={handleCustomClick}>
+            <button className="weight-preset-btn active" onClick={handleCustomClick} style={{ minWidth: '58px' }}>
               Custom
             </button>
           </div>
@@ -304,6 +365,7 @@ export const CheckoutScreen = () => {
                     index={index}
                     onRemove={() => removeFromCart(index)}
                     openModal={openModal}
+                    priceTiers={priceTiers}
                   />
                 ))
               )}
@@ -311,8 +373,15 @@ export const CheckoutScreen = () => {
 
             <div className="cart-margin">
               <span>COGS: {formatCents(totalCogs)}</span>
+              <span>Rec. MSRP Total: <strong style={{ color: 'var(--market-text-primary)' }}>{formatCents(totalMsrp)}</strong></span>
               <span>Est. Margin: <strong className="margin-value">{margin}%</strong></span>
             </div>
+
+            {totalCharged < totalMsrp && (
+              <div style={{ padding: '0 var(--spacing-md) var(--spacing-xs)', fontSize: '11px', color: 'var(--market-green-primary)', fontWeight: '600', textAlign: 'right' }}>
+                🎉 Savings vs MSRP: {formatCents(totalMsrp - totalCharged)}
+              </div>
+            )}
 
             <div className="cart-total flex-between" style={{ alignItems: 'center' }}>
               <div className="flex-center gap-xs">

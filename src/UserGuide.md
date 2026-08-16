@@ -7,7 +7,7 @@ know it, full walkthrough if you don't.*
 ## Quick Start (the 90% case)
 
 1. **Checkout tab** (🛒) — tap the pigment you're selling.
-2. Pick a weight preset (¼g, ½g, ¾g, 1g, 1.5g, 1.75g, 3.5g...) or enter a
+2. Pick a weight preset (¼g, ½g, ¾g, 1g, 1.5g, 1.75g, 3.5g, 5g...) or enter a
    custom weight.
 3. Repeat for more items — they stack in the cart.
 4. Tap **Checkout**, choose how they're paying (Cash / Digital / Tab /

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { usePos } from '../../context/PosContext';
-import { getEffectivePricePerGramCents } from '../../repository';
+import { getEffectivePricePerGramCents, calculateRecommendedMsrpCents, formatCents } from '../../repository';
 
 export const EditCartItemModal = () => {
-  const { modal, closeModal, editCartItem, pricingMode, showToast } = usePos();
+  const { modal, closeModal, editCartItem, pricingMode, showToast, priceTiers } = usePos();
   const [weightGrams, setWeightGrams] = useState('');
   const [priceDollars, setPriceDollars] = useState('');
   const [autoCalculate, setAutoCalculate] = useState(false);
@@ -32,6 +32,12 @@ export const EditCartItemModal = () => {
     setAutoCalculate(false);
     closeModal();
   };
+
+  const parsedW = parseFloat(weightGrams);
+  const currentMg = (!isNaN(parsedW) && parsedW > 0) ? Math.round(parsedW * 1000) : 0;
+  const recommendedMsrp = (item.pigment && currentMg > 0)
+    ? calculateRecommendedMsrpCents(item.pigment, currentMg, priceTiers)
+    : 0;
 
   const handleWeightChange = (e) => {
     const val = e.target.value;
@@ -105,6 +111,31 @@ export const EditCartItemModal = () => {
                 required
               />
             </div>
+
+            {currentMg > 0 && item.pigment && (
+              <div className="card p-sm mb-md" style={{ background: 'var(--market-surface-variant)', border: '1px solid var(--market-border)', borderRadius: '6px' }}>
+                <div className="flex-between body-small">
+                  <span className="text-muted">Recommended MSRP:</span>
+                  <div className="flex-center gap-xs">
+                    <strong className="text-primary font-weight-bold" style={{ fontSize: '13px' }}>
+                      {formatCents(recommendedMsrp)}
+                    </strong>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ padding: '1px 6px', fontSize: '11px', background: 'var(--market-surface)', border: '1px solid var(--market-border)' }}
+                      onClick={() => {
+                        setPriceDollars((recommendedMsrp / 100).toFixed(2));
+                        setAutoCalculate(false);
+                      }}
+                    >
+                      Use MSRP
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="form-group">
               <label className="form-label">Line Item Total Price ($)</label>
               <input

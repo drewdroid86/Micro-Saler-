@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { usePos } from '../../context/PosContext';
+import { formatCents, calculateRecommendedMsrpCents, getEffectivePricePerGramCents } from '../../repository';
 
 export const CustomWeightModal = () => {
-  const { modal, closeModal, selectedPigment, addToCart, showToast } = usePos();
+  const { modal, closeModal, selectedPigment, addToCart, showToast, priceTiers, pricingMode } = usePos();
   const [weightGrams, setWeightGrams] = useState('');
   const [customPriceDollars, setCustomPriceDollars] = useState('');
 
@@ -19,6 +20,18 @@ export const CustomWeightModal = () => {
     setCustomPriceDollars('');
     closeModal();
   };
+
+  const parsedGrams = parseFloat(weightGrams);
+  const currentMg = (!isNaN(parsedGrams) && parsedGrams > 0) ? Math.round(parsedGrams * 1000) : 0;
+  const recommendedMsrpCents = (selectedPigment && currentMg > 0)
+    ? calculateRecommendedMsrpCents(selectedPigment, currentMg, priceTiers)
+    : 0;
+  const wholesaleRateCents = (selectedPigment && currentMg > 0)
+    ? getEffectivePricePerGramCents(selectedPigment, currentMg, 'WHOLESALE')
+    : 0;
+  const wholesalePriceCents = (selectedPigment && currentMg > 0)
+    ? Math.round((currentMg / 1000) * wholesaleRateCents) + (selectedPigment.default_pkg_cents || 0)
+    : 0;
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -60,7 +73,7 @@ export const CustomWeightModal = () => {
               <input
                 type="number"
                 className="form-input"
-                placeholder="e.g. 2.5"
+                placeholder="e.g. 5.0"
                 step="0.01"
                 min="0.01"
                 value={weightGrams}
@@ -69,12 +82,40 @@ export const CustomWeightModal = () => {
                 required
               />
             </div>
+
+            {currentMg > 0 && selectedPigment && (
+              <div className="card p-sm mb-md" style={{ background: 'var(--market-surface-variant)', border: '1px solid var(--market-border)', borderRadius: '6px' }}>
+                <div className="flex-between body-small">
+                  <span className="text-muted">Recommended MSRP:</span>
+                  <div className="flex-center gap-xs">
+                    <strong className="text-primary font-weight-bold" style={{ fontSize: '14px' }}>
+                      {formatCents(recommendedMsrpCents)}
+                    </strong>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ padding: '1px 6px', fontSize: '11px', background: 'var(--market-surface)', border: '1px solid var(--market-border)' }}
+                      onClick={() => setCustomPriceDollars((recommendedMsrpCents / 100).toFixed(2))}
+                    >
+                      Use MSRP
+                    </button>
+                  </div>
+                </div>
+                {pricingMode === 'WHOLESALE' && (
+                  <div className="flex-between body-small mt-xs">
+                    <span className="text-muted">Wholesale Rate Price:</span>
+                    <strong>{formatCents(wholesalePriceCents)}</strong>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="form-group">
               <label className="form-label">Custom Total Price ($) (Optional)</label>
               <input
                 type="number"
                 className="form-input"
-                placeholder="Leave blank to auto-calculate price"
+                placeholder={currentMg > 0 ? `Leave blank for standard rate (${formatCents(pricingMode === 'WHOLESALE' ? wholesalePriceCents : recommendedMsrpCents)})` : 'Leave blank to auto-calculate price'}
                 step="0.01"
                 min="0"
                 value={customPriceDollars}
