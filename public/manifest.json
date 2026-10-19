@@ -4,8 +4,8 @@
   "description": "Local-first point-of-sale and inventory app for street/market-stall mica pigment sales by weight.",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#FCFCF7",
-  "theme_color": "#386B1F",
+  "background_color": "#F8FAFC",
+  "theme_color": "#4F46E5",
   "orientation": "any",
   "icons": [
     {

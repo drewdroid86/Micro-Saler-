@@ -1,43 +1,54 @@
-# ⚖️ Micro Saler — Local-First POS & Inventory System
+# ⚖️ Micro Saler — Local-First Artisan Pigment POS & Inventory System
 
 [![Deploy Web App](https://github.com/drewdroid86/Micro-Saler-/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/drewdroid86/Micro-Saler-/actions/workflows/deploy-pages.yml)
-[![Live Web App](https://img.shields.io/badge/live--demo-GitHub%20Pages-brightgreen.svg)](https://drewdroid86.github.io/Micro-Saler-/)
-[![Version](https://img.shields.io/badge/version-1.3.0-brightgreen.svg)](https://github.com/drewdroid86/Micro-Saler-)
-[![Offline First](https://img.shields.io/badge/pwa-100%25--offline--local-blue.svg)](https://github.com/drewdroid86/Micro-Saler-)
+[![Live Web App](https://img.shields.io/badge/live--demo-GitHub%20Pages-4F46E5.svg)](https://drewdroid86.github.io/Micro-Saler-/)
+[![Version](https://img.shields.io/badge/version-1.6.0-059669.svg)](https://github.com/drewdroid86/Micro-Saler-)
+[![Offline First](https://img.shields.io/badge/pwa-100%25--offline--local-2563EB.svg)](https://github.com/drewdroid86/Micro-Saler-)
+[![Tests](https://img.shields.io/badge/tests-76%20passing-10B981.svg)](https://github.com/drewdroid86/Micro-Saler-)
 
-**Micro Saler** is a high-performance, offline-first Point-of-Sale (POS) and Inventory Management system engineered specifically for market-stall, street vendor, and small-batch mica pigment sales by weight.
+**Micro Saler** is a high-precision, offline-first Point-of-Sale (POS), Inventory Management, and Double-Verified Ledger system engineered for artisan, market-stall, and wholesale mica pigment sales by weight.
 
 👉 **[Launch Live Web App (GitHub Pages)](https://drewdroid86.github.io/Micro-Saler-/)**
 
 ---
 
-## Stack
+## 🛠️ Tech Stack
 
-| Layer | Tech |
-|-------|------|
-| UI | React 18 (JSX, no TypeScript) |
-| Build | Vite 5 |
-| Database | IndexedDB (client-side, DB version 9) |
-| Analytics | Vercel Speed Insights |
+| Layer | Technology |
+| :--- | :--- |
+| **UI & State** | React 18 (Functional Components, Context API, Custom Hooks) |
+| **Design System** | Modern SaaS Slate/Indigo CSS Token Architecture with Light & Dark Mode (`[data-theme="dark"]`) |
+| **Build & Bundler** | Vite 5 (with vendor code-splitting & PWA Service Worker `v1.6`) |
+| **Database** | IndexedDB (`MicroSalerDB`, Schema `v11` — 15 client-side object stores) |
+| **Testing** | Node.js Native Test Runner (`node:test` — 76 unit & integration tests) |
+| **Analytics** | Vercel Speed Insights |
 
 ---
 
-## 🌟 Key Features
+## ✨ What's New in v1.6.0
 
-- ⚖️ **Precision Weight Accounting**: Tracks pigment inventory in **milligrams (mg)** to prevent fractional gram drift and inventory discrepancy.
-- 💵 **Exact Cents Financial Math**: All pricing, payments, and balances are stored as integer cents to eliminate floating-point rounding errors.
-- 📈 **Profit & Loss (P&L) Dashboard**: Real-time financial reports with time-range filtering (Today, 7 Days, 30 Days, YTD, All Time), Gross Sales, COGS, Merchant Fees, Shrinkage Loss, and Net Profit Margin %.
-- 📤 **Accounts Payable & Supplier Ledger**: Manage supplier contacts, restock on supplier tab (`UNPAID_TAB`), track vendor debt liabilities ("What I Owe"), and record supplier payments.
-- 📥 **Accounts Receivable & Customer Tabs**: Manage customer tab debt ("Who Owes Me"), credit limits, and trust status badges (`GOOD_STANDING`, `VIP`, `PAUSED`).
-- 📦 **Weighted Average Cost (WAC) Restocking**: Dynamically recalculates Cost of Goods Sold (COGS) on incoming supplier shipments.
-- 🤝 **Handshake Credit Override**: Authorize tab sales exceeding credit limits with mandatory security audit logging.
-- 🛡️ **Atomic Transaction Protection**: Multi-store IndexedDB atomic transaction wrapper for sales, voids, returns, and backup restores.
-- ♻️ **Cumulative Partial Returns & Restocking**: Process returns per sale item with automatic inventory restocking.
-- 📉 **Spillage & Shrinkage Logging**: Log lost, sampled, or spilled inventory with automatic COGS adjustment.
-- 🔒 **Audit Trail**: Immutable audit log for security overrides, voided sales, and pricing updates.
-- 💳 **Multi-Tender Split Payments**: Divide any transaction across Cash, Digital (Square, Venmo, Zelle), and House Tab.
-- 🧾 **Printable Thermal Receipts**: 80mm/58mm receipt printing support.
-- 📶 **100% Offline-First Architecture (PWA)**: Operates without any cloud latency or internet dependency; installable to a home screen.
+- 🎨 **Modern SaaS UI & Light/Dark Theme Engine**: Crisp Slate & Indigo palette with tabular numerals (`tabular-nums`), elevated cards, glassmorphic modals, and an instant **☀️ Light / 🌙 Dark** mode toggle persisted in `localStorage`.
+- 🧭 **Categorized Desktop Sidebar & Mobile Bottom Dock**: Organizes all 9 modules into 4 logical groups (**Point of Sale**, **Catalog & Stock**, **Accounts & Tabs**, **Analytics & System**) with live status badges (cart item count, low-stock alerts, open prepayments) and a thumb-friendly mobile dock.
+- 🛒 **Guided 3-Step Checkout Register**:
+  - **Step 1 — Select Pigment**: Instant search bar and finish-type filter pills (`Matte`, `Shimmer`, `Pearl`, `Metallic`, etc.) with selected checkmarks and live per-gram rate badges.
+  - **Step 2 — Tap Weight Tier**: Responsive grid of tactile preset cards (`¼g`, `½g`, `¾g`, `1g`, `1.5g`, `1.75g`, `3.5g`, `5g`, `7g`, `14g`, `28g`, plus `+ Custom`) displaying live calculated prices and fixed tier override indicators.
+  - **Step 3 — Receipt-Style Cart with Inline Steppers**: One-tap `−` / `+` weight steppers directly inside cart line items, perforated receipt summary with COGS, Recommended MSRP, customer savings banner, and 1-tap Cash or Multi-Tender checkout.
+- 🛡️ **Single-Writer Ledger & Audit Hardening**: Strict single-writer discipline on `customer_ledger` (`customer.balance`) and `suppliers` (`current_balance_cents`), proportional `HOUSE_TAB` debt reversal (`REFUND_TAB_REVERSAL`) and `STORE_CREDIT` restoration on partial/multi-item returns, and net return deductions across P&L and Business Insights.
+
+---
+
+## 🌟 Core Capabilities
+
+- ⚖️ **Milligram Precision Weight Accounting**: Tracks pigment inventory in **milligrams (`mg`)** (`1g = 1,000 mg`) to eliminate fractional gram drift.
+- 💵 **Integer Cents Financial Math**: All prices, COGS, fees, and ledger balances are stored as integer cents (`$1.00 = 100¢`) to prevent floating-point rounding errors.
+- 🏷️ **Dual Pricing Modes & Fixed Tier Overrides**: Switch seamlessly between **RETAIL** and **WHOLESALE** rates, configure per-pigment fixed weight-tier prices, and compare against **Recommended MSRP**.
+- 📥 **Customer Ledger, Store Credit & Prepayments**: Track customer House Tab debt (`balance < 0`), Store Credit (`balance > 0`), and open Prepayments/Backorders with an immutable chronological `customer_ledger` and unified credit-exposure guard.
+- 📤 **Accounts Payable & Supplier Ledger**: Manage vendor contacts, receive stock on supplier credit (`UNPAID_TAB`), edit restock terms, void receipts, and record vendor settlements.
+- 📦 **Weighted Average Cost (WAC) Engine**: Dynamically recalculates Cost of Goods Sold (COGS) upon every incoming shipment and restock.
+- 📊 **Reports, P&L & Business Insights**: Time-range filtered financial statements, per-pigment sell-through velocity, reorder alerts, merchant processing fee deductions, and shrinkage tracking.
+- ♻️ **Cumulative Partial Returns**: Return partial or full item weights back into inventory with automatic WAC restoration, `STORE_CREDIT` refunds, and `HOUSE_TAB` debt reversals.
+- 🧾 **80mm/58mm Thermal Receipt Printing & CSV Export**: Print formatted receipts or export RFC-compliant CSV sales reports.
+- 🔒 **Built-In Interactive User Guide & Data Integrity Repair**: Press `?` or `F1` anywhere to open the searchable User Guide, or run the automated Ledger & Payment Integrity scanner.
 
 ---
 
@@ -45,59 +56,61 @@
 
 | Domain | Unit | Rule / Specification |
 | :--- | :--- | :--- |
-| **Weight Units** | Milligrams (mg) | 1 Gram = 1,000 mg (e.g. 84.5g = 84,500 mg) |
-| **Monetary Units** | Cents ($) | $1.00 = 100 Cents to avoid floating point errors |
-| **Restocking (WAC)** | Formula | New WAC = (Current Total Cost + Received Cost) / (Current Stock mg + Received mg) |
-| **Pricing Modes** | Dual Rates | **RETAIL** vs. **WHOLESALE** per-gram prices + packaging fee |
-| **Payment Types** | Flexible | `CASH`, `DIGITAL` (Square, Venmo, Zelle), `HOUSE_TAB`, split across multiple types |
-| **Split Payments** | Tolerance | Payment total must equal sale total within ±1 cent |
-| **Returns** | Cumulative | Max returnable weight per item cannot exceed Sold Weight − Already Returned Weight |
+| **Weight Units** | Milligrams (`mg`) | `1g = 1,000 mg` • `1 oz = 28,350 mg` |
+| **Monetary Units** | Integer Cents (`¢`) | `$1.00 = 100¢` (zero floating-point drift) |
+| **Customer Balance** | Signed Cents | `balance > 0` = Store Credit • `balance < 0` = House Tab Debt Owed |
+| **Restocking (WAC)** | Weighted Formula | `New WAC = (Current Total Cost + Received Cost) / (Current Stock mg + Received mg)` |
+| **Pricing Modes** | Dual Rates + Tiers | `RETAIL` vs. `WHOLESALE` per-gram rates, fixed weight-tier overrides, and packaging fees |
+| **Payment Tenders** | Multi-Tender | `CASH`, `DIGITAL` (Square, Venmo, Zelle, CashApp), `HOUSE_TAB`, `STORE_CREDIT`, `PREPAID_DELIVERY` |
+| **Split Payments** | `±1¢` Tolerance | Payment sum must match sale total within `±1¢` (auto-reconciled inline) |
+| **Returns** | Cumulative Net | `Max Returnable mg = Sold Weight mg − Prior Returned mg` |
 
-14 IndexedDB object stores: `pigments`, `pigment_price_tiers`, `stock_receipts`, `suppliers`, `supplier_payments`, `customers`, `customer_prepayments`, `sales`, `sale_payments`, `sale_items`, `returns`, `tab_payments`, `shrinkage_logs`, `audit_log`.
-
----
-
-## 💾 Data & Backup
-
-Micro Saler stores all data **locally on-device** in IndexedDB (`MicroSalerDB`, schema v9). There is no server and no cloud sync.
-
-- **Export**: downloads a single timestamped JSON file (`micro-saler-backup-<date>.json`) containing every store — pigments, stock receipts, customers, sales, payments, sale items, returns, tab payments, shrinkage logs, and audit trail.
-- **Import**: restores from a previously exported file inside a single atomic transaction. **This overwrites all current data** — you'll be asked to confirm before applying.
-- **Recommendation**: export a backup at the end of each sales day/event and store it safely off-device (email to yourself, cloud drive, etc.).
-- **Integrity check**: on startup, the app verifies every completed sale's line item total matches its recorded payments (within a 1¢ tolerance), with automatic auto-repair for common mismatches and a manual reconciliation UI for the rest.
+### 🗄️ 15 IndexedDB Object Stores (`MicroSalerDB` v11)
+`pigments` • `pigment_price_tiers` • `stock_receipts` • `suppliers` • `supplier_payments` • `customers` • `customer_ledger` • `customer_prepayments` • `sales` • `sale_payments` • `sale_items` • `returns` • `tab_payments` • `shrinkage_logs` • `audit_log`
 
 ---
 
-## ⚠️ Known Limitations
+## 💾 Local Data & Backup Strategy
 
-- No multi-user or multi-device real-time sync — single device, single session at a time.
+Micro Saler stores all data **100% locally on-device** in IndexedDB. There is no external database server or cloud lock-in.
+
+- **Manual & Automated Backups**: Export all 15 object stores to a timestamped `.json` file (`micro-saler-backup-<timestamp>.json`) at any time, with an automated 30-minute backup timer and >24h overdue reminder badge.
+- **Atomic Restore**: Restoring a backup validates all store arrays, downloads a safety backup of current data, and imports all 15 stores inside a single atomic readwrite transaction.
+- **Startup Integrity Verification**: Automatically checks completed sales and customer ledger balances on startup, with 1-click reconciliation in the **Integrity Repair** tool.
 
 ---
 
-## 🚀 Getting Started & Local Setup
+## 🚀 Getting Started & Local Development
 
-#### Prerequisites
-- Node.js (`v18+`)
-- npm (`v9+`)
+### Prerequisites
+- **Node.js** `v18+`
+- **npm** `v9+`
 
-#### Instructions
+### Commands
 ```bash
-npm install
-npm run dev      # dev server (Vite HMR)
-npm run build    # production bundle
-npm run preview  # preview production build
-npm test         # run unit tests (node:test)
+npm install      # Install dependencies
+npm run dev      # Start Vite dev server with HMR (http://localhost:3000)
+npm test         # Run all 76 unit & ledger integrity tests (node:test)
+npm run build    # Build production bundle into dist/
+npm run preview  # Preview production build locally
 ```
 
-The production bundle is generated in `dist/`.
-
 ---
 
-## 🏗️ Architecture Notes
+## 🏗️ Architecture Overview
 
-React UI → `PosContext` → Repository / business logic (`repository.js`) → IndexedDB (`db.js`).
-
-Money is stored as integer cents and weight as integer milligrams throughout — see [`repository.js`](./src/repository.js) for the shared conversion/formatting helpers (`gramsToMg`, `mgToGrams`, `formatCents`, etc.) rather than re-deriving them elsewhere.
+```text
+React UI Components (src/components/)
+       │
+       ▼
+Global POS Context & Theme Engine (src/context/PosContext.jsx)
+       │
+       ▼
+Repository & Financial Engine (src/repository.js)
+       │
+       ▼
+Atomic IndexedDB Wrapper (src/db.js — MicroSalerDB v11)
+```
 
 ---
 

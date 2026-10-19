@@ -12,13 +12,13 @@ export const USER_GUIDE_SECTIONS = [
     title: 'Quick Start (the 90% case)',
     shortTitle: 'Quick Start',
     summary: 'Everything you need to quickly ring up a sale on the register.',
-    keywords: ['checkout', 'sale', 'cart', 'preset', 'fast', 'cash', 'register', 'weight'],
+    keywords: ['checkout', 'sale', 'cart', 'preset', 'fast', 'cash', 'register', 'weight', 'theme', 'dark mode', 'stepper'],
     steps: [
-      { step: 1, title: 'Checkout tab (🛒)', desc: "Tap the pigment you're selling." },
-      { step: 2, title: 'Pick a weight preset', desc: 'Select ¼g, ½g, ¾g, 1g, 1.5g, 1.75g, 3.5g, 5g... or enter a custom weight.' },
-      { step: 3, title: 'Add more items', desc: 'Repeat for additional pigments — items stack directly in the cart.' },
-      { step: 4, title: 'Tap Checkout', desc: 'Choose how they are paying (Cash / Digital / Tab / Store Credit / Prepaid — or split across multiple), then confirm.' },
-      { step: 5, title: 'Done!', desc: 'Stock, sale records, and customer balance/ledger update automatically in one atomic step.' }
+      { step: 1, title: 'Step 1 — Select Pigment (🛒)', desc: "Search by name, filter by finish pill (Matte, Shimmer, Pearl, etc.), and tap the pigment you're selling." },
+      { step: 2, title: 'Step 2 — Tap Weight Tier', desc: 'Tap ¼g, ½g, ¾g, 1g, 1.5g, 1.75g, 3.5g, 5g, 7g, 14g, 28g — or tap + Custom for any weight or custom price.' },
+      { step: 3, title: 'Step 3 — Review Order Receipt', desc: 'Use the inline − / + buttons on any cart item to adjust weight on the fly, or tap ✏️ to override item or total prices.' },
+      { step: 4, title: 'Collect Payment', desc: 'Tap 💵 Collect Cash for 1-tap checkout, or 💳 Digital / House Tab / Split for card apps, store credit, prepayments, or split tender.' },
+      { step: 5, title: 'Done!', desc: 'Stock, WAC COGS, sale records, and customer ledger update atomically. Toggle ☀️ Light / 🌙 Dark mode anytime in the top header.' }
     ],
     note: "If that's all you need today, you're set. Everything else is for advanced workflows and financial edge cases."
   },

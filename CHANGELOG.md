@@ -5,6 +5,37 @@ All notable changes to the **Micro Saler POS** project will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-10-19
+
+### 🚀 Added
+- **Modern SaaS UI & Light/Dark Theme Engine**:
+  - Redesigned visual system (`src/styles.css`) with a crisp Slate & Indigo color architecture, tabular numerals (`tabular-nums`), elevated cards, and full **Light / Dark Mode** support (`[data-theme="dark"]`) persisted in `localStorage`.
+  - Added instant **☀️ Light / 🌙 Dark** theme toggle in the top header (`Header.jsx`).
+- **Categorized Desktop Sidebar & Mobile Bottom Navigation Dock (`NavTabs.jsx`)**:
+  - Grouped all 9 screens into 4 intuitive categories (**Point of Sale**, **Catalog & Stock**, **Accounts & Tabs**, **Analytics & System**) with live badge counters (cart item count, low-stock alerts, open prepayments).
+  - Added a fixed thumb-friendly mobile bottom navigation dock with a slide-up **⚡ More** sheet for mobile POS ergonomics.
+- **Guided 3-Step Checkout Register (`CheckoutScreen.jsx`)**:
+  - **Step 1 (Select Pigment)**: Added real-time pigment search input and dynamic finish-type filter pills (`All Finishes`, `Matte`, `Shimmer`, `Pearl`, `Metallic`, etc.).
+  - **Step 2 (Tap Weight Tier)**: Redesigned weight presets into a responsive tactile card grid showing both weight and live calculated price.
+  - **Step 3 (Order Receipt & Inline Weight Steppers)**: Added one-tap `−` / `+` weight steppers directly inside cart line items (`0.25g` steps up to `1g`, `1g` steps above `1g`) with automatic tier/per-gram price recalculation and stock ceiling validation.
+
+### 🛡️ Fixed & Hardened (Codebase Audit Remediation)
+- **Customer Ledger & Balance Integrity**:
+  - Enforced strict single-writer customer balance updates via `_applyLedgerEntryInTx` and unified receivables calculations around `calculateCustomerBalance`.
+  - Fixed `processReturn` on multi-item sales to use `sale.total_amount_cents` as the denominator and added proportional `HOUSE_TAB` debt reversal (`REFUND_TAB_REVERSAL`).
+  - Excluded `FULFILLED`, `DELIVERED`, `CANCELLED`, and `VOIDED` prepayments from `getCustomerTotalExposure` and `calculateCustomerBalance`.
+  - Aligned Customer Ledger modal filters and signed amount formatting (`ModalManager.jsx`).
+- **Analytics, Inventory & Reporting Accuracy**:
+  - Updated `calculateBusinessInsights` to deduct returned weight, revenue, and proportional COGS from per-pigment sell-through stats, net revenue, and gross profit.
+  - Fixed `completeSale` to compute live WAC `total_cogs_cents` prior to persisting the sale record and saved `pigment_name` on `sale_items`.
+  - Enforced single-writer supplier balance updates via `_updateSupplierBalanceInTx` across `voidStockReceipt`, `updateRestockTerms`, and `paySupplier`.
+  - Updated `HistoryScreen.jsx` to display cumulative returned weights per line item, disable the Return button when fully returned, and export CSVs using standard `Blob` URLs.
+  - Updated `EditCartItemModal.jsx` auto-calculation to use `calculatePricingBreakdown` so preset `priceTiers` and packaging fees are respected.
+- **Build & Test Suite**:
+  - Added vendor chunk splitting (`react`, `react-dom`) in `vite.config.js` and expanded unit test suite to **76 passing tests**.
+
+---
+
 ## [1.5.0] - 2026-08-16
 
 ### 🚀 Added
