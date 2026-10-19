@@ -66,7 +66,8 @@ export function calculateCustomerBalance(customer, prepayments = []) {
   const storeCreditCents = balance > 0 ? balance : 0;
 
   const custPrepayments = (prepayments || []).filter(
-    p => Number(p.customer_id) === Number(customer.customer_id) && p.status !== 'FULFILLED'
+    p => Number(p.customer_id) === Number(customer.customer_id) &&
+      !['FULFILLED', 'DELIVERED', 'CANCELLED', 'VOIDED'].includes((p.status || '').toUpperCase())
   );
   const prepaidCreditCents = custPrepayments.reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
   const prepaidWeightMg = custPrepayments.reduce((sum, p) => sum + (Number(p.weight_mg) || 0), 0);
@@ -474,8 +475,9 @@ export class PosRepository {
           const req = suppliersStore.add({
             name: trimmedName,
             contact_info: '',
+            phone_number: '',
             current_balance_cents: 0,
-            created_at: new Date().toISOString()
+            created_at: Date.now()
           });
           req.onsuccess = () => resolve(req.result);
           req.onerror = () => reject(req.error);
@@ -527,8 +529,8 @@ export class PosRepository {
     try {
       const allPrepayments = await this.db.getAll('customer_prepayments');
       const openPrepayments = allPrepayments.filter(p =>
-        p.customer_id === Number(customerId) &&
-        !['DELIVERED', 'CANCELLED', 'VOIDED'].includes(p.status)
+        Number(p.customer_id) === Number(customerId) &&
+        !['FULFILLED', 'DELIVERED', 'CANCELLED', 'VOIDED'].includes((p.status || '').toUpperCase())
       );
       // Money business holds from customer reduces effective debt exposure
       prepaymentOffset = openPrepayments.reduce((sum, p) => sum + (p.amount_cents || 0), 0);
@@ -656,15 +658,7 @@ export class PosRepository {
         // Reverse supplier tab
         const unpaidTabCents = receipt.unpaid_tab_cents || (receipt.payment_status === 'UNPAID_TAB' ? receipt.total_cost_cents : 0);
         if (unpaidTabCents > 0 && receipt.supplier_id) {
-          const supplier = await new Promise((resolve, reject) => {
-            const req = suppliersStore.get(Number(receipt.supplier_id));
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
-          });
-          if (supplier) {
-            supplier.current_balance_cents = (supplier.current_balance_cents || 0) - unpaidTabCents;
-            suppliersStore.put(supplier);
-          }
+          await this._updateSupplierBalanceInTx(tx, receipt.supplier_id, -unpaidTabCents);
         }
 
         receipt.payment_status = 'VOIDED';
@@ -718,15 +712,7 @@ export class PosRepository {
         const tabDiffCents = newUnpaidTabCents - oldUnpaidTabCents;
 
         if (tabDiffCents !== 0 && receipt.supplier_id) {
-          const supplier = await new Promise((resolve, reject) => {
-            const req = suppliersStore.get(Number(receipt.supplier_id));
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
-          });
-          if (supplier) {
-            supplier.current_balance_cents = (supplier.current_balance_cents || 0) + tabDiffCents;
-            suppliersStore.put(supplier);
-          }
+          await this._updateSupplierBalanceInTx(tx, receipt.supplier_id, tabDiffCents);
         }
 
         const statusLabel = paymentStatus === 'PAID'
@@ -1003,6 +989,29 @@ export class PosRepository {
         }
       }
 
+      // 2b. Compute live WAC COGS for items using the fresh in-transaction pigment records
+      let calculatedTotalCogsCents = 0;
+      const processedItems = items.map(item => {
+        const pId = Number(item.pigment_id);
+        let liveUnitCogs = item.unit_cogs_cents || 0;
+        let pName = item.pigment?.name || item.pigment_name || null;
+        if (pId > 0) {
+          const pigment = pigmentCache.get(pId);
+          if (pigment) {
+            if (!pName) pName = pigment.name;
+            if (pigment.stock_mg > 0) {
+              liveUnitCogs = calcWacCogs(pigment, item.weight_mg);
+            }
+          }
+        }
+        calculatedTotalCogsCents += liveUnitCogs;
+        return {
+          ...item,
+          pigment_name: pName,
+          liveUnitCogs
+        };
+      });
+
       // 3. Write sale record
       createdSaleId = await new Promise((resolve, reject) => {
         const req = salesStore.add({
@@ -1010,7 +1019,7 @@ export class PosRepository {
           sale_type: (pricingMode || 'RETAIL').toUpperCase(),
           pricing_mode: (pricingMode || 'RETAIL').toUpperCase(),
           total_amount_cents: totalSaleAmountCents,
-          total_cogs_cents: totalCogsCents,
+          total_cogs_cents: calculatedTotalCogsCents,
           status: 'COMPLETED',
           is_credit_override: isCreditOverride,
           needs_reconciliation: false,
@@ -1024,24 +1033,32 @@ export class PosRepository {
 
       // 4. Write sale_items and accumulate pigment stock deductions against
       // the single shared pigment instance for that pigment_id with live WAC COGS.
-      for (const item of items) {
+      for (const item of processedItems) {
         const pId = Number(item.pigment_id);
         if (pId > 0) {
           const pigment = pigmentCache.get(pId);
-          const liveUnitCogs = pigment && pigment.stock_mg > 0
-            ? calcWacCogs(pigment, item.weight_mg)
-            : (item.unit_cogs_cents || 0);
-
           saleItemsStore.add({
             sale_id: createdSaleId,
             pigment_id: pId,
+            pigment_name: item.pigment_name || (pigment ? pigment.name : `Pigment #${pId}`),
             weight_mg: item.weight_mg,
             price_charged_cents: item.price_charged_cents,
-            unit_cogs_cents: liveUnitCogs,
+            unit_cogs_cents: item.liveUnitCogs,
           });
 
-          pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
-          pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - liveUnitCogs);
+          if (pigment) {
+            pigment.stock_mg = Math.max(0, pigment.stock_mg - item.weight_mg);
+            pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - item.liveUnitCogs);
+          }
+        } else {
+          saleItemsStore.add({
+            sale_id: createdSaleId,
+            pigment_id: pId,
+            pigment_name: item.pigment_name || 'Credit / Prepayment',
+            weight_mg: item.weight_mg,
+            price_charged_cents: item.price_charged_cents,
+            unit_cogs_cents: item.liveUnitCogs,
+          });
         }
       }
 
@@ -1049,19 +1066,6 @@ export class PosRepository {
       // been folded into the shared instance.
       for (const pigment of pigmentCache.values()) {
         pigmentsStore.put(pigment);
-      }
-
-      // Handle items with pigment_id <= 0 (e.g. general credit prepayments)
-      for (const item of items) {
-        if (Number(item.pigment_id) <= 0) {
-          saleItemsStore.add({
-            sale_id: createdSaleId,
-            pigment_id: Number(item.pigment_id),
-            weight_mg: item.weight_mg,
-            price_charged_cents: item.price_charged_cents,
-            unit_cogs_cents: item.unit_cogs_cents,
-          });
-        }
       }
 
       // 5. Write payments and update customer ledger/balance
@@ -1181,7 +1185,7 @@ export class PosRepository {
           }
         }
 
-        // BUG-01: Restore store credit balance when original sale used STORE_CREDIT payment.
+        // BUG-01 / CRIT-02: Restore store credit balance and reverse house tab debt when returns occur.
         // _applyLedgerEntryInTx is the sole writer of customer.balance — no direct field assignment.
         if (proportionalRefundCents > 0 && saleItem.sale_id) {
           const salePayments = await new Promise((resolve, reject) => {
@@ -1189,28 +1193,49 @@ export class PosRepository {
             req.onsuccess = () => resolve(req.result || []);
             req.onerror = () => reject(req.error);
           });
-          const storeCreditPayments = salePayments.filter(p => p.payment_type === 'STORE_CREDIT');
-          if (storeCreditPayments.length > 0) {
-            // Determine the sale's customer
-            const sale = await new Promise((resolve, reject) => {
-              const req = salesStore.get(Number(saleItem.sale_id));
-              req.onsuccess = () => resolve(req.result);
-              req.onerror = () => reject(req.error);
-            });
-            if (sale && sale.customer_id) {
-              // Proportionally refund only the store-credit portion of the original sale
+
+          const sale = await new Promise((resolve, reject) => {
+            const req = salesStore.get(Number(saleItem.sale_id));
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+
+          if (sale && sale.customer_id) {
+            const totalSaleAmountCents = Number(sale.total_amount_cents) || proportionalRefundCents;
+
+            // 1. Proportionally restore store credit if sale used STORE_CREDIT
+            const storeCreditPayments = salePayments.filter(p => p.payment_type === 'STORE_CREDIT');
+            if (storeCreditPayments.length > 0) {
               const totalSaleStoreCreditCents = storeCreditPayments.reduce((s, p) => s + (p.amount_cents || 0), 0);
-              const totalSaleAmountCents = saleItem.price_charged_cents || proportionalRefundCents;
               const storeCreditFraction = totalSaleAmountCents > 0
                 ? Math.min(1, totalSaleStoreCreditCents / totalSaleAmountCents)
                 : 1;
               const storeCreditRefundCents = Math.round(proportionalRefundCents * storeCreditFraction);
               if (storeCreditRefundCents > 0) {
                 await this._applyLedgerEntryInTx(tx, {
-                  customerId: sale.customer_id,
+                  customerId: Number(sale.customer_id),
                   amountCents: storeCreditRefundCents,
                   type: 'REFUND_STORE_CREDIT',
                   description: `Store credit restored for return on sale #${saleItem.sale_id}`,
+                  saleId: saleItem.sale_id
+                });
+              }
+            }
+
+            // 2. Proportionally reverse tab debt if sale used HOUSE_TAB
+            const houseTabPayments = salePayments.filter(p => p.payment_type === 'HOUSE_TAB');
+            if (houseTabPayments.length > 0) {
+              const totalHouseTabCents = houseTabPayments.reduce((s, p) => s + (p.amount_cents || 0), 0);
+              const houseTabFraction = totalSaleAmountCents > 0
+                ? Math.min(1, totalHouseTabCents / totalSaleAmountCents)
+                : 1;
+              const houseTabRefundCents = Math.round(proportionalRefundCents * houseTabFraction);
+              if (houseTabRefundCents > 0) {
+                await this._applyLedgerEntryInTx(tx, {
+                  customerId: Number(sale.customer_id),
+                  amountCents: houseTabRefundCents, // Positive signed amount reduces debt
+                  type: 'REFUND_TAB_REVERSAL',
+                  description: `House tab debt reversed for return on sale #${saleItem.sale_id}`,
                   saleId: saleItem.sale_id
                 });
               }
@@ -2480,6 +2505,7 @@ export class PosRepository {
         const req = payStore.add({
           supplier_id: sId,
           amount_paid_cents: amountPaidCents,
+          amount_cents: amountPaidCents,
           payment_type: paymentType,
           notes,
           created_at: now,
@@ -2488,8 +2514,7 @@ export class PosRepository {
         req.onerror = () => reject(req.error);
       });
 
-      supplier.current_balance_cents = (supplier.current_balance_cents || 0) - amountPaidCents;
-      suppStore.put(supplier);
+      await this._updateSupplierBalanceInTx(tx, sId, -amountPaidCents);
 
       auditStore.add({
         entity_type: 'Supplier',
@@ -2516,17 +2541,21 @@ export class PosRepository {
 
   async importData(backupData) {
     await this.db.importAllStores(backupData);
+    const now = Date.now();
+    const detailsStr = JSON.stringify({
+      restored_at: new Date(now).toISOString(),
+      pigments_count: backupData.stores?.pigments?.length || 0,
+      sales_count: backupData.stores?.sales?.length || 0,
+      customers_count: backupData.stores?.customers?.length || 0
+    });
     await this.db.add('audit_log', {
       entity_type: 'System',
       entity_id: 0,
       action: 'DATABASE_RESTORE',
-      details: JSON.stringify({
-        restored_at: new Date().toISOString(),
-        pigments_count: backupData.stores?.pigments?.length || 0,
-        sales_count: backupData.stores?.sales?.length || 0,
-        customers_count: backupData.stores?.customers?.length || 0
-      }),
-      timestamp: Date.now()
+      details_json: detailsStr,
+      details: detailsStr,
+      created_at: now,
+      timestamp: now
     });
   }
 
@@ -2872,6 +2901,7 @@ export function calculateBusinessInsights({
   shrinkageLogs = [],
   stockReceipts = [],
   customerPrepayments = [],
+  returns = [],
   timeRange = 'ALL',
   nowTimestamp = null
 }) {
@@ -2900,6 +2930,18 @@ export function calculateBusinessInsights({
 
   const completedSaleIds = new Set(completedSales.map(s => s.sale_id));
   const completedSaleItems = (saleItems || []).filter(item => completedSaleIds.has(item.sale_id));
+
+  // Map sale_items by sale_item_id
+  const saleItemMap = new Map();
+  (saleItems || []).forEach(si => saleItemMap.set(Number(si.sale_item_id), si));
+
+  // Timeframe-filtered returns
+  const timeframeReturns = (returns || []).filter(r => {
+    const rTs = r.created_at || r.timestamp || 0;
+    const inTime = (filterTimestamp === 0 || rTs >= filterTimestamp);
+    const item = saleItemMap.get(Number(r.sale_item_id));
+    return inTime && item && completedSaleIds.has(Number(item.sale_id));
+  });
 
   // 30 days window sales for velocity computation
   const thirtyDaysAgoMs = nowMs - (30 * 24 * 60 * 60 * 1000);
@@ -2967,12 +3009,44 @@ export function calculateBusinessInsights({
     prod.profitCents += (rev - cogs);
   });
 
+  // Deduct returned items from per-pigment totals
+  timeframeReturns.forEach(r => {
+    const item = saleItemMap.get(Number(r.sale_item_id));
+    if (!item || !item.pigment_id || item.pigment_id <= 0) return;
+    const prod = productMap.get(item.pigment_id);
+    if (prod) {
+      const retMg = Number(r.mg_returned) || 0;
+      const retRev = Number(r.refund_amount_cents) || 0;
+      const itemUnitCogs = item.unit_cogs_cents !== undefined ? item.unit_cogs_cents : (item.cogs_cents || 0);
+      const retCogs = item.weight_mg > 0 ? Math.round((itemUnitCogs / item.weight_mg) * retMg) : 0;
+
+      prod.weightSoldMg = Math.max(0, prod.weightSoldMg - retMg);
+      prod.revenueCents = Math.max(0, prod.revenueCents - retRev);
+      prod.cogsCents = Math.max(0, prod.cogsCents - retCogs);
+      prod.profitCents = prod.revenueCents - prod.cogsCents;
+    }
+  });
+
   // Aggregate 30-day sales for velocity
   itemsLast30Days.forEach(item => {
     if (!item.pigment_id || item.pigment_id <= 0) return;
     const prod = productMap.get(item.pigment_id);
     if (prod) {
       prod.weightSold30DaysMg += (item.weight_mg || 0);
+    }
+  });
+
+  // Deduct 30-day returns from velocity
+  (returns || []).forEach(r => {
+    const rTs = r.created_at || r.timestamp || 0;
+    if (rTs >= thirtyDaysAgoMs) {
+      const item = saleItemMap.get(Number(r.sale_item_id));
+      if (item && item.pigment_id > 0) {
+        const prod = productMap.get(item.pigment_id);
+        if (prod) {
+          prod.weightSold30DaysMg = Math.max(0, prod.weightSold30DaysMg - (Number(r.mg_returned) || 0));
+        }
+      }
     }
   });
 
@@ -3006,10 +3080,19 @@ export function calculateBusinessInsights({
   // Financial Summary Totals
   const grossRevenueCents = completedSales.reduce((sum, s) => sum + (s.total_amount_cents || 0), 0);
   const totalCogsCents = completedSales.reduce((sum, s) => sum + (s.total_cogs_cents || 0), 0);
-  const grossProfitCents = grossRevenueCents - totalCogsCents;
-  const grossMarginPct = grossRevenueCents > 0 ? Math.round((grossProfitCents / grossRevenueCents) * 100) : 0;
+  const totalReturnsCents = timeframeReturns.reduce((sum, r) => sum + (Number(r.refund_amount_cents) || 0), 0);
+  const totalReturnedCogsCents = timeframeReturns.reduce((sum, r) => {
+    const item = saleItemMap.get(Number(r.sale_item_id));
+    const itemUnitCogs = item ? (item.unit_cogs_cents !== undefined ? item.unit_cogs_cents : (item.cogs_cents || 0)) : 0;
+    return sum + (item && item.weight_mg > 0 ? Math.round((itemUnitCogs / item.weight_mg) * (Number(r.mg_returned) || 0)) : 0);
+  }, 0);
+
+  const netRevenueCents = Math.max(0, grossRevenueCents - totalReturnsCents);
+  const netCogsCents = Math.max(0, totalCogsCents - totalReturnedCogsCents);
+  const grossProfitCents = netRevenueCents - netCogsCents;
+  const grossMarginPct = netRevenueCents > 0 ? Math.round((grossProfitCents / netRevenueCents) * 100) : 0;
   const completedCount = completedSales.length;
-  const averageOrderValueCents = completedCount > 0 ? Math.round(grossRevenueCents / completedCount) : 0;
+  const averageOrderValueCents = completedCount > 0 ? Math.round(netRevenueCents / completedCount) : 0;
 
   // Merchant Processing Fees (actual recorded fees from sale_payments)
   const filteredSalePayments = (salePayments || []).filter(p => completedSaleIds.has(p.sale_id));
@@ -3093,10 +3176,11 @@ export function calculateBusinessInsights({
   const peakHour = [...hourOfDayStats].sort((a, b) => b.revenueCents - a.revenueCents)[0];
 
   // 4. Receivables Summary
-  // Customers with current_balance_cents > 0, with days since oldest unpaid sale
+  // Customers with debt > 0
   const customerReceivables = (customers || [])
-    .filter(c => (c.current_balance_cents || 0) > 0)
+    .filter(c => calculateCustomerBalance(c, customerPrepayments).hasDebt)
     .map(c => {
+      const bal = calculateCustomerBalance(c, customerPrepayments);
       // Find customer's sales
       const custSales = (sales || []).filter(s => Number(s.customer_id) === Number(c.customer_id) && (s.status === 'COMPLETED' || !s.status || s.status === 'PAID'));
       const oldestSale = custSales.length > 0 ? Math.min(...custSales.map(s => s.created_at || s.timestamp || s.date || nowMs)) : null;
@@ -3105,7 +3189,7 @@ export function calculateBusinessInsights({
       return {
         customer_id: c.customer_id,
         name: c.name,
-        amountOwedCents: c.current_balance_cents,
+        amountOwedCents: bal.debtCents,
         oldestSaleDate: oldestSale ? new Date(oldestSale).toLocaleDateString() : 'N/A',
         daysOutstanding: oldestDays
       };
@@ -3411,6 +3495,9 @@ export function calculateBusinessInsights({
     voidedCount,
     grossRevenueCents,
     totalCogsCents,
+    totalReturnsCents,
+    netRevenueCents,
+    netCogsCents,
     grossProfitCents,
     grossMarginPct,
     totalMerchantFeeCents,

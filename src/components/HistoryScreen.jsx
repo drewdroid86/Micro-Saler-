@@ -14,12 +14,13 @@ function formatDate(timestamp) {
 }
 
 export const HistoryScreen = () => {
-  const { sales, saleItems, pigments, customers, db, openModal } = usePos();
+  const { sales, saleItems, pigments, customers, returns, db, openModal } = usePos();
 
   const safeSales = sales || [];
   const safeItems = saleItems || [];
   const safeCustomers = customers || [];
   const safePigments = pigments || [];
+  const safeReturns = returns || [];
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'COMPLETED' | 'VOIDED' | 'REFUNDED'
@@ -80,7 +81,8 @@ export const HistoryScreen = () => {
         const items = safeItems.filter(si => Number(si.sale_id) === Number(s.sale_id));
         const hasPigmentMatch = items.some(si => {
           const p = safePigments.find(pig => Number(pig.pigment_id) === Number(si.pigment_id));
-          return p && p.name.toLowerCase().includes(q);
+          const name = si.pigment_name || (p ? p.name : '');
+          return name.toLowerCase().includes(q);
         });
 
         if (!custName.includes(q) && !saleIdStr.includes(q) && !hasPigmentMatch) {
@@ -135,7 +137,7 @@ export const HistoryScreen = () => {
     const headers = ['Sale ID', 'Date', 'Customer', 'Status', 'Total Amount ($)', 'COGS ($)', 'Gross Profit ($)'];
     const rows = safeSales.map(s => {
       const cust = safeCustomers.find(c => Number(c.customer_id) === Number(s.customer_id));
-      const custName = cust ? cust.name : 'Walk-in';
+      const custName = (cust ? cust.name : 'Walk-in').replace(/"/g, '""');
       const totalD = ((s.total_amount_cents || 0) / 100).toFixed(2);
       const cogsD = ((s.total_cogs_cents || 0) / 100).toFixed(2);
       const profitD = (((s.total_amount_cents || 0) - (s.total_cogs_cents || 0)) / 100).toFixed(2);
@@ -152,14 +154,16 @@ export const HistoryScreen = () => {
       ].join(',');
     });
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', url);
     link.setAttribute('download', `micro-saler-sales-${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handleOpenReceiptModal = () => {
@@ -429,7 +433,10 @@ export const HistoryScreen = () => {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {selectedSaleItems.map(si => {
                         const pigment = safePigments.find(p => Number(p.pigment_id) === Number(si.pigment_id));
-                        const pName = pigment ? pigment.name : `Pigment #${si.pigment_id}`;
+                        const pName = si.pigment_name || (pigment ? pigment.name : `Pigment #${si.pigment_id}`);
+                        const itemReturns = safeReturns.filter(r => Number(r.sale_item_id) === Number(si.sale_item_id));
+                        const returnedMg = itemReturns.reduce((sum, r) => sum + (Number(r.mg_returned) || 0), 0);
+                        const netMg = Math.max(0, (Number(si.weight_mg) || 0) - returnedMg);
 
                         return (
                           <div
@@ -451,7 +458,14 @@ export const HistoryScreen = () => {
                               )}
                               <div>
                                 <div className="body-medium font-weight-bold">{pName}</div>
-                                <div className="label-small text-muted">{formatMgToGrams(si.weight_mg)}</div>
+                                <div className="label-small text-muted">
+                                  {formatMgToGrams(si.weight_mg)}
+                                  {returnedMg > 0 && (
+                                    <span className="text-warning font-weight-bold" style={{ marginLeft: '4px' }}>
+                                      ({formatMgToGrams(returnedMg)} returned)
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             </div>
 
@@ -459,12 +473,18 @@ export const HistoryScreen = () => {
                               <span className="body-medium font-weight-bold">{formatCents(si.price_charged_cents)}</span>
                               {selectedSale.status === 'COMPLETED' && (
                                 <button
-                                  className="btn btn-warning btn-sm"
-                                  style={{ padding: '2px 6px', fontSize: '10px' }}
-                                  onClick={() => openModal('returnItem', { saleItem: si, pigment })}
-                                  title="Return this item back into inventory"
+                                  className={`btn btn-sm ${netMg <= 0 ? 'btn-secondary' : 'btn-warning'}`}
+                                  style={{
+                                    padding: '2px 6px',
+                                    fontSize: '10px',
+                                    opacity: netMg <= 0 ? 0.6 : 1,
+                                    cursor: netMg <= 0 ? 'not-allowed' : 'pointer'
+                                  }}
+                                  onClick={() => netMg > 0 && openModal('returnItem', { saleItem: si, pigment })}
+                                  disabled={netMg <= 0}
+                                  title={netMg <= 0 ? 'Item has been fully returned' : 'Return this item back into inventory'}
                                 >
-                                  Return
+                                  {netMg <= 0 ? 'Returned' : 'Return'}
                                 </button>
                               )}
                             </div>

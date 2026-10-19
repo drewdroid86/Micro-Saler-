@@ -13,6 +13,7 @@ Market-stall POS for mica pigment sales
 :root {
   /* Color Palette */
   --market-green-primary: #386B1F;
+  --market-primary: var(--market-green-primary);
   --market-green-dark: #2D5519;
   --market-green-light: #E8F5E1;
   --market-background: #FCFCF7;
@@ -21,6 +22,7 @@ Market-stall POS for mica pigment sales
   --market-border: #D9D9D0;
   --market-border-light: #E3E3DC;
   --market-text-primary: #1B1C17;
+  --market-text: var(--market-text-primary);
   --market-text-secondary: #55624C;
   --market-warning: #D97706;
   --market-error: #BA1A1A;

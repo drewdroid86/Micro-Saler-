@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { usePos } from '../context/PosContext';
-import { calculateBusinessInsights, formatCents, formatMgToGrams } from '../repository';
+import { calculateBusinessInsights, calculateCustomerBalance, formatCents, formatMgToGrams } from '../repository';
 
 export const ReportsScreen = () => {
   const {
@@ -11,6 +11,7 @@ export const ReportsScreen = () => {
     suppliers,
     shrinkageLogs,
     customerPrepayments,
+    returns,
     pigments,
     openModal
   } = usePos();
@@ -28,12 +29,13 @@ export const ReportsScreen = () => {
       suppliers,
       shrinkageLogs,
       customerPrepayments,
+      returns,
       timeRange
     });
 
     const safeCustomers = customers || [];
     const safeSuppliers = suppliers || [];
-    const arCustomers = safeCustomers.filter(c => (c.current_balance_cents || 0) > 0);
+    const arCustomers = safeCustomers.filter(c => calculateCustomerBalance(c, customerPrepayments).hasDebt);
     const apSuppliers = safeSuppliers.filter(s => (s.current_balance_cents || 0) > 0);
 
     return {
@@ -43,7 +45,7 @@ export const ReportsScreen = () => {
       shrinkageLossCents: raw.totalShrinkageLossCents,
       actualMerchantFeesCents: raw.totalMerchantFeeCents
     };
-  }, [sales, saleItems, salePayments, pigments, customers, suppliers, shrinkageLogs, customerPrepayments, timeRange]);
+  }, [sales, saleItems, salePayments, pigments, customers, suppliers, shrinkageLogs, customerPrepayments, returns, timeRange]);
 
   return (
     <div id="reports-screen">
@@ -241,7 +243,9 @@ export const ReportsScreen = () => {
                   </div>
                   <div className="flex-center gap-sm">
                     <div className="text-right">
-                      <div className="body-medium font-weight-bold text-warning">{formatCents(c.current_balance_cents)}</div>
+                      <div className="body-medium font-weight-bold text-warning">
+                        {formatCents(calculateCustomerBalance(c, customerPrepayments).debtCents)}
+                      </div>
                       <div className="label-small text-muted">Owed</div>
                     </div>
                     <button className="btn btn-success btn-sm" onClick={() => openModal('settleTab', c)}>

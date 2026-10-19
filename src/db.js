@@ -1,7 +1,7 @@
 /**
  * @fileoverview IndexedDB database layer for Micro Saler POS (React Version).
  * Replaces Android Room database with a Promise-based IndexedDB wrapper.
- * Database version: 10, 15 object stores.
+ * Database version: 11, 15 object stores.
  */
 
 const DB_NAME = 'MicroSalerDB';
@@ -45,7 +45,7 @@ export default class MicroSalerDB {
           const transaction = event.target.transaction;
           this._createStores(db);
 
-          if (event.oldVersion < 9) {
+          if (event.oldVersion > 0 && event.oldVersion < 9) {
             if (db.objectStoreNames.contains('sales')) {
               const salesStore = transaction.objectStore('sales');
               const req = salesStore.getAll();
@@ -61,7 +61,7 @@ export default class MicroSalerDB {
             }
           }
 
-          if (event.oldVersion < 10) {
+          if (event.oldVersion > 0 && event.oldVersion < 10) {
             if (db.objectStoreNames.contains('customers')) {
               const custStore = transaction.objectStore('customers');
               const ledgerStore = db.objectStoreNames.contains('customer_ledger')
@@ -93,19 +93,24 @@ export default class MicroSalerDB {
             }
           }
 
-          if (event.oldVersion < 11) {
+          if (event.oldVersion > 0 && event.oldVersion < 11) {
             if (db.objectStoreNames.contains('customer_ledger') && db.objectStoreNames.contains('customers')) {
               const custStore = transaction.objectStore('customers');
               const ledgerStore = transaction.objectStore('customer_ledger');
               const custReq = custStore.get(6);
               custReq.onsuccess = () => {
                 const cust = custReq.result;
-                if (cust) {
+                if (cust && String(cust.name || '').trim().toLowerCase() === 'dory') {
                   const req = ledgerStore.getAll();
                   req.onsuccess = () => {
                     const entries = req.result || [];
-                    const hasDoryFix = entries.some(e => Number(e.customer_id) === 6 && Number(e.sale_id) === 15 && e.type === 'SALE_DEBT');
-                    if (!hasDoryFix) {
+                    const custEntries = entries.filter(e => Number(e.customer_id) === 6);
+                    const hasDoryFix = custEntries.some(e => Number(e.sale_id) === 15 && e.type === 'SALE_DEBT');
+                    const ledgerSum = custEntries.reduce((s, e) => s + (Number(e.amount_cents) || 0), 0);
+                    const custBalance = cust.balance !== undefined && cust.balance !== null
+                      ? Number(cust.balance)
+                      : -(Number(cust.current_balance_cents) || 0);
+                    if (!hasDoryFix && (custBalance - ledgerSum === -1000)) {
                       const now = Date.now();
                       ledgerStore.add({
                         customer_id: 6,
@@ -592,6 +597,20 @@ export default class MicroSalerDB {
       'audit_log'
     ];
 
+    for (const name of storeNames) {
+      const rawRecords = backupData.stores[name];
+      if (rawRecords !== undefined && !Array.isArray(rawRecords)) {
+        throw new Error(`Invalid backup format: store "${name}" must be an array.`);
+      }
+      if (Array.isArray(rawRecords)) {
+        for (const record of rawRecords) {
+          if (!record || typeof record !== 'object' || Array.isArray(record)) {
+            throw new Error(`Invalid backup format: store "${name}" contains a non-object record.`);
+          }
+        }
+      }
+    }
+
     return this.runTransaction(storeNames, 'readwrite', (tx) => {
       for (const name of storeNames) {
         const store = tx.objectStore(name);
@@ -602,9 +621,5 @@ export default class MicroSalerDB {
         }
       }
     });
-  }
-
-  async seedInitialData() {
-    return;
   }
 }

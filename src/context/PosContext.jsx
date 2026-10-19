@@ -27,6 +27,7 @@ export const PosProvider = ({ children }) => {
   const [supplierPayments, setSupplierPayments] = useState([]);
   const [stockReceipts, setStockReceipts] = useState([]);
   const [customerPrepayments, setCustomerPrepayments] = useState([]);
+  const [returns, setReturns] = useState([]);
 
   // Auto-backup state
   const [lastBackupTime, setLastBackupTime] = useState(() => {
@@ -88,6 +89,7 @@ export const PosProvider = ({ children }) => {
       const allS = await activeDb.getAllSales();
       const allSI = await activeDb.getAll('sale_items');
       const allSP = await activeDb.getAll('sale_payments');
+      const allReturns = await activeDb.getAll('returns');
       const allAudit = await activeDb.getAll('audit_log');
       const allShrink = await activeDb.getAll('shrinkage_logs');
 
@@ -101,6 +103,7 @@ export const PosProvider = ({ children }) => {
       setSales(allS);
       setSaleItems(allSI);
       setSalePayments(allSP || []);
+      setReturns(allReturns || []);
       setAuditLogs(allAudit.sort((a, b) => (b.created_at || b.timestamp || 0) - (a.created_at || a.timestamp || 0)));
       setShrinkageLogs(allShrink.sort((a, b) => (b.created_at || 0) - (a.created_at || 0)));
     } catch (err) {
@@ -537,16 +540,32 @@ export const PosProvider = ({ children }) => {
       } catch (e) {}
 
       const now = Date.now();
-      if (!storedTime || (now - storedTime >= AUTO_BACKUP_INTERVAL_MS)) {
-        exportBackup({ isAuto: true });
+      if (!storedTime) {
+        // Initialize on first launch so we do not immediately force download
+        try {
+          localStorage.setItem(BACKUP_STORAGE_KEY, String(now));
+        } catch (e) {}
+        setLastBackupTime(now);
+        return;
+      }
+
+      if (now - storedTime >= AUTO_BACKUP_INTERVAL_MS) {
+        if ((sales && sales.length > 0) || (customers && customers.length > 0)) {
+          exportBackup({ isAuto: true });
+        } else {
+          try {
+            localStorage.setItem(BACKUP_STORAGE_KEY, String(now));
+          } catch (e) {}
+          setLastBackupTime(now);
+        }
       }
     }, 60 * 1000);
 
     return () => clearInterval(interval);
-  }, [repo, db]);
+  }, [repo, db, sales, customers]);
 
-  const importBackup = async (jsonData) => {
-    if (!window.confirm("This will overwrite all current data — continue?")) {
+  const importBackup = async (jsonData, skipConfirm = false) => {
+    if (!skipConfirm && !window.confirm("This will overwrite all current data — continue?")) {
       return false;
     }
     try {
@@ -585,6 +604,7 @@ export const PosProvider = ({ children }) => {
     supplierPayments,
     stockReceipts,
     customerPrepayments,
+    returns,
     sales,
     saleItems,
     salePayments,
@@ -630,7 +650,7 @@ export const PosProvider = ({ children }) => {
     checkStartupIntegrity
   }), [
     db, repo, loading, loadingError, isDbBlocked, currentTab, pigments, priceTiers,
-    customers, suppliers, supplierPayments, stockReceipts, customerPrepayments, sales, saleItems, salePayments, auditLogs,
+    customers, suppliers, supplierPayments, stockReceipts, customerPrepayments, returns, sales, saleItems, salePayments, auditLogs,
     shrinkageLogs, cart, selectedCustomer, selectedPigment, pricingMode, isHandshakeOverride,
     isSubmitting, setIsSubmitting, toasts, modal, integrityMismatches, lastBackupTime, isBackupOverdue
   ]);

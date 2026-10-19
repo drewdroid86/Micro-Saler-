@@ -2793,3 +2793,203 @@ test('calculateRecommendedMsrpCents computes retail price, 5g tier, packaging, a
   assert.equal(breakdown.msrpCents, 3500, 'MSRP reflects retail value');
 });
 
+test('CRIT-02: processReturn on multi-item sale paid with HOUSE_TAB reverses debt proportionally via REFUND_TAB_REVERSAL', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const cId = 1;
+  const sId = 1;
+  const siId1 = 1;
+  const siId2 = 2;
+
+  mockDb.stores.customers.set(cId, {
+    customer_id: cId,
+    name: 'Morgan',
+    balance: -4000,
+    current_balance_cents: 4000,
+    credit_limit_cents: 10000
+  });
+
+  // Multi-item sale: total $40 (4000 cents), paid entirely via HOUSE_TAB
+  // Item 1: $10 (1000 cents), 10,000 mg
+  // Item 2: $30 (3000 cents), 30,000 mg
+  mockDb.stores.sales.set(sId, {
+    sale_id: sId,
+    customer_id: cId,
+    total_amount_cents: 4000,
+    total_cogs_cents: 800,
+    status: 'COMPLETED'
+  });
+  mockDb.stores.sale_items.set(siId1, {
+    sale_item_id: siId1,
+    sale_id: sId,
+    pigment_id: 1,
+    weight_mg: 10000,
+    price_charged_cents: 1000,
+    unit_cogs_cents: 200
+  });
+  mockDb.stores.sale_items.set(siId2, {
+    sale_item_id: siId2,
+    sale_id: sId,
+    pigment_id: 2,
+    weight_mg: 30000,
+    price_charged_cents: 3000,
+    unit_cogs_cents: 600
+  });
+  mockDb.stores.sale_payments.set(1, {
+    payment_id: 1,
+    sale_id: sId,
+    payment_type: 'HOUSE_TAB',
+    amount_cents: 4000
+  });
+  mockDb.stores.customer_ledger.set(1, {
+    entry_id: 1,
+    customer_id: cId,
+    amount_cents: -4000,
+    type: 'SALE_DEBT',
+    description: 'House tab charge for sale #1',
+    created_at: 100,
+    timestamp: 100
+  });
+
+  // Return full Item 1 (10,000 mg => $10 refund)
+  await repo.processReturn(siId1, 10000, 'Customer return item 1', false);
+
+  // Assert REFUND_TAB_REVERSAL was written to ledger
+  const postLedger = Array.from(mockDb.stores.customer_ledger.values()).filter(e => e.customer_id === cId);
+  const reversalEntry = postLedger.find(e => e.type === 'REFUND_TAB_REVERSAL');
+  assert.ok(reversalEntry, 'REFUND_TAB_REVERSAL ledger entry must exist');
+  assert.equal(reversalEntry.amount_cents, 1000, 'Tab reversal should be exactly $10 (1000 cents)');
+
+  // Assert customer balance is reduced from -$40 to -$30 (debt reduced by $10)
+  const customer = mockDb.stores.customers.get(cId);
+  assert.equal(customer.balance, -3000, 'Customer balance should now be -$30 (-3000 cents)');
+  assert.equal(customer.current_balance_cents, 3000);
+});
+
+test('CRIT-05: getCustomerTotalExposure and calculateCustomerBalance ignore FULFILLED, DELIVERED, and VOIDED prepayments', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const cId = 1;
+  // Customer with -$20 debt (-2000 cents) and $100 credit limit (10000 cents)
+  mockDb.stores.customers.set(cId, {
+    customer_id: cId,
+    name: 'Sam',
+    balance: -2000,
+    current_balance_cents: 2000,
+    credit_limit_cents: 10000
+  });
+
+  // Prepayment 1: PENDING_DELIVERY ($15 / 1500 cents) -> active/open
+  mockDb.stores.customer_prepayments.set(1, {
+    prepayment_id: 1,
+    customer_id: cId,
+    amount_cents: 1500,
+    weight_mg: 5000,
+    status: 'PENDING_DELIVERY'
+  });
+  // Prepayment 2: FULFILLED ($50 / 5000 cents) -> must NOT offset exposure
+  mockDb.stores.customer_prepayments.set(2, {
+    prepayment_id: 2,
+    customer_id: cId,
+    amount_cents: 5000,
+    weight_mg: 15000,
+    status: 'FULFILLED'
+  });
+  // Prepayment 3: DELIVERED ($30 / 3000 cents) -> must NOT offset exposure
+  mockDb.stores.customer_prepayments.set(3, {
+    prepayment_id: 3,
+    customer_id: cId,
+    amount_cents: 3000,
+    weight_mg: 10000,
+    status: 'DELIVERED'
+  });
+  // Prepayment 4: CANCELLED ($25 / 2500 cents) -> must NOT offset exposure
+  mockDb.stores.customer_prepayments.set(4, {
+    prepayment_id: 4,
+    customer_id: cId,
+    amount_cents: 2500,
+    weight_mg: 8000,
+    status: 'CANCELLED'
+  });
+
+  // Net exposure: Debt is 2000. Open prepayment offset is 1500. Net exposure = 2000 - 1500 = 500 cents ($5.00).
+  const exposure = await repo.getCustomerTotalExposure(cId);
+  assert.equal(exposure, 500, 'Exposure should only offset open PENDING_DELIVERY prepayment ($15), resulting in $5 exposure');
+
+  // calculateCustomerBalance:
+  const prepayments = Array.from(mockDb.stores.customer_prepayments.values());
+  const balanceInfo = calculateCustomerBalance(mockDb.stores.customers.get(cId), prepayments);
+  assert.equal(balanceInfo.prepaidCreditCents, 1500, 'Only pending prepayment credit should be counted');
+  assert.equal(balanceInfo.prepaidWeightMg, 5000, 'Only pending prepayment weight should be counted');
+  assert.equal(balanceInfo.debtCents, 2000);
+});
+
+test('CRIT-03: calculateBusinessInsights deducts returns from per-pigment sell-through, net revenue, and COGS', () => {
+  const sales = [
+    {
+      sale_id: 1,
+      customer_id: 1,
+      total_amount_cents: 5000,
+      total_cogs_cents: 2000,
+      status: 'COMPLETED',
+      created_at: 1000
+    }
+  ];
+  const saleItems = [
+    {
+      sale_item_id: 1,
+      sale_id: 1,
+      pigment_id: 1,
+      weight_mg: 10000,
+      price_charged_cents: 5000,
+      unit_cogs_cents: 2000
+    }
+  ];
+  const pigments = [
+    {
+      pigment_id: 1,
+      name: 'Cobalt Blue',
+      stock_mg: 50000,
+      total_cost_cents: 10000,
+      is_archived: false
+    }
+  ];
+  const returns = [
+    {
+      return_id: 1,
+      sale_item_id: 1,
+      mg_returned: 4000, // 4g of 10g returned (40%)
+      refund_amount_cents: 2000, // $20 refunded
+      created_at: 1050
+    }
+  ];
+
+  const insights = calculateBusinessInsights({
+    sales,
+    saleItems,
+    pigments,
+    returns,
+    timeRange: 'ALL'
+  });
+
+  // Gross revenue was $50.00 (5000 cents), total returns $20.00 (2000 cents)
+  assert.equal(insights.grossRevenueCents, 5000);
+  assert.equal(insights.totalReturnsCents, 2000);
+  assert.equal(insights.netRevenueCents, 3000, 'Net revenue should be $30.00 (3000 cents)');
+
+  // Proportional COGS returned: 40% of $20.00 = $8.00 (800 cents)
+  // Net COGS: 2000 - 800 = 1200 cents ($12.00)
+  assert.equal(insights.netCogsCents, 1200, 'Net COGS should be $12.00 (1200 cents)');
+  assert.equal(insights.grossProfitCents, 1800, 'Gross profit should be $18.00 (1800 cents)');
+
+  // Per-pigment stats
+  const cobalt = insights.perPigmentProfitability.find(p => p.pigment_id === 1);
+  assert.ok(cobalt, 'Cobalt Blue should be in profitability table');
+  assert.equal(cobalt.weightSoldMg, 6000, 'Net weight sold should be 6000 mg (10000 - 4000)');
+  assert.equal(cobalt.revenueCents, 3000, 'Net revenue should be 3000 cents');
+  assert.equal(cobalt.cogsCents, 1200, 'Net COGS should be 1200 cents');
+  assert.equal(cobalt.profitCents, 1800, 'Net profit should be 1800 cents');
+});
+

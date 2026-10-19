@@ -41,7 +41,7 @@ export const BackupRestoreModal = () => {
     if (!parsedBackup) return;
     setIsImporting(true);
     try {
-      await importBackup(parsedBackup);
+      await importBackup(parsedBackup, true);
       closeModal();
     } catch (err) {
       // Error toast already shown by importBackup
@@ -103,7 +103,7 @@ export const BackupRestoreModal = () => {
               <h4 style={{ margin: '0 0 8px 0', color: 'var(--market-primary)', fontSize: '0.95rem' }}>✓ Backup Verified</h4>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.85rem' }}>
                 <div><strong>Exported:</strong> {parsedBackup.exported_at ? new Date(parsedBackup.exported_at).toLocaleString() : 'N/A'}</div>
-                <div><strong>Schema Version:</strong> v{parsedBackup.schema_version || 1}</div>
+                <div><strong>Schema Version:</strong> v{parsedBackup.schema_version || parsedBackup.db_version || 1}</div>
                 <div><strong>Pigments:</strong> {parsedBackup.stores?.pigments?.length || 0}</div>
                 <div><strong>Customers:</strong> {parsedBackup.stores?.customers?.length || 0}</div>
                 <div><strong>Sales Records:</strong> {parsedBackup.stores?.sales?.length || 0}</div>

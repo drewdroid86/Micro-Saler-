@@ -40,10 +40,13 @@ export const ModalManager = () => {
     setIsHandshakeOverride,
     overrideCartTotal,
     pricingMode,
+    setPricingMode,
+    changePricingMode,
     repo,
     refreshAllData,
     showToast,
     customerPrepayments,
+    returns,
     isSubmitting,
     setIsSubmitting
   } = usePos();
@@ -289,7 +292,8 @@ export const ModalManager = () => {
     }
 
     if (modal.name === 'settleTab' && modal.payload) {
-      const debt = Number(modal.payload.current_balance_cents) || 0;
+      const bal = calculateCustomerBalance(modal.payload, customerPrepayments || []);
+      const debt = bal.debtCents;
       setSettleAmt(debt > 0 ? (debt / 100).toFixed(2) : '');
       setSettleType('CASH');
       setSettleProvider('Square');
@@ -321,7 +325,11 @@ export const ModalManager = () => {
     }
 
     if (modal.name === 'returnItem' && modal.payload?.saleItem) {
-      setReturnWeight((modal.payload.saleItem.weight_mg / 1000).toFixed(1));
+      const si = modal.payload.saleItem;
+      const priorReturns = (returns || []).filter(r => Number(r.sale_item_id) === Number(si.sale_item_id));
+      const alreadyReturnedMg = priorReturns.reduce((sum, r) => sum + (Number(r.mg_returned) || 0), 0);
+      const eligibleMg = Math.max(0, (si.weight_mg || 0) - alreadyReturnedMg);
+      setReturnWeight((eligibleMg / 1000).toFixed(1));
     }
 
     if (modal.name === 'addCustomer') {
@@ -509,7 +517,7 @@ export const ModalManager = () => {
         total_cost_cents: totalCostCents,
         retail_price_per_gram_cents: Math.round(retailD * 100),
         wholesale_price_per_gram_cents: Math.round(wholeD * 100),
-        default_pkg_cents: 0,
+        default_pkg_cents: 35,
         supplier_name: restockSupplier,
         supplier_id: restockSupplierId ? Number(restockSupplierId) : null,
         payment_status: restockPaymentStatus,
@@ -631,7 +639,8 @@ export const ModalManager = () => {
           trust_status: custStatus
         });
         if (custType === 'WHOLESALE') {
-          setPricingMode('WHOLESALE');
+          if (changePricingMode) changePricingMode('WHOLESALE');
+          else if (setPricingMode) setPricingMode('WHOLESALE');
         }
       }
       handleClose();
@@ -1144,11 +1153,15 @@ export const ModalManager = () => {
                     }}
                   >
                     <option value="">-- Choose Customer --</option>
-                    {customers.map(c => (
-                      <option key={c.customer_id} value={c.customer_id}>
-                        👤 {c.name} (Bal: {formatCents(c.current_balance_cents)})
-                      </option>
-                    ))}
+                    {customers.map(c => {
+                      const bal = calculateCustomerBalance(c, customerPrepayments || []);
+                      const balLabel = bal.hasDebt ? `Debt: ${formatCents(bal.debtCents)}` : bal.hasStoreCredit ? `Credit: +${formatCents(bal.storeCreditCents)}` : 'Bal: $0.00';
+                      return (
+                        <option key={c.customer_id} value={c.customer_id}>
+                          👤 {c.name} ({balLabel})
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
               ) : (
@@ -1165,7 +1178,10 @@ export const ModalManager = () => {
                       </button>
                     </div>
                     <div className="flex-between body-small mb-xs">
-                      <span>Current Tab Balance:</span> <strong>{formatCents(selectedCustomer.current_balance_cents)}</strong>
+                      <span>Current Balance:</span> <strong>{(() => {
+                        const bal = calculateCustomerBalance(selectedCustomer, customerPrepayments || []);
+                        return bal.hasDebt ? `${formatCents(bal.debtCents)} (Debt)` : bal.hasStoreCredit ? `+${formatCents(bal.storeCreditCents)} (Credit)` : '$0.00';
+                      })()}</strong>
                     </div>
                     <div className="flex-between body-small mb-xs">
                       <span>Credit Limit:</span> <strong>{formatCents(selectedCustomer.credit_limit_cents)}</strong>
@@ -1199,7 +1215,8 @@ export const ModalManager = () => {
                       ? Math.round((parseFloat(tabPuttingOnTabInput) || 0) * 100)
                       : Math.max(0, totalAmountCents - paidNowCents);
 
-                    const newBalanceCents = ((selectedCustomer && selectedCustomer.current_balance_cents) || 0) + tabAmountCents;
+                    const curDebt = selectedCustomer ? calculateCustomerBalance(selectedCustomer, customerPrepayments || []).debtCents : 0;
+                    const newBalanceCents = curDebt + tabAmountCents;
                     const isOverLimit = selectedCustomer ? newBalanceCents > (selectedCustomer.credit_limit_cents || 0) : false;
 
                     const handlePaidNowChange = (val) => {
@@ -1337,7 +1354,8 @@ export const ModalManager = () => {
 
                   {tabPayMode === 'FULL' && (() => {
                     const tabAmountCents = totalAmountCents;
-                    const newBalanceCents = ((selectedCustomer && selectedCustomer.current_balance_cents) || 0) + tabAmountCents;
+                    const curDebt = selectedCustomer ? calculateCustomerBalance(selectedCustomer, customerPrepayments || []).debtCents : 0;
+                    const newBalanceCents = curDebt + tabAmountCents;
                     const isOverLimit = selectedCustomer ? newBalanceCents > (selectedCustomer.credit_limit_cents || 0) : false;
 
                     return (
@@ -1612,7 +1630,9 @@ export const ModalManager = () => {
                         setSelectedCustomer(c);
                         if (c) {
                           const isWholesale = c.customer_type === 'WHOLESALE' || Boolean(c.is_wholesale);
-                          setPricingMode(isWholesale ? 'WHOLESALE' : 'RETAIL');
+                          const targetMode = isWholesale ? 'WHOLESALE' : 'RETAIL';
+                          if (changePricingMode) changePricingMode(targetMode);
+                          else if (setPricingMode) setPricingMode(targetMode);
                         }
                         handleClose();
                       }}
@@ -1897,11 +1917,15 @@ export const ModalManager = () => {
               </div>
               <div className="form-group">
                 <select className="form-select" value={pigmentFinish} onChange={e => setPigmentFinish(e.target.value)}>
-                  <option value="Matte">Matte</option>
+                  <option value="Mica Pearl">Mica Pearl</option>
                   <option value="Metallic">Metallic</option>
                   <option value="Pearl">Pearl</option>
+                  <option value="Matte">Matte</option>
                   <option value="ColorShift">ColorShift</option>
+                  <option value="Chameleon">Chameleon</option>
                   <option value="Glow">Glow</option>
+                  <option value="Satin">Satin</option>
+                  <option value="Matte Powder">Matte Powder</option>
                 </select>
               </div>
               <div className="form-group">
@@ -2016,10 +2040,14 @@ export const ModalManager = () => {
                   <label className="form-label">Finish Type</label>
                   <select className="form-select" value={editFinish} onChange={e => setEditFinish(e.target.value)}>
                     <option value="Mica Pearl">Mica Pearl</option>
-                    <option value="Chameleon">Chameleon</option>
                     <option value="Metallic">Metallic</option>
-                    <option value="Matte Powder">Matte Powder</option>
+                    <option value="Pearl">Pearl</option>
+                    <option value="Matte">Matte</option>
+                    <option value="ColorShift">ColorShift</option>
+                    <option value="Chameleon">Chameleon</option>
+                    <option value="Glow">Glow</option>
                     <option value="Satin">Satin</option>
+                    <option value="Matte Powder">Matte Powder</option>
                   </select>
                 </div>
               </div>
@@ -2611,10 +2639,10 @@ export const ModalManager = () => {
         {modal.name === 'customerLedger' && (() => {
           const balInfo = calculateCustomerBalance(modal.payload, customerPrepayments || []);
           const filteredEntries = (customerLedgerEntries || []).filter(entry => {
-            if (customerLedgerFilter === 'TAB_CHARGES') return entry.type === 'HOUSE_TAB_CHARGE';
-            if (customerLedgerFilter === 'PAYMENTS') return entry.type === 'TAB_PAYMENT';
-            if (customerLedgerFilter === 'PREPAYMENTS') return entry.type === 'PREPAYMENT_DEPOSIT';
-            if (customerLedgerFilter === 'ADJUSTMENTS') return entry.type === 'BALANCE_ADJUSTMENT';
+            if (customerLedgerFilter === 'TAB_CHARGES') return entry.type === 'SALE_DEBT' || entry.type === 'HOUSE_TAB_CHARGE';
+            if (customerLedgerFilter === 'PAYMENTS') return entry.type === 'PAYMENT_RECEIVED' || entry.type === 'TAB_PAYMENT';
+            if (customerLedgerFilter === 'PREPAYMENTS') return entry.type === 'PREPAYMENT_CREDIT' || entry.type === 'PREPAYMENT_DEPOSIT' || entry.type === 'SALE_CREDIT_APPLIED';
+            if (customerLedgerFilter === 'ADJUSTMENTS') return entry.type === 'BALANCE_ADJUSTMENT' || entry.type === 'opening_balance' || entry.type === 'REFUND_STORE_CREDIT' || entry.type === 'REFUND_TAB_REVERSAL' || entry.type === 'SALE_VOID_REVERSAL';
             return true; // 'ALL'
           });
 
@@ -2718,12 +2746,12 @@ export const ModalManager = () => {
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     {filteredEntries.map(entry => {
-                      const isCredit = entry.direction === 'CREDIT';
-                      const badgeClass = entry.type === 'HOUSE_TAB_CHARGE'
+                      const isCredit = entry.amount_cents > 0 || entry.direction === 'CREDIT' || entry.is_credit;
+                      const badgeClass = (entry.type === 'SALE_DEBT' || entry.type === 'HOUSE_TAB_CHARGE')
                         ? 'badge-paused'
-                        : entry.type === 'TAB_PAYMENT'
+                        : (entry.type === 'PAYMENT_RECEIVED' || entry.type === 'TAB_PAYMENT')
                         ? 'badge-good-standing'
-                        : entry.type === 'PREPAYMENT_DEPOSIT'
+                        : (entry.type === 'PREPAYMENT_CREDIT' || entry.type === 'PREPAYMENT_DEPOSIT' || entry.type === 'SALE_CREDIT_APPLIED')
                         ? 'badge-vip'
                         : 'badge-secondary';
 
@@ -2754,10 +2782,14 @@ export const ModalManager = () => {
 
                           <div className="text-right">
                             <div className={`body-medium font-weight-bold ${isCredit ? 'text-success' : 'text-error'}`}>
-                              {isCredit ? `-${formatCents(entry.amount_cents)}` : `+${formatCents(entry.amount_cents)}`}
+                              {entry.formatted_amount || (isCredit ? `+${formatCents(entry.amount_cents)}` : formatCents(entry.amount_cents))}
                             </div>
                             <div className="label-small text-muted" style={{ fontSize: '10px' }}>
-                              Running Debt: {formatCents(entry.running_balance_cents)}
+                              {entry.running_balance_cents > 0
+                                ? `Running Credit: +${formatCents(entry.running_balance_cents)}`
+                                : entry.running_balance_cents < 0
+                                ? `Running Debt: ${formatCents(Math.abs(entry.running_balance_cents))}`
+                                : `Settled ($0.00)`}
                             </div>
                           </div>
                         </div>
@@ -2795,34 +2827,57 @@ export const ModalManager = () => {
         )}
 
         {/* Return Item */}
-        {modal.name === 'returnItem' && (
-          <div>
-            <div className="modal-header">
-              <h2>Return Item</h2>
-              <button className="modal-close" onClick={handleClose}>&times;</button>
-            </div>
-            <div className="modal-body">
-              <p className="body-medium mb-sm">Returning: <strong>{modal.payload?.pigment?.name || 'Pigment Item'}</strong></p>
-              <p className="body-medium text-muted mb-md">Purchased: {formatMgToGrams(modal.payload?.saleItem?.weight_mg || 0)}</p>
-              <div className="form-group">
-                <label className="form-label">Weight to Return (g)</label>
-                <input type="number" className="form-input" value={returnWeight} onChange={e => setReturnWeight(e.target.value)} step="0.1" min="0.1" />
+        {modal.name === 'returnItem' && (() => {
+          const si = modal.payload?.saleItem;
+          const priorItemReturns = (returns || []).filter(r => Number(r.sale_item_id) === Number(si?.sale_item_id));
+          const alreadyReturnedMg = priorItemReturns.reduce((sum, r) => sum + (Number(r.mg_returned) || 0), 0);
+          const eligibleWeightMg = Math.max(0, (si?.weight_mg || 0) - alreadyReturnedMg);
+
+          return (
+            <div>
+              <div className="modal-header">
+                <h2>Return Item</h2>
+                <button className="modal-close" onClick={handleClose}>&times;</button>
               </div>
-              <div className="form-group">
-                <label className="form-label">Reason</label>
-                <input type="text" className="form-input" value={returnReason} onChange={e => setReturnReason(e.target.value)} />
+              <div className="modal-body">
+                <p className="body-medium mb-sm">Returning: <strong>{modal.payload?.pigment?.name || 'Pigment Item'}</strong></p>
+                <div className="grid-2col gap-xs mb-md body-small text-muted">
+                  <div>Purchased: <strong>{formatMgToGrams(si?.weight_mg || 0)}</strong></div>
+                  <div>Eligible to Return: <strong className="text-primary">{formatMgToGrams(eligibleWeightMg)}</strong></div>
+                </div>
+                {alreadyReturnedMg > 0 && (
+                  <div className="label-small text-warning mb-sm">
+                    ℹ️ Previously returned: {formatMgToGrams(alreadyReturnedMg)}
+                  </div>
+                )}
+                <div className="form-group">
+                  <label className="form-label">Weight to Return (g)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={returnWeight}
+                    onChange={e => setReturnWeight(e.target.value)}
+                    step="0.1"
+                    min="0.1"
+                    max={(eligibleWeightMg / 1000).toFixed(1)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Reason</label>
+                  <input type="text" className="form-input" value={returnReason} onChange={e => setReturnReason(e.target.value)} />
+                </div>
+                <div className="form-group flex-center gap-sm" style={{ justifyContent: 'flex-start' }}>
+                  <input type="checkbox" id="return-restock" checked={returnRestock} onChange={e => setReturnRestock(e.target.checked)} style={{ width: '20px', height: '20px' }} />
+                  <label htmlFor="return-restock">Restock into inventory</label>
+                </div>
               </div>
-              <div className="form-group flex-center gap-sm" style={{ justifyContent: 'flex-start' }}>
-                <input type="checkbox" id="return-restock" checked={returnRestock} onChange={e => setReturnRestock(e.target.checked)} style={{ width: '20px', height: '20px' }} />
-                <label htmlFor="return-restock">Restock into inventory</label>
+              <div className="modal-footer">
+                <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+                <button className="btn btn-warning" onClick={handleReturnItem} disabled={eligibleWeightMg <= 0}>Process Return</button>
               </div>
             </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={handleClose}>Cancel</button>
-              <button className="btn btn-warning" onClick={handleReturnItem}>Process Return</button>
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Void Stock Receipt Modal */}
         {modal.name === 'voidStockReceipt' && (
@@ -3161,7 +3216,7 @@ export const ModalManager = () => {
                   <tbody>
                     {items.map((item, idx) => (
                       <tr key={idx} style={{ borderBottom: '1px solid var(--market-surface-variant)' }}>
-                        <td style={{ padding: '6px 0' }}>{item.pigment_name || `Pigment #${item.pigment_id}`}</td>
+                        <td style={{ padding: '6px 0' }}>{item.pigment_name || pigments.find(p => Number(p.pigment_id) === Number(item.pigment_id))?.name || `Pigment #${item.pigment_id}`}</td>
                         <td style={{ textAlign: 'right' }}>{formatMgToGrams(item.weight_mg)}</td>
                         <td style={{ textAlign: 'right' }}>{formatCents(item.price_charged_cents)}</td>
                       </tr>
