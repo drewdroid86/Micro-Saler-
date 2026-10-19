@@ -44,6 +44,26 @@ export const PosProvider = ({ children }) => {
     return (Date.now() - lastBackupTime) > BACKUP_OVERDUE_MS;
   }, [lastBackupTime]);
 
+  // Theme state ('light' | 'dark')
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem('micro_saler_theme') || 'light';
+    } catch (e) {
+      return 'light';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem('micro_saler_theme', theme);
+    } catch (e) {}
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
   // Checkout state
   const [cart, setCart] = useState([]);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -275,9 +295,23 @@ export const PosProvider = ({ children }) => {
   };
 
   const updateCartItem = (index, weightMg, customPriceCents = null) => {
+    const validWeightMg = Math.max(0, weightMg);
+    const targetItem = cart[index];
+    if (targetItem && targetItem.pigment) {
+      const otherCartWeightMg = cart
+        .filter((ci, idx) => idx !== index && ci.pigment_id === targetItem.pigment_id)
+        .reduce((sum, ci) => sum + ci.weight_mg, 0);
+      if (otherCartWeightMg + validWeightMg > targetItem.pigment.stock_mg) {
+        showToast(
+          `Insufficient stock for ${targetItem.pigment.name}. Max available: ${formatMgToGrams(Math.max(0, targetItem.pigment.stock_mg - otherCartWeightMg))}`,
+          'error'
+        );
+        return false;
+      }
+    }
+
     setCart(prev => prev.map((item, i) => {
       if (i !== index) return item;
-      const validWeightMg = Math.max(0, weightMg);
       const pigment = item.pigment;
 
       const otherCartWeightMg = prev
@@ -597,6 +631,9 @@ export const PosProvider = ({ children }) => {
     isDbBlocked,
     currentTab,
     setCurrentTab,
+    theme,
+    setTheme,
+    toggleTheme,
     pigments,
     priceTiers,
     customers,
@@ -649,7 +686,7 @@ export const PosProvider = ({ children }) => {
     repairDataIntegrity,
     checkStartupIntegrity
   }), [
-    db, repo, loading, loadingError, isDbBlocked, currentTab, pigments, priceTiers,
+    db, repo, loading, loadingError, isDbBlocked, currentTab, theme, pigments, priceTiers,
     customers, suppliers, supplierPayments, stockReceipts, customerPrepayments, returns, sales, saleItems, salePayments, auditLogs,
     shrinkageLogs, cart, selectedCustomer, selectedPigment, pricingMode, isHandshakeOverride,
     isSubmitting, setIsSubmitting, toasts, modal, integrityMismatches, lastBackupTime, isBackupOverdue

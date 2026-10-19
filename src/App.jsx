@@ -67,8 +67,10 @@ export function App() {
 
   if (loading) {
     return (
-      <div className="flex-center" style={{ height: '100dvh', fontSize: '1.2em', fontWeight: 'bold' }}>
-        Loading Micro Saler POS...
+      <div className="flex-center" style={{ height: '100dvh', flexDirection: 'column', gap: '12px', background: 'var(--market-background)', color: 'var(--market-text-primary)' }}>
+        <div className="brand-logo-badge" style={{ width: '48px', height: '48px', fontSize: '24px' }}>⚖️</div>
+        <div style={{ fontSize: '1.1rem', fontWeight: 800, letterSpacing: '-0.02em' }}>Loading Micro Saler POS...</div>
+        <div className="body-small text-muted">Initializing local IndexedDB ledger</div>
       </div>
     );
   }
@@ -76,18 +78,20 @@ export function App() {
   return (
     <div className="app-container">
       <Header />
-      <NavTabs />
-      <main className="main-content">
-        {currentTab === 'checkout' && <CheckoutScreen />}
-        {currentTab === 'inventory' && <InventoryScreen />}
-        {currentTab === 'pricing' && <PricingCalculatorScreen />}
-        {currentTab === 'customers' && <CustomerScreen />}
-        {currentTab === 'suppliers' && <SupplierScreen />}
-        {currentTab === 'reports' && <ReportsScreen />}
-        {currentTab === 'insights' && <InsightsScreen />}
-        {currentTab === 'history' && <HistoryScreen />}
-        {currentTab === 'audit' && <AuditScreen />}
-      </main>
+      <div className="app-workspace">
+        <NavTabs />
+        <main className="main-content">
+          {currentTab === 'checkout' && <CheckoutScreen />}
+          {currentTab === 'inventory' && <InventoryScreen />}
+          {currentTab === 'pricing' && <PricingCalculatorScreen />}
+          {currentTab === 'customers' && <CustomerScreen />}
+          {currentTab === 'suppliers' && <SupplierScreen />}
+          {currentTab === 'reports' && <ReportsScreen />}
+          {currentTab === 'insights' && <InsightsScreen />}
+          {currentTab === 'history' && <HistoryScreen />}
+          {currentTab === 'audit' && <AuditScreen />}
+        </main>
+      </div>
       <ModalManager />
       <Toast />
     </div>

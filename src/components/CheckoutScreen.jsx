@@ -1,41 +1,94 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { usePos } from '../context/PosContext';
 import { formatCents, formatMgToGrams, calculateRecommendedMsrpCents, getEffectivePricePerGramCents } from '../repository';
 import { CustomerNameInput } from './CustomerNameInput';
 
-const CartItem = ({ item, index, onRemove, openModal, priceTiers }) => {
+const CartItem = ({ item, index, onRemove, updateCartItem, openModal, priceTiers }) => {
   const itemMsrp = calculateRecommendedMsrpCents(item.pigment, item.weight_mg, priceTiers);
   const isDiscounted = itemMsrp > (item.price_charged_cents || 0);
+
+  const handleDecrement = () => {
+    const currentMg = item.weight_mg || 0;
+    const stepMg = currentMg <= 1000 ? 250 : 1000;
+    const nextMg = currentMg - stepMg;
+    if (nextMg <= 0) {
+      onRemove();
+    } else {
+      updateCartItem(index, nextMg);
+    }
+  };
+
+  const handleIncrement = () => {
+    const currentMg = item.weight_mg || 0;
+    const stepMg = currentMg < 1000 ? 250 : 1000;
+    updateCartItem(index, currentMg + stepMg);
+  };
 
   return (
     <div className="cart-item">
       <div className="cart-item-details">
-        <span className="cart-item-title">{item.pigment?.name || 'Item'}</span>
+        <div className="flex-center gap-xs" style={{ justifyContent: 'flex-start' }}>
+          {item.pigment?.color_code && (
+            <span
+              style={{
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                backgroundColor: item.pigment.color_code,
+                border: '1px solid rgba(0,0,0,0.15)',
+                flexShrink: 0
+              }}
+            />
+          )}
+          <span className="cart-item-title">{item.pigment?.name || 'Item'}</span>
+        </div>
         <span className="cart-item-meta">
-          {formatMgToGrams(item.weight_mg)}
+          <strong>{formatMgToGrams(item.weight_mg)}</strong>
           {itemMsrp > 0 && (
             <span style={{ marginLeft: '6px', opacity: 0.85 }}>
-              • Rec. MSRP: {formatCents(itemMsrp)}
+              • MSRP: {formatCents(itemMsrp)}
             </span>
           )}
         </span>
       </div>
-      <div className="flex-center gap-sm">
-        <div style={{ textAlign: 'right' }}>
+
+      <div className="flex-center gap-xs">
+        <div className="cart-stepper-group" title="Adjust weight (-/+)">
+          <button
+            type="button"
+            className="cart-stepper-btn"
+            onClick={handleDecrement}
+            aria-label="Decrease weight"
+          >
+            −
+          </button>
+          <span className="cart-stepper-val">{formatMgToGrams(item.weight_mg)}</span>
+          <button
+            type="button"
+            className="cart-stepper-btn"
+            onClick={handleIncrement}
+            aria-label="Increase weight"
+          >
+            +
+          </button>
+        </div>
+
+        <div style={{ textAlign: 'right', minWidth: '58px' }}>
           <span className="cart-item-price">{formatCents(item.price_charged_cents)}</span>
           {isDiscounted && (
-            <div style={{ fontSize: '11px', color: 'var(--market-green-primary)', fontWeight: '600' }}>
-              Save {formatCents(itemMsrp - (item.price_charged_cents || 0))}
+            <div style={{ fontSize: '10px', color: 'var(--market-success)', fontWeight: '700' }}>
+              -{formatCents(itemMsrp - (item.price_charged_cents || 0))}
             </div>
           )}
         </div>
+
         <button
           className="cart-item-action-btn"
           onClick={() => openModal('editCartItem', { item, index })}
-          title="Edit line item"
+          title="Edit weight or custom price"
           aria-label="Edit line item"
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
           </svg>
@@ -63,6 +116,7 @@ export const CheckoutScreen = () => {
     cart,
     addToCart,
     removeFromCart,
+    updateCartItem,
     clearCart,
     resetCartPrices,
     quickCollectCash,
@@ -73,6 +127,9 @@ export const CheckoutScreen = () => {
     repo,
     refreshAllData
   } = usePos();
+
+  const [pigmentSearch, setPigmentSearch] = useState('');
+  const [finishFilter, setFinishFilter] = useState('ALL');
 
   const safeCustomerPrepayments = customerPrepayments || [];
   const selectedCustomerActivePrepayments = selectedCustomer && selectedCustomer.customer_id
@@ -86,6 +143,30 @@ export const CheckoutScreen = () => {
   useEffect(() => {
     setCustomerNameInput(selectedCustomer ? selectedCustomer.name : '');
   }, [selectedCustomer]);
+
+  const safeCart = cart || [];
+  const safePigments = pigments || [];
+
+  const availableFinishes = useMemo(() => {
+    const finishes = new Set();
+    safePigments.forEach(p => {
+      if (p.finish_type) finishes.add(p.finish_type);
+    });
+    return ['ALL', ...Array.from(finishes)];
+  }, [safePigments]);
+
+  const filteredPigments = useMemo(() => {
+    return safePigments.filter(p => {
+      if (finishFilter !== 'ALL' && p.finish_type !== finishFilter) return false;
+      if (pigmentSearch.trim()) {
+        const q = pigmentSearch.toLowerCase();
+        const matchName = (p.name || '').toLowerCase().includes(q);
+        const matchFinish = (p.finish_type || '').toLowerCase().includes(q);
+        if (!matchName && !matchFinish) return false;
+      }
+      return true;
+    });
+  }, [safePigments, finishFilter, pigmentSearch]);
 
   const presets = [
     { label: '¼g', mg: 250 },
@@ -142,19 +223,18 @@ export const CheckoutScreen = () => {
     openModal('customWeight');
   };
 
-  const safeCart = cart || [];
-  const safePigments = pigments || [];
   const totalCharged = safeCart.reduce((sum, item) => sum + (item.price_charged_cents || 0), 0);
   const totalCogs = safeCart.reduce((sum, item) => sum + (item.unit_cogs_cents || 0), 0);
   const totalMsrp = safeCart.reduce((sum, item) => sum + calculateRecommendedMsrpCents(item.pigment, item.weight_mg, priceTiers), 0);
+  const totalWeightMg = safeCart.reduce((sum, item) => sum + (item.weight_mg || 0), 0);
   const margin = totalCharged > 0 ? Math.round(((totalCharged - totalCogs) / totalCharged) * 100) : 0;
 
   return (
     <div className="checkout-layout">
       {integrityMismatchCount > 0 && (
-        <div className="card mb-md flex-between" style={{ background: 'rgba(245, 124, 0, 0.15)', borderColor: '#f57c00', padding: '10px 14px', alignItems: 'center' }}>
+        <div className="card mb-sm flex-between" style={{ background: 'rgba(245, 124, 0, 0.12)', borderColor: 'var(--market-warning)', padding: '10px 14px', alignItems: 'center' }}>
           <div>
-            <div className="font-weight-bold" style={{ color: '#e65100', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div className="font-weight-bold" style={{ color: 'var(--market-warning)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span>⚠️</span> Data Integrity Warning: {integrityMismatchCount} completed sale(s) have payment total mismatches.
             </div>
             <div className="body-small text-muted" style={{ fontSize: '12px', marginTop: '2px' }}>
@@ -163,7 +243,7 @@ export const CheckoutScreen = () => {
           </div>
           <button
             className="btn btn-warning btn-sm"
-            style={{ backgroundColor: '#f57c00', borderColor: '#e65100', color: '#fff', fontWeight: 'bold', whiteSpace: 'nowrap' }}
+            style={{ whiteSpace: 'nowrap' }}
             onClick={() => openModal('integrityRepair')}
           >
             Review & Fix
@@ -171,7 +251,8 @@ export const CheckoutScreen = () => {
         </div>
       )}
 
-      <div className="checkout-top-bar mb-md">
+      {/* Top Customer & Pricing Mode Bar */}
+      <div className="checkout-top-bar">
         <CustomerNameInput
           value={customerNameInput}
           onChange={(text, customerRecord) => {
@@ -204,13 +285,13 @@ export const CheckoutScreen = () => {
               className={`toggle-option ${pricingMode === 'RETAIL' ? 'active' : ''}`}
               onClick={() => (changePricingMode ? changePricingMode('RETAIL') : setPricingMode('RETAIL'))}
             >
-              RETAIL
+              🏷️ RETAIL
             </button>
             <button
               className={`toggle-option ${pricingMode === 'WHOLESALE' ? 'active' : ''}`}
               onClick={() => (changePricingMode ? changePricingMode('WHOLESALE') : setPricingMode('WHOLESALE'))}
             >
-              WHOLESALE
+              📦 WHOLESALE
             </button>
           </div>
           <button
@@ -226,7 +307,7 @@ export const CheckoutScreen = () => {
       </div>
 
       {selectedCustomerActivePrepayments.length > 0 && (
-        <div className="card mb-md flex-between" style={{ background: 'rgba(56, 107, 31, 0.15)', borderColor: 'var(--market-green-primary)', padding: '10px 14px', alignItems: 'center' }}>
+        <div className="card flex-between" style={{ background: 'rgba(16, 185, 129, 0.1)', borderColor: 'var(--market-success)', padding: '10px 14px', alignItems: 'center' }}>
           <div>
             <div className="font-weight-bold text-success" style={{ fontSize: '13px' }}>
               📦 Pending Prepayment / Backorder Owed ({selectedCustomerActivePrepayments.length})
@@ -255,108 +336,202 @@ export const CheckoutScreen = () => {
         </div>
       )}
 
-      {/* Responsive Split Container: Catalog & Presets on Left, Sticky Cart & Actions on Right (>=900px) */}
+      {/* Responsive Split Container: Catalog & Presets on Left, Sticky Receipt Cart on Right (>=900px) */}
       <div className="checkout-split-container">
-        {/* Left Pane: Product Catalog & Weight Presets */}
+        {/* Left Pane: Step 1 (Pigment Selection) & Step 2 (Weight Tier Selection) */}
         <div className="checkout-catalog-pane">
-          <div className="grid-2col mb-md">
-            {safePigments.map(p => {
-              const isSelected = selectedPigment && selectedPigment.pigment_id === p.pigment_id;
-              return (
-                <div
-                  key={p.pigment_id}
-                  className={`pigment-grid-card ${isSelected ? 'selected' : ''}`}
-                  onClick={() => setSelectedPigment(p)}
-                >
-                  <div className="color-swatch" style={{ backgroundColor: p.color_code }} />
-                  <div className="pigment-info">
-                    <div className="pigment-name">{p.name}</div>
-                    <div className="pigment-finish">{p.finish_type}</div>
-                    <div className={`pigment-stock ${p.stock_mg < 10000 ? 'low-stock' : ''}`}>
-                      {formatMgToGrams(p.stock_mg)} in stock
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {selectedPigment && (
-            <div className="card mb-xs flex-between" style={{ padding: '6px 12px', background: 'var(--market-surface-variant)', borderRadius: '6px', alignItems: 'center', fontSize: '12px' }}>
+          {/* STEP 1: SELECT PIGMENT */}
+          <div className="pos-step-section">
+            <div className="pos-step-header">
               <div className="flex-center gap-xs">
-                <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: selectedPigment.color_code, display: 'inline-block' }} />
-                <strong>{selectedPigment.name}</strong>
-                <span className="text-muted">({selectedPigment.finish_type})</span>
+                <span className="pos-step-badge">1</span>
+                <span className="pos-step-title">Select Pigment</span>
+                <span className="badge" style={{ marginLeft: '4px' }}>{filteredPigments.length} shown</span>
               </div>
-              <div className="flex-center gap-xs">
-                <span className="text-muted">Rec. MSRP:</span>
-                <strong className="text-primary">{formatCents(selectedPigment.retail_price_per_gram_cents)}/g</strong>
-                {pricingMode === 'WHOLESALE' && (
-                  <span className="text-muted" style={{ marginLeft: '4px' }}>
-                    | Wholesale: <strong>{formatCents(selectedPigment.wholesale_price_per_gram_cents)}/g</strong>
-                  </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs"
+                onClick={() => openModal('addPigment')}
+                title="Add a new pigment to catalog"
+              >
+                + New Pigment
+              </button>
+            </div>
+
+            {/* Quick Search & Finish Filter Bar */}
+            <div className="pos-catalog-toolbar">
+              <div className="pos-search-input-wrap">
+                <span className="pos-search-icon">🔍</span>
+                <input
+                  type="text"
+                  className="pos-search-input"
+                  placeholder="Filter pigments by name or finish..."
+                  value={pigmentSearch}
+                  onChange={e => setPigmentSearch(e.target.value)}
+                />
+                {pigmentSearch && (
+                  <button
+                    type="button"
+                    className="pos-search-clear"
+                    onClick={() => setPigmentSearch('')}
+                    aria-label="Clear pigment search"
+                  >
+                    &times;
+                  </button>
                 )}
               </div>
-            </div>
-          )}
 
-          <div className="weight-presets mb-md">
-            {presets.map(preset => {
-              const isTierSet = hasTierOverride(preset.mg);
-              const presetPrice = selectedPigment ? getPresetPrice(preset.mg) : null;
-              const presetMsrp = selectedPigment ? calculateRecommendedMsrpCents(selectedPigment, preset.mg, priceTiers) : null;
-              return (
-                <button
-                  key={preset.label}
-                  className={`weight-preset-btn ${isTierSet ? 'has-tier-override' : ''}`}
-                  onClick={() => handlePresetClick(preset.mg)}
-                  title={selectedPigment ? `${preset.label} (${formatMgToGrams(preset.mg)}) • MSRP: ${formatCents(presetMsrp)}${pricingMode === 'WHOLESALE' ? ` | Wholesale: ${formatCents(presetPrice)}` : ''}` : preset.label}
-                  style={{ position: 'relative', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minWidth: '58px' }}
-                >
-                  <span>{preset.label}</span>
-                  {presetPrice !== null && (
-                    <span style={{ fontSize: '10px', fontWeight: '500', opacity: 0.85, lineHeight: 1, marginTop: '2px' }}>
-                      {formatCents(presetPrice)}
-                    </span>
-                  )}
-                  {isTierSet && (
-                    <span
-                      className="tier-badge-dot"
-                      title="Fixed preset tier price active"
-                      style={{
-                        position: 'absolute',
-                        top: '3px',
-                        right: '3px',
-                        width: '6px',
-                        height: '6px',
-                        borderRadius: '50%',
-                        backgroundColor: 'var(--market-primary, #3b82f6)'
-                      }}
-                    />
-                  )}
+              {availableFinishes.length > 2 && (
+                <div className="pos-filter-pills">
+                  {availableFinishes.map(fin => (
+                    <button
+                      key={fin}
+                      type="button"
+                      className={`pos-filter-pill ${finishFilter === fin ? 'active' : ''}`}
+                      onClick={() => setFinishFilter(fin)}
+                    >
+                      {fin === 'ALL' ? 'All Finishes' : fin}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Pigment Catalog Grid */}
+            {filteredPigments.length === 0 ? (
+              <div className="card p-md text-center text-muted body-small">
+                No pigments match "{pigmentSearch}".{' '}
+                <button className="btn btn-ghost btn-xs" onClick={() => { setPigmentSearch(''); setFinishFilter('ALL'); }}>
+                  Reset filters
                 </button>
-              );
-            })}
-            <button className="weight-preset-btn active" onClick={handleCustomClick} style={{ minWidth: '58px' }}>
-              Custom
-            </button>
+              </div>
+            ) : (
+              <div className="grid-2col">
+                {filteredPigments.map(p => {
+                  const isSelected = selectedPigment && selectedPigment.pigment_id === p.pigment_id;
+                  const activeRate = pricingMode === 'WHOLESALE'
+                    ? p.wholesale_price_per_gram_cents
+                    : p.retail_price_per_gram_cents;
+                  const isLowStock = (p.stock_mg || 0) < 10000;
+
+                  return (
+                    <div
+                      key={p.pigment_id}
+                      className={`pigment-grid-card ${isSelected ? 'selected' : ''}`}
+                      onClick={() => setSelectedPigment(p)}
+                    >
+                      <div className="color-swatch" style={{ backgroundColor: p.color_code }}>
+                        {isSelected && <span className="swatch-check">✓</span>}
+                      </div>
+                      <div className="pigment-info">
+                        <div className="flex-between" style={{ gap: '6px' }}>
+                          <div className="pigment-name">{p.name}</div>
+                          <span className="pigment-rate-pill">{formatCents(activeRate)}/g</span>
+                        </div>
+                        <div className="flex-between mt-xs" style={{ alignItems: 'center' }}>
+                          <span className="pigment-finish">{p.finish_type || 'Standard'}</span>
+                          <span className={`pigment-stock ${isLowStock ? 'low-stock' : ''}`}>
+                            {isLowStock ? '⚠️ ' : ''}{formatMgToGrams(p.stock_mg)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* STEP 2: TAP WEIGHT TO ADD */}
+          <div className="pos-step-section mt-md">
+            <div className="pos-step-header">
+              <div className="flex-center gap-xs">
+                <span className="pos-step-badge">2</span>
+                <span className="pos-step-title">Tap Weight Tier to Add</span>
+              </div>
+              {selectedPigment && (
+                <div className="selected-pigment-chip">
+                  <span
+                    style={{
+                      width: '10px',
+                      height: '10px',
+                      borderRadius: '50%',
+                      backgroundColor: selectedPigment.color_code,
+                      display: 'inline-block',
+                      border: '1px solid rgba(0,0,0,0.2)'
+                    }}
+                  />
+                  <strong>{selectedPigment.name}</strong>
+                  <span className="text-muted">•</span>
+                  <span className="text-primary font-weight-bold">
+                    {formatCents(pricingMode === 'WHOLESALE' ? selectedPigment.wholesale_price_per_gram_cents : selectedPigment.retail_price_per_gram_cents)}/g
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="weight-presets">
+              {presets.map(preset => {
+                const isTierSet = hasTierOverride(preset.mg);
+                const presetPrice = selectedPigment ? getPresetPrice(preset.mg) : null;
+                const presetMsrp = selectedPigment ? calculateRecommendedMsrpCents(selectedPigment, preset.mg, priceTiers) : null;
+                return (
+                  <button
+                    key={preset.label}
+                    className={`weight-preset-btn ${isTierSet ? 'has-tier-override' : ''}`}
+                    onClick={() => handlePresetClick(preset.mg)}
+                    title={selectedPigment ? `${preset.label} (${formatMgToGrams(preset.mg)}) • MSRP: ${formatCents(presetMsrp)}${pricingMode === 'WHOLESALE' ? ` | Wholesale: ${formatCents(presetPrice)}` : ''}` : preset.label}
+                  >
+                    <span className="weight-preset-label">{preset.label}</span>
+                    {presetPrice !== null && (
+                      <span className="weight-preset-price">
+                        {formatCents(presetPrice)}
+                      </span>
+                    )}
+                    {isTierSet && (
+                      <span
+                        className="tier-badge-dot"
+                        title="Fixed preset tier price active"
+                      />
+                    )}
+                  </button>
+                );
+              })}
+              <button className="weight-preset-btn custom-btn" onClick={handleCustomClick}>
+                <span className="weight-preset-label">+ Custom</span>
+                <span className="weight-preset-price">Any g / $</span>
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Right Pane: Sticky Cart Summary & Action/Checkout Buttons */}
+        {/* Right Pane: Step 3 (Sticky Receipt Cart & Payment Actions) */}
         <div className="checkout-cart-pane">
-          <div className="cart-summary mb-md">
+          <div className="cart-summary">
             <div className="card-header">
-              <h3 className="title-medium">Cart</h3>
-              {cart.length > 0 && (
-                <button className="btn btn-ghost btn-sm text-error" onClick={clearCart}>
-                  Clear Cart
+              <div className="flex-center gap-xs">
+                <span className="pos-step-badge">3</span>
+                <h3 className="title-medium" style={{ margin: 0 }}>Order Receipt</h3>
+                {safeCart.length > 0 && (
+                  <span className="badge badge-info">
+                    {safeCart.length} {safeCart.length === 1 ? 'item' : 'items'} • {formatMgToGrams(totalWeightMg)}
+                  </span>
+                )}
+              </div>
+              {safeCart.length > 0 && (
+                <button className="btn btn-ghost btn-xs text-error" onClick={clearCart}>
+                  Clear All
                 </button>
               )}
             </div>
-            <div className="card-body">
+
+            <div className="card-body cart-items-scroll">
               {safeCart.length === 0 ? (
-                <div className="cart-empty">Cart is empty</div>
+                <div className="cart-empty">
+                  <div style={{ fontSize: '28px', marginBottom: '6px', opacity: 0.6 }}>🧾</div>
+                  <div style={{ fontWeight: 700, color: 'var(--market-text-primary)', marginBottom: '2px' }}>No items in cart yet</div>
+                  <div style={{ fontSize: '12px' }}>Select a pigment and tap any weight tier on the left to add items.</div>
+                </div>
               ) : (
                 safeCart.map((item, index) => (
                   <CartItem
@@ -364,6 +539,7 @@ export const CheckoutScreen = () => {
                     item={item}
                     index={index}
                     onRemove={() => removeFromCart(index)}
+                    updateCartItem={updateCartItem}
                     openModal={openModal}
                     priceTiers={priceTiers}
                   />
@@ -371,54 +547,66 @@ export const CheckoutScreen = () => {
               )}
             </div>
 
-            <div className="cart-margin">
-              <span>COGS: {formatCents(totalCogs)}</span>
-              <span>Rec. MSRP Total: <strong style={{ color: 'var(--market-text-primary)' }}>{formatCents(totalMsrp)}</strong></span>
-              <span>Est. Margin: <strong className="margin-value">{margin}%</strong></span>
-            </div>
-
-            {totalCharged < totalMsrp && (
-              <div style={{ padding: '0 var(--spacing-md) var(--spacing-xs)', fontSize: '11px', color: 'var(--market-green-primary)', fontWeight: '600', textAlign: 'right' }}>
-                🎉 Savings vs MSRP: {formatCents(totalMsrp - totalCharged)}
+            <div className="cart-receipt-footer">
+              <div className="cart-margin">
+                <span>COGS: <strong>{formatCents(totalCogs)}</strong></span>
+                <span>MSRP: <strong style={{ color: 'var(--market-text-primary)' }}>{formatCents(totalMsrp)}</strong></span>
+                <span>Margin: <strong className="margin-value">{margin}%</strong></span>
               </div>
-            )}
 
-            <div className="cart-total flex-between" style={{ alignItems: 'center' }}>
-              <div className="flex-center gap-xs">
-                <span>Total Transaction Price</span>
-                {safeCart.length > 0 && (
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => openModal('editCartTotal')}
-                    title="Set/override total transaction price"
-                    style={{ padding: '2px 8px', fontSize: '0.8rem', background: 'var(--market-surface-variant)', border: '1px solid var(--market-border)' }}
-                  >
-                    ✏️ Edit Total
-                  </button>
-                )}
-                {safeCart.length > 0 && (
-                  <button
-                    className="btn btn-ghost btn-sm text-muted"
-                    onClick={resetCartPrices}
-                    title="Reset line item prices to standard rates"
-                    style={{ padding: '2px 6px', fontSize: '0.75rem' }}
-                  >
-                    🔄 Reset
-                  </button>
-                )}
+              {totalCharged < totalMsrp && (
+                <div className="cart-savings-banner">
+                  🎉 Customer Saves {formatCents(totalMsrp - totalCharged)} vs. Retail MSRP
+                </div>
+              )}
+
+              <div className="cart-total flex-between">
+                <div className="flex-col" style={{ gap: '4px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--market-text-secondary)' }}>
+                    Total Due ({pricingMode})
+                  </span>
+                  {safeCart.length > 0 && (
+                    <div className="flex-center gap-xs" style={{ justifyContent: 'flex-start' }}>
+                      <button
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => openModal('editCartTotal')}
+                        title="Set/override total transaction price"
+                        style={{ background: 'var(--market-surface)', border: '1px solid var(--market-border)' }}
+                      >
+                        ✏️ Override Total
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-xs text-muted"
+                        onClick={resetCartPrices}
+                        title="Reset line item prices to standard rates"
+                      >
+                        🔄 Reset
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <span className="cart-total-amount">
+                  {formatCents(totalCharged)}
+                </span>
               </div>
-              <span style={{ fontSize: '1.4rem', fontWeight: '900', color: 'var(--market-green-primary)' }}>
-                {formatCents(totalCharged)}
-              </span>
             </div>
           </div>
 
           <div className="checkout-bottom-actions">
-            <button className="btn btn-collect-cash" onClick={quickCollectCash}>
-              💵 COLLECT CASH
+            <button
+              className="btn btn-collect-cash"
+              onClick={quickCollectCash}
+              disabled={safeCart.length === 0}
+            >
+              <span>💵 Collect Cash</span>
+              {safeCart.length > 0 && <span>({formatCents(totalCharged)})</span>}
             </button>
-            <button className="btn btn-primary btn-block" onClick={() => openModal('paymentDrawer')}>
-              Digital / Tab / Split
+            <button
+              className="btn btn-primary btn-block btn-lg"
+              onClick={() => openModal('paymentDrawer')}
+              disabled={safeCart.length === 0}
+            >
+              💳 Digital / House Tab / Split
             </button>
           </div>
         </div>
