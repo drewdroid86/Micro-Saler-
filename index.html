@@ -14,15 +14,67 @@
 </head>
 <body>
   <div id="root"></div>
-  <script type="module" src="/src/main.jsx"></script>
   <script>
+    window.__deferredPwaPrompt = null;
+    window.__pwaUpdateReady = false;
+    window.__swRegistration = null;
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      window.__deferredPwaPrompt = e;
+      window.dispatchEvent(new CustomEvent('pwa-install-available'));
+    });
+
+    window.addEventListener('appinstalled', () => {
+      window.__deferredPwaPrompt = null;
+      window.dispatchEvent(new CustomEvent('pwa-installed'));
+    });
+
     if ('serviceWorker' in navigator) {
+      const hadController = Boolean(navigator.serviceWorker.controller);
+
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'SW_ACTIVATED' && hadController) {
+          window.__pwaUpdateReady = true;
+          window.dispatchEvent(new CustomEvent('pwa-update-ready', { detail: event.data }));
+        }
+      });
+
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js')
-          .then(reg => console.log('PWA ServiceWorker registered:', reg.scope))
-          .catch(err => console.log('PWA ServiceWorker registration failed:', err));
+        navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+          .then((reg) => {
+            window.__swRegistration = reg;
+
+            if (reg.waiting && hadController) {
+              window.__pwaUpdateReady = true;
+              window.dispatchEvent(new CustomEvent('pwa-update-ready'));
+            }
+
+            reg.addEventListener('updatefound', () => {
+              const newWorker = reg.installing;
+              if (!newWorker) return;
+              newWorker.addEventListener('statechange', () => {
+                if ((newWorker.state === 'installed' || newWorker.state === 'activated') && hadController) {
+                  window.__pwaUpdateReady = true;
+                  window.dispatchEvent(new CustomEvent('pwa-update-ready'));
+                }
+              });
+            });
+
+            // Automatically check for new GitHub Pages deploys when returning to the Android app or reconnecting
+            document.addEventListener('visibilitychange', () => {
+              if (document.visibilityState === 'visible') {
+                reg.update().catch(() => {});
+              }
+            });
+            window.addEventListener('online', () => {
+              reg.update().catch(() => {});
+            });
+          })
+          .catch((err) => console.log('PWA ServiceWorker registration failed:', err));
       });
     }
   </script>
+  <script type="module" src="/src/main.jsx"></script>
 </body>
 </html>

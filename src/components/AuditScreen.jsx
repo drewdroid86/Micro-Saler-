@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { usePos } from '../context/PosContext';
+import { formatCents } from '../repository';
 
 function formatDate(timestamp) {
   if (!timestamp) return '';
@@ -14,12 +15,130 @@ function formatDate(timestamp) {
 }
 
 export const AuditScreen = () => {
-  const { auditLogs, openModal, showToast } = usePos();
-  const safeLogs = auditLogs || [];
+  const {
+    auditLogs,
+    sales,
+    saleItems,
+    salePayments,
+    customers,
+    returns,
+    pigments,
+    openModal,
+    showToast
+  } = usePos();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [actionFilter, setActionFilter] = useState('ALL'); // 'ALL' | 'SECURITY' | 'CUSTOMER' | 'INVENTORY' | 'SALE'
   const [selectedAuditIndex, setSelectedAuditIndex] = useState(0);
+
+  // Merge persisted audit_log entries with synthesized entries for any historical sales/returns
+  // that were recorded before COMPLETE_SALE / PROCESS_RETURN audit logging was enabled.
+  const safeLogs = useMemo(() => {
+    const rawLogs = [...(auditLogs || [])];
+    const loggedCompleteSaleIds = new Set();
+    const loggedVoidSaleIds = new Set();
+    const loggedReturnIds = new Set();
+
+    for (const log of rawLogs) {
+      const act = (log.action || '').toUpperCase();
+      if (act === 'COMPLETE_SALE') {
+        loggedCompleteSaleIds.add(Number(log.entity_id));
+      } else if (act === 'VOID_SALE') {
+        loggedVoidSaleIds.add(Number(log.entity_id));
+      } else if (act === 'PROCESS_RETURN') {
+        try {
+          const det = typeof log.details_json === 'string' ? JSON.parse(log.details_json) : (log.details || {});
+          if (det.return_id) loggedReturnIds.add(Number(det.return_id));
+        } catch (e) {
+          // ignore malformed JSON
+        }
+      }
+    }
+
+    for (const s of (sales || [])) {
+      const sId = Number(s.sale_id);
+      if (!loggedCompleteSaleIds.has(sId)) {
+        const cust = (customers || []).find(c => Number(c.customer_id) === Number(s.customer_id));
+        const items = (saleItems || []).filter(si => Number(si.sale_id) === sId);
+        const payments = (salePayments || []).filter(sp => Number(sp.sale_id) === sId);
+        const ts = s.created_at || s.timestamp || 0;
+        rawLogs.push({
+          audit_id: `SALE_${sId}`,
+          entity_type: 'Sale',
+          entity_id: sId,
+          action: 'COMPLETE_SALE',
+          details_json: JSON.stringify({
+            sale_id: sId,
+            customer_id: s.customer_id || null,
+            customer_name: cust ? cust.name : 'Walk-in',
+            pricing_mode: s.pricing_mode || s.sale_type || 'RETAIL',
+            total_amount_cents: s.total_amount_cents,
+            total_cogs_cents: s.total_cogs_cents,
+            status: s.status || 'COMPLETED',
+            items: items.map(i => ({
+              pigment_id: i.pigment_id,
+              pigment_name: i.pigment_name || ((pigments || []).find(p => Number(p.pigment_id) === Number(i.pigment_id))?.name) || `Pigment #${i.pigment_id}`,
+              weight_mg: i.weight_mg,
+              price_charged_cents: i.price_charged_cents,
+              unit_cogs_cents: i.unit_cogs_cents,
+            })),
+            payments: payments.map(p => ({
+              payment_type: p.payment_type,
+              digital_provider: p.digital_provider || null,
+              amount_cents: p.amount_cents,
+            })),
+          }),
+          created_at: ts,
+          timestamp: ts,
+        });
+      }
+
+      if (s.status === 'VOIDED' && !loggedVoidSaleIds.has(sId)) {
+        const ts = s.updated_at || (s.created_at ? s.created_at + 1 : 0);
+        rawLogs.push({
+          audit_id: `VOID_${sId}`,
+          entity_type: 'Sale',
+          entity_id: sId,
+          action: 'VOID_SALE',
+          details_json: JSON.stringify({
+            sale_id: sId,
+            reason: s.void_reason || 'Voided',
+          }),
+          created_at: ts,
+          timestamp: ts,
+        });
+      }
+    }
+
+    for (const r of (returns || [])) {
+      const rId = Number(r.return_id || r.id);
+      if (rId && !loggedReturnIds.has(rId)) {
+        const si = (saleItems || []).find(i => Number(i.sale_item_id || i.id) === Number(r.sale_item_id));
+        const ts = r.created_at || r.timestamp || 0;
+        rawLogs.push({
+          audit_id: `RETURN_${rId}`,
+          entity_type: 'Sale',
+          entity_id: si?.sale_id || r.sale_item_id,
+          action: 'PROCESS_RETURN',
+          details_json: JSON.stringify({
+            return_id: rId,
+            sale_id: si?.sale_id || null,
+            sale_item_id: r.sale_item_id,
+            pigment_id: si?.pigment_id || null,
+            pigment_name: si?.pigment_name || null,
+            mg_returned: r.mg_returned,
+            refund_amount_cents: r.refund_amount_cents,
+            restock_to_inventory: Boolean(r.restock_to_inventory),
+            reason: r.reason || '',
+          }),
+          created_at: ts,
+          timestamp: ts,
+        });
+      }
+    }
+
+    return rawLogs.sort((a, b) => (b.created_at || b.timestamp || 0) - (a.created_at || a.timestamp || 0));
+  }, [auditLogs, sales, saleItems, salePayments, customers, returns, pigments]);
 
   // Filtered audit logs
   const filteredLogs = useMemo(() => {
@@ -220,6 +339,55 @@ export const AuditScreen = () => {
                       <span className="text-muted">Entity ID:</span> <strong>{selectedLog.entity_id}</strong>
                     </div>
                   </div>
+
+                  {selectedLog.entity_type === 'Sale' && (() => {
+                    const matchedSale = (sales || []).find(s => Number(s.sale_id) === Number(selectedLog.entity_id));
+                    if (!matchedSale) return null;
+                    const matchedCustomer = (customers || []).find(c => Number(c.customer_id) === Number(matchedSale.customer_id));
+                    const matchedItems = (saleItems || []).filter(si => Number(si.sale_id) === Number(matchedSale.sale_id));
+                    const matchedPayments = (salePayments || []).filter(sp => Number(sp.sale_id) === Number(matchedSale.sale_id));
+
+                    return (
+                      <div className="mt-sm pt-sm flex-between" style={{ borderTop: '1px solid var(--market-border)', flexWrap: 'wrap', gap: '8px' }}>
+                        <div className="body-small">
+                          <strong>{matchedCustomer ? matchedCustomer.name : 'Walk-in'}</strong> &bull; Total: <strong className="text-primary">{formatCents(matchedSale.total_amount_cents)}</strong> ({matchedSale.status || 'COMPLETED'})
+                        </div>
+                        <div className="flex-center gap-xs">
+                          <button
+                            className="btn btn-secondary btn-xs"
+                            onClick={() => openModal('receiptModal', {
+                              sale: matchedSale,
+                              items: matchedItems,
+                              customer: matchedCustomer,
+                              payments: matchedPayments
+                            })}
+                          >
+                            🖨️ Receipt
+                          </button>
+                          {matchedSale.status !== 'VOIDED' && (
+                            <button
+                              className="btn btn-primary btn-xs"
+                              onClick={() => openModal('correctSale', {
+                                sale: matchedSale,
+                                items: matchedItems,
+                                payments: matchedPayments
+                              })}
+                            >
+                              ✏️ Correct Sale
+                            </button>
+                          )}
+                          {(matchedSale.status === 'COMPLETED' || !matchedSale.status) && (
+                            <button
+                              className="btn btn-danger btn-xs"
+                              onClick={() => openModal('voidSale', matchedSale)}
+                            >
+                              🚫 Void
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Raw Structured JSON Payload */}

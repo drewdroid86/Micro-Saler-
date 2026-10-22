@@ -550,13 +550,14 @@ export class PosRepository {
     }
 
     return await this.db.runTransaction(
-      ['pigments', 'stock_receipts', 'suppliers', 'supplier_payments'],
+      ['pigments', 'stock_receipts', 'suppliers', 'supplier_payments', 'audit_log'],
       'readwrite',
       async (tx) => {
         const pigmentsStore = tx.objectStore('pigments');
         const receiptsStore = tx.objectStore('stock_receipts');
         const suppliersStore = tx.objectStore('suppliers');
         const suppPayStore = tx.objectStore('supplier_payments');
+        const auditStore = tx.objectStore('audit_log');
 
         const pigment = await new Promise((resolve, reject) => {
           const req = pigmentsStore.get(pId);
@@ -614,6 +615,25 @@ export class PosRepository {
             created_at: Date.now(),
           });
         }
+
+        const now = Date.now();
+        auditStore.add({
+          entity_type: 'StockReceipt',
+          entity_id: receiptId,
+          action: 'RESTOCK_PIGMENT',
+          details_json: JSON.stringify({
+            receipt_id: receiptId,
+            pigment_id: pId,
+            pigment_name: pigment.name,
+            received_mg: receivedMg,
+            total_cost_cents: totalCostCents,
+            supplier_name: supplierName || '',
+            supplier_id: sId,
+            payment_status: statusLabel,
+          }),
+          created_at: now,
+          timestamp: now,
+        });
 
         return receiptId;
       }
@@ -807,9 +827,10 @@ export class PosRepository {
 
   async logShrinkage(pigmentId, mgLost, reason) {
     const pId = Number(pigmentId);
-    return await this.db.runTransaction(['pigments', 'shrinkage_logs'], 'readwrite', async (tx) => {
+    return await this.db.runTransaction(['pigments', 'shrinkage_logs', 'audit_log'], 'readwrite', async (tx) => {
       const pigmentsStore = tx.objectStore('pigments');
       const shrinkageStore = tx.objectStore('shrinkage_logs');
+      const auditStore = tx.objectStore('audit_log');
 
       const pigment = await new Promise((resolve, reject) => {
         const req = pigmentsStore.get(pId);
@@ -828,6 +849,7 @@ export class PosRepository {
       pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - cogsLossCents);
       pigmentsStore.put(pigment);
 
+      const now = Date.now();
       const logId = await new Promise((resolve, reject) => {
         const req = shrinkageStore.add({
           pigment_id: pId,
@@ -835,11 +857,28 @@ export class PosRepository {
           weight_mg: mgLost,
           cogs_loss_cents: cogsLossCents,
           reason,
-          created_at: Date.now(),
+          created_at: now,
         });
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
+
+      auditStore.add({
+        entity_type: 'Shrinkage',
+        entity_id: logId,
+        action: 'LOG_SHRINKAGE',
+        details_json: JSON.stringify({
+          shrinkage_id: logId,
+          pigment_id: pId,
+          pigment_name: pigment.name,
+          mg_lost: mgLost,
+          cogs_loss_cents: cogsLossCents,
+          reason,
+        }),
+        created_at: now,
+        timestamp: now,
+      });
+
       return logId;
     });
   }
@@ -1103,6 +1142,35 @@ export class PosRepository {
         }
       }
 
+      auditStore.add({
+        entity_type: 'Sale',
+        entity_id: createdSaleId,
+        action: 'COMPLETE_SALE',
+        details_json: JSON.stringify({
+          sale_id: createdSaleId,
+          customer_id: customerId ? Number(customerId) : null,
+          customer_name: customerObj ? customerObj.name : 'Walk-in',
+          pricing_mode: (pricingMode || 'RETAIL').toUpperCase(),
+          total_amount_cents: totalSaleAmountCents,
+          total_cogs_cents: calculatedTotalCogsCents,
+          is_credit_override: Boolean(isCreditOverride),
+          items: processedItems.map(i => ({
+            pigment_id: Number(i.pigment_id),
+            pigment_name: i.pigment_name,
+            weight_mg: i.weight_mg,
+            price_charged_cents: i.price_charged_cents,
+            unit_cogs_cents: i.liveUnitCogs,
+          })),
+          payments: safePayments.map(p => ({
+            payment_type: p.payment_type,
+            digital_provider: p.digital_provider || null,
+            amount_cents: p.amount_cents,
+          })),
+        }),
+        created_at: now,
+        timestamp: now,
+      });
+
       if (isCreditOverride) {
         auditStore.add({
           entity_type: 'Sale',
@@ -1124,7 +1192,7 @@ export class PosRepository {
     }
     const siId = Number(saleItemId);
     return await this.db.runTransaction(
-      ['sales', 'sale_items', 'sale_payments', 'returns', 'pigments', 'customers', 'customer_ledger'],
+      ['sales', 'sale_items', 'sale_payments', 'returns', 'pigments', 'customers', 'customer_ledger', 'audit_log'],
       'readwrite',
       async (tx) => {
         const salesStore = tx.objectStore('sales');
@@ -1132,6 +1200,7 @@ export class PosRepository {
         const salePaymentsStore = tx.objectStore('sale_payments');
         const returnsStore = tx.objectStore('returns');
         const pigmentsStore = tx.objectStore('pigments');
+        const auditStore = tx.objectStore('audit_log');
 
         const saleItem = await new Promise((resolve, reject) => {
           const req = saleItemsStore.get(siId);
@@ -1242,6 +1311,26 @@ export class PosRepository {
             }
           }
         }
+
+        const now = Date.now();
+        auditStore.add({
+          entity_type: 'Sale',
+          entity_id: saleItem.sale_id || siId,
+          action: 'PROCESS_RETURN',
+          details_json: JSON.stringify({
+            return_id: returnId,
+            sale_id: saleItem.sale_id || null,
+            sale_item_id: siId,
+            pigment_id: saleItem.pigment_id,
+            pigment_name: saleItem.pigment_name || null,
+            mg_returned: mgReturned,
+            refund_amount_cents: proportionalRefundCents,
+            restock_to_inventory: Boolean(restockToInventory),
+            reason,
+          }),
+          created_at: now,
+          timestamp: now,
+        });
 
         return returnId;
       }
@@ -1382,6 +1471,481 @@ export class PosRepository {
           created_at: now,
           timestamp: now,
         });
+      }
+    );
+  }
+
+  /**
+   * Atomically corrects a completed sale:
+   * - Reconciles inventory stock_mg & WAC total_cost_cents for modified/added/removed line items
+   * - Updates sale_items (preserving existing sale_item_id keys so returns stay linked)
+   * - Replaces sale_payments (with merchant fee calculation)
+   * - Reconciles customer HOUSE_TAB & STORE_CREDIT ledger entries via _applyLedgerEntryInTx
+   * - Updates the sales record and writes a CORRECT_SALE entry to audit_log
+   */
+  async correctSale(saleId, {
+    customerId = undefined,
+    pricingMode = undefined,
+    items = undefined,
+    payments = undefined,
+    reason = 'Sale correction',
+    isCreditOverride = false
+  } = {}) {
+    const sId = Number(saleId);
+    const sale = await this.db.getById('sales', sId);
+    if (!sale) throw new Error(`Sale #${saleId} not found.`);
+    if (sale.status === 'VOIDED') throw new Error(`Cannot correct voided Sale #${saleId}.`);
+
+    const preOldItems = await this.db.getAllByIndex('sale_items', 'sale_id', sId);
+    const preOldPayments = await this.db.getAllByIndex('sale_payments', 'sale_id', sId);
+
+    const nextCustomerId = customerId !== undefined
+      ? (customerId ? Number(customerId) : null)
+      : (sale.customer_id ? Number(sale.customer_id) : null);
+    const nextPricingMode = (pricingMode || sale.pricing_mode || sale.sale_type || 'RETAIL').toUpperCase();
+    const nextItems = Array.isArray(items) ? items : preOldItems;
+    const nextPaymentsRaw = Array.isArray(payments) ? payments : preOldPayments;
+
+    const totalSaleAmountCents = nextItems.reduce((sum, i) => sum + (Number(i.price_charged_cents) || 0), 0);
+    const totalPaymentsCents = nextPaymentsRaw.reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+
+    const validation = validateCompletedSale({
+      sale: { total_amount_cents: totalSaleAmountCents },
+      items: nextItems,
+      payments: nextPaymentsRaw,
+      customerId: nextCustomerId
+    });
+    if (!validation.isValid) {
+      throw new Error(`Sale correction validation failed: ${validation.errors.join(' ')}`);
+    }
+
+    const discrepancy = totalSaleAmountCents - totalPaymentsCents;
+    const safePayments = nextPaymentsRaw.map(p => ({ ...p, amount_cents: Number(p.amount_cents) || 0 }));
+    if (Math.abs(discrepancy) === 1 && safePayments.length > 0) {
+      const targetIdx = safePayments.findIndex(p => p.payment_type !== 'HOUSE_TAB' && (p.amount_cents + discrepancy) > 0);
+      const adjIdx = targetIdx !== -1 ? targetIdx : safePayments.length - 1;
+      safePayments[adjIdx].amount_cents += discrepancy;
+    }
+
+    const hasHouseTab = safePayments.some(p => p.payment_type === 'HOUSE_TAB');
+    const hasStoreCredit = safePayments.some(p => p.payment_type === 'STORE_CREDIT' || p.payment_type === 'PREPAID_DELIVERY');
+    if ((hasHouseTab || hasStoreCredit) && !nextCustomerId) {
+      throw new Error('Customer is required for HOUSE_TAB or STORE_CREDIT payment');
+    }
+
+    if (hasHouseTab) {
+      const customer = await this.db.getById('customers', nextCustomerId);
+      if (!customer) throw new Error(`Customer ${nextCustomerId} not found`);
+
+      const newTabAmount = safePayments
+        .filter(p => p.payment_type === 'HOUSE_TAB')
+        .reduce((sum, p) => sum + p.amount_cents, 0);
+      const oldTabForThisCustomer = (sale.customer_id && Number(sale.customer_id) === nextCustomerId)
+        ? preOldPayments.filter(p => p.payment_type === 'HOUSE_TAB').reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0)
+        : 0;
+      const additionalTabRequested = Math.max(0, newTabAmount - oldTabForThisCustomer);
+
+      if (additionalTabRequested > 0) {
+        const netExposureCents = await this.getCustomerTotalExposure(nextCustomerId);
+        const creditLimitCents = Number(customer.credit_limit_cents) || 0;
+        const availableCredit = creditLimitCents - netExposureCents;
+
+        if (additionalTabRequested > availableCredit && !isCreditOverride) {
+          throw new Error(`Credit limit exceeded. Available: $${(availableCredit / 100).toFixed(2)}, Additional Tab Requested: $${(additionalTabRequested / 100).toFixed(2)}. Enable Handshake Override.`);
+        }
+      }
+    }
+
+    const now = Date.now();
+
+    return await this.db.runTransaction(
+      ['sales', 'sale_items', 'sale_payments', 'pigments', 'customers', 'customer_ledger', 'returns', 'audit_log'],
+      'readwrite',
+      async (tx) => {
+        const salesStore = tx.objectStore('sales');
+        const saleItemsStore = tx.objectStore('sale_items');
+        const salePaymentsStore = tx.objectStore('sale_payments');
+        const pigmentsStore = tx.objectStore('pigments');
+        const returnsStore = tx.objectStore('returns');
+        const auditStore = tx.objectStore('audit_log');
+
+        const currentSale = await new Promise((resolve, reject) => {
+          const req = salesStore.get(sId);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        if (!currentSale) throw new Error(`Sale #${saleId} not found.`);
+        if (currentSale.status === 'VOIDED') throw new Error(`Cannot correct voided Sale #${saleId}.`);
+
+        const currentOldItems = await new Promise((resolve, reject) => {
+          const req = saleItemsStore.index('sale_id').getAll(sId);
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+
+        const currentOldPayments = await new Promise((resolve, reject) => {
+          const req = salePaymentsStore.index('sale_id').getAll(sId);
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+
+        // 1. Check returns on existing items so we never orphan or under-weight returned items
+        const returnsByOldItemId = new Map();
+        const oldItemsById = new Map();
+        for (const oldItem of currentOldItems) {
+          const oldKey = Number(oldItem.sale_item_id || oldItem.id);
+          oldItemsById.set(oldKey, oldItem);
+          const itemReturns = await new Promise((resolve, reject) => {
+            const req = returnsStore.index('sale_item_id').getAll(oldKey);
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+          });
+          const alreadyReturnedMg = itemReturns.reduce((sum, r) => sum + (Number(r.mg_returned) || 0), 0);
+          returnsByOldItemId.set(oldKey, alreadyReturnedMg);
+        }
+
+        // Validate that items with existing returns are not removed or reduced below returned weight
+        for (const oldItem of currentOldItems) {
+          const oldKey = Number(oldItem.sale_item_id || oldItem.id);
+          const alreadyReturnedMg = returnsByOldItemId.get(oldKey) || 0;
+          if (alreadyReturnedMg > 0) {
+            const matchedNew = nextItems.find(ni => Number(ni.sale_item_id || ni.id) === oldKey);
+            if (!matchedNew) {
+              throw new Error(`Cannot remove item "${oldItem.pigment_name || `#${oldItem.pigment_id}`}" because ${formatMgToGrams(alreadyReturnedMg)} has already been returned.`);
+            }
+            if (Number(matchedNew.pigment_id) !== Number(oldItem.pigment_id)) {
+              throw new Error(`Cannot change pigment on item "${oldItem.pigment_name || `#${oldItem.pigment_id}`}" because ${formatMgToGrams(alreadyReturnedMg)} has already been returned.`);
+            }
+            if ((Number(matchedNew.weight_mg) || 0) < alreadyReturnedMg) {
+              throw new Error(`Cannot reduce weight of "${oldItem.pigment_name || `#${oldItem.pigment_id}`}" below already returned weight (${formatMgToGrams(alreadyReturnedMg)}).`);
+            }
+          }
+        }
+
+        // 2. Load all affected pigments into a single in-transaction cache
+        const allPigmentIds = new Set();
+        for (const oi of currentOldItems) {
+          const pId = Number(oi.pigment_id);
+          if (pId > 0) allPigmentIds.add(pId);
+        }
+        for (const ni of nextItems) {
+          const pId = Number(ni.pigment_id);
+          if (pId > 0) allPigmentIds.add(pId);
+        }
+
+        const pigmentCache = new Map();
+        for (const pId of allPigmentIds) {
+          const pigment = await new Promise((resolve, reject) => {
+            const req = pigmentsStore.get(pId);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          if (pigment) {
+            pigmentCache.set(pId, pigment);
+          }
+        }
+
+        // 3. Step A: Restore old items' net weight and net COGS back to pigments in memory
+        for (const oldItem of currentOldItems) {
+          const pId = Number(oldItem.pigment_id);
+          if (pId > 0) {
+            const pigment = pigmentCache.get(pId);
+            const oldKey = Number(oldItem.sale_item_id || oldItem.id);
+            const alreadyReturnedMg = returnsByOldItemId.get(oldKey) || 0;
+            const oldWeightMg = Number(oldItem.weight_mg) || 0;
+            const netOldMg = Math.max(0, oldWeightMg - alreadyReturnedMg);
+            const netOldCogs = oldWeightMg > 0
+              ? Math.round(((Number(oldItem.unit_cogs_cents) || 0) / oldWeightMg) * netOldMg)
+              : 0;
+            if (pigment && netOldMg > 0) {
+              pigment.stock_mg += netOldMg;
+              pigment.total_cost_cents += netOldCogs;
+            }
+          }
+        }
+
+        // 4. Step B: Validate stock for new items against restored pigment balances
+        const requestedNetByPigment = new Map();
+        for (const item of nextItems) {
+          const pId = Number(item.pigment_id);
+          if (pId > 0) {
+            const existingKey = Number(item.sale_item_id || item.id);
+            const alreadyReturnedMg = existingKey ? (returnsByOldItemId.get(existingKey) || 0) : 0;
+            const itemWeightMg = Number(item.weight_mg) || 0;
+            const netRequestedMg = Math.max(0, itemWeightMg - alreadyReturnedMg);
+            requestedNetByPigment.set(pId, (requestedNetByPigment.get(pId) || 0) + netRequestedMg);
+          }
+        }
+
+        for (const [pId, totalNetRequested] of requestedNetByPigment.entries()) {
+          const pigment = pigmentCache.get(pId);
+          if (!pigment) {
+            tx.abort();
+            throw new Error(`Pigment #${pId} not found in database.`);
+          }
+          if (pigment.stock_mg < totalNetRequested) {
+            tx.abort();
+            throw new Error(`Insufficient stock for ${pigment.name}. Available: ${formatMgToGrams(pigment.stock_mg)}, Requested: ${formatMgToGrams(totalNetRequested)}.`);
+          }
+        }
+
+        // 5. Compute live WAC COGS and deduct net weight & net COGS from pigmentCache
+        let calculatedTotalCogsCents = 0;
+        const processedItems = [];
+        const keptOldItemIds = new Set();
+
+        for (const item of nextItems) {
+          const pId = Number(item.pigment_id);
+          const itemWeightMg = Number(item.weight_mg) || 0;
+          const itemPriceCents = Number(item.price_charged_cents) || 0;
+          const existingKey = Number(item.sale_item_id || item.id);
+          const hasExistingOldItem = Boolean(existingKey && oldItemsById.has(existingKey));
+          const alreadyReturnedMg = hasExistingOldItem ? (returnsByOldItemId.get(existingKey) || 0) : 0;
+          const netNewMg = Math.max(0, itemWeightMg - alreadyReturnedMg);
+
+          let liveUnitCogs = Number(item.unit_cogs_cents) || 0;
+          let pName = item.pigment?.name || item.pigment_name || null;
+
+          if (pId > 0) {
+            const pigment = pigmentCache.get(pId);
+            if (pigment) {
+              if (!pName) pName = pigment.name;
+              const netCogsDeduction = pigment.stock_mg > 0 ? calcWacCogs(pigment, netNewMg) : 0;
+              liveUnitCogs = alreadyReturnedMg > 0 && itemWeightMg > 0
+                ? Math.round((netCogsDeduction / Math.max(1, netNewMg)) * itemWeightMg)
+                : netCogsDeduction;
+
+              pigment.stock_mg = Math.max(0, pigment.stock_mg - netNewMg);
+              pigment.total_cost_cents = Math.max(0, pigment.total_cost_cents - netCogsDeduction);
+            }
+          }
+
+          calculatedTotalCogsCents += liveUnitCogs;
+
+          if (hasExistingOldItem) {
+            keptOldItemIds.add(existingKey);
+            const oldRecord = oldItemsById.get(existingKey);
+            const updatedItem = {
+              ...oldRecord,
+              sale_id: sId,
+              pigment_id: pId,
+              pigment_name: pName || (pId > 0 ? `Pigment #${pId}` : 'Credit / Prepayment'),
+              weight_mg: itemWeightMg,
+              price_charged_cents: itemPriceCents,
+              unit_cogs_cents: liveUnitCogs,
+            };
+            saleItemsStore.put(updatedItem);
+            processedItems.push({ ...updatedItem, liveUnitCogs });
+          } else {
+            const newRecord = {
+              sale_id: sId,
+              pigment_id: pId,
+              pigment_name: pName || (pId > 0 ? `Pigment #${pId}` : 'Credit / Prepayment'),
+              weight_mg: itemWeightMg,
+              price_charged_cents: itemPriceCents,
+              unit_cogs_cents: liveUnitCogs,
+            };
+            const newItemId = await new Promise((resolve, reject) => {
+              const req = saleItemsStore.add(newRecord);
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => reject(req.error);
+            });
+            processedItems.push({ ...newRecord, sale_item_id: newItemId, liveUnitCogs });
+          }
+        }
+
+        // Delete any old sale_items that were removed in the correction
+        for (const oldItem of currentOldItems) {
+          const oldKey = Number(oldItem.sale_item_id || oldItem.id);
+          if (!keptOldItemIds.has(oldKey)) {
+            saleItemsStore.delete(oldKey);
+          }
+        }
+
+        // Persist updated pigments
+        for (const pigment of pigmentCache.values()) {
+          pigmentsStore.put(pigment);
+        }
+
+        // 6. Replace sale_payments
+        for (const op of currentOldPayments) {
+          const payKey = op.payment_id || op.id;
+          if (payKey !== undefined) {
+            salePaymentsStore.delete(payKey);
+          }
+        }
+
+        const persistedPayments = [];
+        for (const payment of safePayments) {
+          const calculatedFee = payment.merchant_fee_cents !== undefined && payment.merchant_fee_cents !== null
+            ? Number(payment.merchant_fee_cents) || 0
+            : (payment.payment_type === 'DIGITAL' ? calculateMerchantFeeCents(payment.digital_provider, payment.amount_cents) : 0);
+
+          const payRecord = {
+            sale_id: sId,
+            payment_type: payment.payment_type,
+            digital_provider: payment.digital_provider || null,
+            amount_cents: payment.amount_cents,
+            merchant_fee_cents: calculatedFee,
+          };
+          salePaymentsStore.add(payRecord);
+          persistedPayments.push(payRecord);
+        }
+
+        // 7. Reconcile customer ledger & balances via _applyLedgerEntryInTx
+        const oldCustId = currentSale.customer_id ? Number(currentSale.customer_id) : null;
+        const newCustId = nextCustomerId ? Number(nextCustomerId) : null;
+
+        const oldTabCents = currentOldPayments
+          .filter(p => p.payment_type === 'HOUSE_TAB')
+          .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+        const oldCreditCents = currentOldPayments
+          .filter(p => p.payment_type === 'STORE_CREDIT' || p.payment_type === 'PREPAID_DELIVERY')
+          .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+
+        const newTabCents = persistedPayments
+          .filter(p => p.payment_type === 'HOUSE_TAB')
+          .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+        const newCreditCents = persistedPayments
+          .filter(p => p.payment_type === 'STORE_CREDIT' || p.payment_type === 'PREPAID_DELIVERY')
+          .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0);
+
+        if (oldCustId && newCustId && oldCustId === newCustId) {
+          const tabDeltaCents = newTabCents - oldTabCents;
+          if (tabDeltaCents !== 0) {
+            await this._applyLedgerEntryInTx(tx, {
+              customerId: newCustId,
+              amountCents: -tabDeltaCents,
+              type: 'SALE_CORRECTION_TAB',
+              description: `House tab adjustment for corrected Sale #${sId} (${reason || 'Sale correction'})`,
+              saleId: sId,
+              timestamp: now,
+            });
+          }
+
+          const creditDeltaCents = newCreditCents - oldCreditCents;
+          if (creditDeltaCents !== 0) {
+            await this._applyLedgerEntryInTx(tx, {
+              customerId: newCustId,
+              amountCents: -creditDeltaCents,
+              type: 'SALE_CORRECTION_CREDIT',
+              description: `Store credit adjustment for corrected Sale #${sId} (${reason || 'Sale correction'})`,
+              saleId: sId,
+              timestamp: now,
+            });
+          }
+        } else {
+          if (oldCustId) {
+            if (oldTabCents > 0) {
+              await this._applyLedgerEntryInTx(tx, {
+                customerId: oldCustId,
+                amountCents: oldTabCents,
+                type: 'SALE_CORRECTION_REVERSAL',
+                description: `House tab reversed (Sale #${sId} reassigned): ${reason || 'Sale correction'}`,
+                saleId: sId,
+                timestamp: now,
+              });
+            }
+            if (oldCreditCents > 0) {
+              await this._applyLedgerEntryInTx(tx, {
+                customerId: oldCustId,
+                amountCents: oldCreditCents,
+                type: 'SALE_CORRECTION_CREDIT_REFUND',
+                description: `Store credit restored (Sale #${sId} reassigned): ${reason || 'Sale correction'}`,
+                saleId: sId,
+                timestamp: now,
+              });
+            }
+          }
+          if (newCustId) {
+            if (newTabCents > 0) {
+              await this._applyLedgerEntryInTx(tx, {
+                customerId: newCustId,
+                amountCents: -newTabCents,
+                type: 'SALE_CORRECTION_TAB',
+                description: `House tab charge for corrected Sale #${sId} (${reason || 'Sale correction'})`,
+                saleId: sId,
+                timestamp: now,
+              });
+            }
+            if (newCreditCents > 0) {
+              await this._applyLedgerEntryInTx(tx, {
+                customerId: newCustId,
+                amountCents: -newCreditCents,
+                type: 'SALE_CORRECTION_CREDIT',
+                description: `Store credit applied to corrected Sale #${sId} (${reason || 'Sale correction'})`,
+                saleId: sId,
+                timestamp: now,
+              });
+            }
+          }
+        }
+
+        // 8. Update sales record
+        const beforeSnapshot = {
+          customer_id: oldCustId,
+          pricing_mode: currentSale.pricing_mode || currentSale.sale_type || 'RETAIL',
+          total_amount_cents: currentSale.total_amount_cents,
+          total_cogs_cents: currentSale.total_cogs_cents,
+          items: currentOldItems.map(i => ({
+            sale_item_id: i.sale_item_id || i.id,
+            pigment_id: i.pigment_id,
+            pigment_name: i.pigment_name,
+            weight_mg: i.weight_mg,
+            price_charged_cents: i.price_charged_cents,
+            unit_cogs_cents: i.unit_cogs_cents,
+          })),
+          payments: currentOldPayments.map(p => ({
+            payment_type: p.payment_type,
+            digital_provider: p.digital_provider || null,
+            amount_cents: p.amount_cents,
+            merchant_fee_cents: p.merchant_fee_cents || 0,
+          })),
+        };
+
+        currentSale.customer_id = newCustId;
+        currentSale.sale_type = nextPricingMode;
+        currentSale.pricing_mode = nextPricingMode;
+        currentSale.total_amount_cents = totalSaleAmountCents;
+        currentSale.total_cogs_cents = calculatedTotalCogsCents;
+        currentSale.is_credit_override = Boolean(isCreditOverride || currentSale.is_credit_override);
+        currentSale.needs_reconciliation = false;
+        currentSale.reconciliation_status = 'RECONCILED';
+        currentSale.updated_at = now;
+        currentSale.last_correction_reason = reason || 'Sale correction';
+        salesStore.put(currentSale);
+
+        const afterSnapshot = {
+          customer_id: newCustId,
+          pricing_mode: nextPricingMode,
+          total_amount_cents: totalSaleAmountCents,
+          total_cogs_cents: calculatedTotalCogsCents,
+          items: processedItems.map(i => ({
+            sale_item_id: i.sale_item_id || i.id || null,
+            pigment_id: Number(i.pigment_id),
+            pigment_name: i.pigment_name,
+            weight_mg: i.weight_mg,
+            price_charged_cents: i.price_charged_cents,
+            unit_cogs_cents: i.liveUnitCogs,
+          })),
+          payments: persistedPayments,
+        };
+
+        auditStore.add({
+          entity_type: 'Sale',
+          entity_id: sId,
+          action: 'CORRECT_SALE',
+          details_json: JSON.stringify({
+            sale_id: sId,
+            reason: reason || 'Sale correction',
+            before: beforeSnapshot,
+            after: afterSnapshot,
+          }),
+          created_at: now,
+          timestamp: now,
+        });
+
+        return currentSale;
       }
     );
   }
@@ -1620,6 +2184,12 @@ export class PosRepository {
             ? `Prepayment Deposit`
             : entry.type === 'SALE_VOID_REVERSAL'
             ? `Void Sale Reversal`
+            : entry.type === 'SALE_VOID_CREDIT_REFUND'
+            ? `Void Sale Credit Refund`
+            : entry.type === 'SALE_CORRECTION_TAB' || entry.type === 'SALE_CORRECTION_REVERSAL'
+            ? `Sale #${String(entry.sale_id || '').substring(0, 6)} Tab Correction`
+            : entry.type === 'SALE_CORRECTION_CREDIT' || entry.type === 'SALE_CORRECTION_CREDIT_REFUND'
+            ? `Sale #${String(entry.sale_id || '').substring(0, 6)} Credit Correction`
             : `Balance Adjustment`,
           formatted_amount: isCredit ? `+${formatCents(entry.amount_cents)}` : formatCents(entry.amount_cents)
         };

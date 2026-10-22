@@ -2,8 +2,19 @@ const CACHE_NAME = 'microsaler-react-v1.6';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
-  './manifest.json'
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png'
 ];
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+  if (event.data && event.data.type === 'GET_VERSION' && event.ports && event.ports[0]) {
+    event.ports[0].postMessage({ cacheName: CACHE_NAME });
+  }
+});
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -24,14 +35,25 @@ self.addEventListener('activate', (event) => {
         })
       );
     }).then(() => self.clients.claim())
+      .then(() => self.clients.matchAll({ type: 'window' }))
+      .then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({ type: 'SW_ACTIVATED', cacheName: CACHE_NAME });
+        });
+      })
   );
 });
 
 self.addEventListener('fetch', (event) => {
   const request = event.request;
+  if (request.method !== 'GET') return;
 
-  // For HTML / navigation requests, use Network-First strategy to ensure latest index.html with valid JS/CSS bundle hashes
-  if (request.mode === 'navigate' || request.headers.get('accept')?.includes('text/html')) {
+  // For HTML / navigation requests or manifest.json, use Network-First strategy to ensure latest index.html with valid JS/CSS bundle hashes
+  if (
+    request.mode === 'navigate' ||
+    request.headers.get('accept')?.includes('text/html') ||
+    request.url.endsWith('manifest.json')
+  ) {
     event.respondWith(
       fetch(request)
         .then((response) => {
@@ -42,7 +64,7 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(() => {
-          return caches.match('./index.html') || caches.match('./');
+          return caches.match(request) || caches.match('./index.html') || caches.match('./');
         })
     );
     return;

@@ -14,7 +14,7 @@ function formatDate(timestamp) {
 }
 
 export const HistoryScreen = () => {
-  const { sales, saleItems, pigments, customers, returns, db, openModal } = usePos();
+  const { sales, saleItems, salePayments, pigments, customers, returns, db, openModal } = usePos();
 
   const safeSales = sales || [];
   const safeItems = saleItems || [];
@@ -119,7 +119,7 @@ export const HistoryScreen = () => {
     } else {
       setSelectedSalePayments([]);
     }
-  }, [selectedSale?.sale_id, db]);
+  }, [selectedSale?.sale_id, selectedSale?.updated_at, salePayments, db]);
 
   const selectedSaleItems = useMemo(() => {
     if (!selectedSale) return [];
@@ -365,6 +365,19 @@ export const HistoryScreen = () => {
                     >
                       🖨️ Receipt
                     </button>
+                    {selectedSale.status !== 'VOIDED' && (
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => openModal('correctSale', {
+                          sale: selectedSale,
+                          items: selectedSaleItems,
+                          payments: selectedSalePayments
+                        })}
+                        title="Edit or correct items, weight, price, customer, or payment tender"
+                      >
+                        ✏️ Correct Sale
+                      </button>
+                    )}
                     {selectedSale.status === 'COMPLETED' && (
                       <button
                         className="btn btn-danger btn-sm"

@@ -5,8 +5,10 @@ import { CustomWeightModal } from './modals/CustomWeightModal';
 import { EditCartItemModal } from './modals/EditCartItemModal';
 import { BackupRestoreModal } from './modals/BackupRestoreModal';
 import { EditCartTotalModal } from './modals/EditCartTotalModal';
+import { CorrectSaleModal } from './modals/CorrectSaleModal';
 import { IntegrityRepairModal } from './IntegrityRepairModal';
 import { HelpModal } from './modals/HelpModal';
+import { PwaAppModal } from './modals/PwaAppModal';
 
 const PRESET_TIERS = [
   { label: '¼g', weight_mg: 250 },
@@ -378,6 +380,14 @@ export const ModalManager = () => {
 
   if (modal.name === 'editCartTotal') {
     return <EditCartTotalModal />;
+  }
+
+  if (modal.name === 'correctSale') {
+    return <CorrectSaleModal />;
+  }
+
+  if (modal.name === 'pwaApp') {
+    return <PwaAppModal />;
   }
 
   if (modal.name === 'integrityRepair') {
@@ -2639,10 +2649,10 @@ export const ModalManager = () => {
         {modal.name === 'customerLedger' && (() => {
           const balInfo = calculateCustomerBalance(modal.payload, customerPrepayments || []);
           const filteredEntries = (customerLedgerEntries || []).filter(entry => {
-            if (customerLedgerFilter === 'TAB_CHARGES') return entry.type === 'SALE_DEBT' || entry.type === 'HOUSE_TAB_CHARGE';
+            if (customerLedgerFilter === 'TAB_CHARGES') return entry.type === 'SALE_DEBT' || entry.type === 'HOUSE_TAB_CHARGE' || entry.type === 'SALE_CORRECTION_TAB';
             if (customerLedgerFilter === 'PAYMENTS') return entry.type === 'PAYMENT_RECEIVED' || entry.type === 'TAB_PAYMENT';
-            if (customerLedgerFilter === 'PREPAYMENTS') return entry.type === 'PREPAYMENT_CREDIT' || entry.type === 'PREPAYMENT_DEPOSIT' || entry.type === 'SALE_CREDIT_APPLIED';
-            if (customerLedgerFilter === 'ADJUSTMENTS') return entry.type === 'BALANCE_ADJUSTMENT' || entry.type === 'opening_balance' || entry.type === 'REFUND_STORE_CREDIT' || entry.type === 'REFUND_TAB_REVERSAL' || entry.type === 'SALE_VOID_REVERSAL';
+            if (customerLedgerFilter === 'PREPAYMENTS') return entry.type === 'PREPAYMENT_CREDIT' || entry.type === 'PREPAYMENT_DEPOSIT' || entry.type === 'SALE_CREDIT_APPLIED' || entry.type === 'SALE_CORRECTION_CREDIT';
+            if (customerLedgerFilter === 'ADJUSTMENTS') return entry.type === 'BALANCE_ADJUSTMENT' || entry.type === 'opening_balance' || entry.type === 'REFUND_STORE_CREDIT' || entry.type === 'REFUND_TAB_REVERSAL' || entry.type === 'SALE_VOID_REVERSAL' || entry.type === 'SALE_VOID_CREDIT_REFUND' || entry.type === 'SALE_CORRECTION_TAB' || entry.type === 'SALE_CORRECTION_REVERSAL' || entry.type === 'SALE_CORRECTION_CREDIT' || entry.type === 'SALE_CORRECTION_CREDIT_REFUND' || entry.type === 'RECONCILIATION_ADJUSTMENT';
             return true; // 'ALL'
           });
 

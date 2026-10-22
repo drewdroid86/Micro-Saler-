@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePos } from '../context/PosContext';
 
 const TAB_LABELS = {
@@ -16,6 +16,35 @@ const TAB_LABELS = {
 export const Header = () => {
   const { openModal, isBackupOverdue, lastBackupTime, currentTab, theme, toggleTheme } = usePos();
   const activeMeta = TAB_LABELS[currentTab] || TAB_LABELS.checkout;
+
+  const [canInstall, setCanInstall] = useState(() => Boolean(window.__deferredPwaPrompt));
+  const [updateReady, setUpdateReady] = useState(() => Boolean(window.__pwaUpdateReady));
+  const [isStandalone, setIsStandalone] = useState(() => {
+    try {
+      return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+    } catch (e) {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    const onInstallAvailable = () => setCanInstall(Boolean(window.__deferredPwaPrompt));
+    const onInstalled = () => {
+      setCanInstall(false);
+      setIsStandalone(true);
+    };
+    const onUpdateReady = () => setUpdateReady(true);
+
+    window.addEventListener('pwa-install-available', onInstallAvailable);
+    window.addEventListener('pwa-installed', onInstalled);
+    window.addEventListener('pwa-update-ready', onUpdateReady);
+
+    return () => {
+      window.removeEventListener('pwa-install-available', onInstallAvailable);
+      window.removeEventListener('pwa-installed', onInstalled);
+      window.removeEventListener('pwa-update-ready', onUpdateReady);
+    };
+  }, []);
 
   return (
     <header className="top-header">
@@ -42,6 +71,23 @@ export const Header = () => {
       </div>
 
       <div className="header-actions-group">
+        {updateReady && (
+          <button
+            className="header-btn"
+            onClick={() => openModal('pwaApp')}
+            title="A new GitHub update has been downloaded! Click to apply update."
+            style={{
+              background: 'rgba(16, 185, 129, 0.16)',
+              borderColor: 'var(--market-success)',
+              color: 'var(--market-success)',
+              fontWeight: 700
+            }}
+          >
+            <span>🔄</span>
+            <span>Update Ready</span>
+          </button>
+        )}
+
         {isBackupOverdue && (
           <button
             className="backup-warning-badge"
@@ -52,6 +98,23 @@ export const Header = () => {
             <span className="hide-on-xs">Backup Overdue</span>
           </button>
         )}
+
+        <button
+          className="header-btn"
+          onClick={() => openModal('pwaApp')}
+          title={canInstall && !isStandalone ? 'Install Micro Saler Android App & Auto-Updates' : 'Android App & Auto-Update Status'}
+          style={
+            canInstall && !isStandalone
+              ? {
+                  borderColor: 'var(--market-primary)',
+                  color: 'var(--market-primary)'
+                }
+              : undefined
+          }
+        >
+          <span>📲</span>
+          <span className="hide-on-sm">{canInstall && !isStandalone ? 'Install App' : 'App'}</span>
+        </button>
 
         <button
           className="header-btn"

@@ -1494,7 +1494,8 @@ function createMockDatabase() {
     audit_log: new Map(),
     suppliers: new Map(),
     stock_receipts: new Map(),
-    supplier_payments: new Map()
+    supplier_payments: new Map(),
+    shrinkage_logs: new Map()
   };
 
   // Per-store autoincrement: each store gets its own monotonically increasing
@@ -1527,15 +1528,17 @@ function createMockDatabase() {
       return list.filter(item => item[indexName] === value);
     },
     async put(storeName, record) {
-      const key = record.sale_id || record.customer_id || record.pigment_id
+      const key = (storeName === 'sale_items' ? (record.sale_item_id || record.id) : null)
+        || record.sale_id || record.customer_id || record.pigment_id
         || record.prepayment_id || record.supplier_id || record.entry_id
-        || record.receipt_id || record.id || nextIdFor(storeName);
+        || record.receipt_id || record.return_id || record.audit_id || record.id || nextIdFor(storeName);
       stores[storeName]?.set(Number(key), record);
       return key;
     },
     async add(storeName, record) {
       const key = nextIdFor(storeName);
       const idField = storeName === 'sales' ? 'sale_id'
+        : storeName === 'sale_items' ? 'sale_item_id'
         : storeName === 'customers' ? 'customer_id'
         : storeName === 'pigments' ? 'pigment_id'
         : storeName === 'sale_payments' ? 'payment_id'
@@ -1544,6 +1547,8 @@ function createMockDatabase() {
         : storeName === 'suppliers' ? 'supplier_id'
         : storeName === 'stock_receipts' ? 'receipt_id'
         : storeName === 'supplier_payments' ? 'payment_id'
+        : storeName === 'returns' ? 'return_id'
+        : storeName === 'audit_log' ? 'audit_id'
         : 'id';
       const item = { ...record, [idField]: key };
       stores[storeName]?.set(key, item);
@@ -1581,9 +1586,10 @@ function createMockDatabase() {
               const req = { onsuccess: null, onerror: null, result: null };
               // Resolve the primary key from the record's own id field so put()
               // always updates the existing record rather than inserting a duplicate.
-              const key = record.sale_id || record.customer_id || record.pigment_id
+              const key = (name === 'sale_items' ? (record.sale_item_id || record.id) : null)
+                || record.sale_id || record.customer_id || record.pigment_id
                 || record.prepayment_id || record.supplier_id || record.entry_id
-                || record.receipt_id || record.id || nextIdFor(name);
+                || record.receipt_id || record.return_id || record.audit_id || record.id || nextIdFor(name);
               store?.set(Number(key), record);
               setTimeout(() => {
                 req.result = key;
@@ -1595,6 +1601,7 @@ function createMockDatabase() {
               const req = { onsuccess: null, onerror: null, result: null };
               const key = nextIdFor(name);
               const idField = name === 'sales' ? 'sale_id'
+                : name === 'sale_items' ? 'sale_item_id'
                 : name === 'customers' ? 'customer_id'
                 : name === 'pigments' ? 'pigment_id'
                 : name === 'sale_payments' ? 'payment_id'
@@ -1603,6 +1610,8 @@ function createMockDatabase() {
                 : name === 'suppliers' ? 'supplier_id'
                 : name === 'stock_receipts' ? 'receipt_id'
                 : name === 'supplier_payments' ? 'payment_id'
+                : name === 'returns' ? 'return_id'
+                : name === 'audit_log' ? 'audit_id'
                 : 'id';
               const item = { ...record, [idField]: key };
               store?.set(key, item);
@@ -2992,4 +3001,166 @@ test('CRIT-03: calculateBusinessInsights deducts returns from per-pigment sell-t
   assert.equal(cobalt.cogsCents, 1200, 'Net COGS should be 1200 cents');
   assert.equal(cobalt.profitCents, 1800, 'Net profit should be 1800 cents');
 });
+
+test('completeSale and processReturn write COMPLETE_SALE and PROCESS_RETURN entries to audit_log', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const custId = await repo.createCustomer({
+    name: 'Audit Tester',
+    phone_number: '555-8888'
+  });
+
+  mockDb.stores.pigments.set(1, {
+    pigment_id: 1,
+    name: 'Emerald Green',
+    stock_mg: 20000,
+    total_cost_cents: 4000
+  });
+
+  const saleId = await repo.completeSale(
+    custId,
+    [{ pigment_id: 1, weight_mg: 5000, price_charged_cents: 2500, unit_cogs_cents: 1000 }],
+    [{ payment_type: 'CASH', amount_cents: 2500 }]
+  );
+
+  const auditsAfterSale = Array.from(mockDb.stores.audit_log.values());
+  const completeSaleAudit = auditsAfterSale.find(a => a.entity_type === 'Sale' && a.entity_id === saleId && a.action === 'COMPLETE_SALE');
+  assert.ok(completeSaleAudit, 'COMPLETE_SALE audit log entry must be recorded for every completed sale');
+
+  const saleDetails = JSON.parse(completeSaleAudit.details_json);
+  assert.equal(saleDetails.sale_id, saleId);
+  assert.equal(saleDetails.customer_id, custId);
+  assert.equal(saleDetails.total_amount_cents, 2500);
+  assert.equal(saleDetails.items.length, 1);
+  assert.equal(saleDetails.payments.length, 1);
+
+  const saleItems = Array.from(mockDb.stores.sale_items.values()).filter(i => i.sale_id === saleId);
+  assert.equal(saleItems.length, 1);
+
+  await repo.processReturn(saleItems[0].sale_item_id, 2000, 'Customer exchanged 2g', true);
+
+  const auditsAfterReturn = Array.from(mockDb.stores.audit_log.values());
+  const returnAudit = auditsAfterReturn.find(a => a.entity_type === 'Sale' && a.action === 'PROCESS_RETURN');
+  assert.ok(returnAudit, 'PROCESS_RETURN audit log entry must be recorded when processing a return');
+  const returnDetails = JSON.parse(returnAudit.details_json);
+  assert.equal(returnDetails.sale_id, saleId);
+  assert.equal(returnDetails.mg_returned, 2000);
+  assert.equal(returnDetails.refund_amount_cents, 1000);
+});
+
+test('correctSale atomically updates items, inventory stock & WAC, payments, customer ledger, and logs CORRECT_SALE', async () => {
+  const mockDb = createMockDatabase();
+  const repo = new PosRepository(mockDb);
+
+  const cust1Id = await repo.createCustomer({
+    name: 'Customer One',
+    initial_balance_cents: 0,
+    credit_limit_cents: 10000
+  });
+  const cust2Id = await repo.createCustomer({
+    name: 'Customer Two',
+    initial_balance_cents: 5000, // $50 store credit
+    credit_limit_cents: 10000
+  });
+
+  // Pigment 1: 50g (50000mg) in stock, $100 (10000 cents) total cost -> WAC is $2.00/g (200 cents/g)
+  mockDb.stores.pigments.set(1, {
+    pigment_id: 1,
+    name: 'Sapphire Shimmer',
+    stock_mg: 50000,
+    total_cost_cents: 10000
+  });
+
+  // 1. Complete initial sale for Customer 1: 10g (10000mg) for $50.00 (5000 cents) on HOUSE_TAB
+  const saleId = await repo.completeSale(
+    cust1Id,
+    [{ pigment_id: 1, weight_mg: 10000, price_charged_cents: 5000 }],
+    [{ payment_type: 'HOUSE_TAB', amount_cents: 5000 }],
+    false,
+    'RETAIL'
+  );
+
+  // Verify post-sale state:
+  // Pigment 1 has 40000mg stock, 8000 cents cost. Customer 1 has -5000 balance ($50 debt).
+  assert.equal(mockDb.stores.pigments.get(1).stock_mg, 40000);
+  assert.equal(mockDb.stores.pigments.get(1).total_cost_cents, 8000);
+  assert.equal(mockDb.stores.customers.get(cust1Id).balance, -5000);
+
+  const initialSaleItems = Array.from(mockDb.stores.sale_items.values()).filter(i => i.sale_id === saleId);
+  assert.equal(initialSaleItems.length, 1);
+  const existingSaleItemId = initialSaleItems[0].sale_item_id;
+
+  // 2. Correct sale for same customer (Customer 1):
+  // Change weight from 10g to 6g (6000mg), price from $50 to $30 (3000 cents),
+  // and split payment into $10 CASH + $20 HOUSE_TAB
+  await repo.correctSale(saleId, {
+    customerId: cust1Id,
+    pricingMode: 'WHOLESALE',
+    items: [{
+      sale_item_id: existingSaleItemId,
+      pigment_id: 1,
+      weight_mg: 6000,
+      price_charged_cents: 3000
+    }],
+    payments: [
+      { payment_type: 'CASH', amount_cents: 1000 },
+      { payment_type: 'HOUSE_TAB', amount_cents: 2000 }
+    ],
+    reason: 'Corrected weight from 10g to 6g and applied wholesale rate'
+  });
+
+  // Pigment 1 stock should be 50000 - 6000 = 44000mg; cost should be 10000 - 1200 = 8800 cents
+  const pigAfterCorrection1 = mockDb.stores.pigments.get(1);
+  assert.equal(pigAfterCorrection1.stock_mg, 44000);
+  assert.equal(pigAfterCorrection1.total_cost_cents, 8800);
+
+  // Sale record should reflect $30.00 total, $12.00 COGS, WHOLESALE mode
+  const saleAfter1 = mockDb.stores.sales.get(saleId);
+  assert.equal(saleAfter1.total_amount_cents, 3000);
+  assert.equal(saleAfter1.total_cogs_cents, 1200);
+  assert.equal(saleAfter1.pricing_mode, 'WHOLESALE');
+
+  // Customer 1 tab was reduced from $50 to $20 -> balance should be -2000, strictly matching ledger
+  const cust1After1 = mockDb.stores.customers.get(cust1Id);
+  assert.equal(cust1After1.balance, -2000);
+  assert.equal(cust1After1.current_balance_cents, 2000);
+  const verifyCust1 = await repo.verifyCustomerBalance(cust1Id);
+  assert.equal(verifyCust1.is_valid, true);
+  assert.equal(verifyCust1.has_dual_field_drift, false);
+
+  // Check CORRECT_SALE audit entry
+  const corrAudits = Array.from(mockDb.stores.audit_log.values()).filter(
+    a => a.entity_type === 'Sale' && a.entity_id === saleId && a.action === 'CORRECT_SALE'
+  );
+  assert.equal(corrAudits.length, 1);
+  const corrDetails = JSON.parse(corrAudits[0].details_json);
+  assert.equal(corrDetails.before.total_amount_cents, 5000);
+  assert.equal(corrDetails.after.total_amount_cents, 3000);
+
+  // 3. Reassign sale from Customer 1 to Customer 2, paying with $30 STORE_CREDIT
+  await repo.correctSale(saleId, {
+    customerId: cust2Id,
+    pricingMode: 'WHOLESALE',
+    items: [{
+      sale_item_id: existingSaleItemId,
+      pigment_id: 1,
+      weight_mg: 6000,
+      price_charged_cents: 3000
+    }],
+    payments: [
+      { payment_type: 'STORE_CREDIT', amount_cents: 3000 }
+    ],
+    reason: 'Reassigned to Customer Two using Store Credit'
+  });
+
+  // Customer 1 should now have 0 debt (the $20 tab was reversed)
+  assert.equal(mockDb.stores.customers.get(cust1Id).balance, 0);
+  assert.equal((await repo.verifyCustomerBalance(cust1Id)).is_valid, true);
+
+  // Customer 2 had +5000 credit, used 3000 -> +2000 remaining
+  assert.equal(mockDb.stores.customers.get(cust2Id).balance, 2000);
+  assert.equal((await repo.verifyCustomerBalance(cust2Id)).is_valid, true);
+});
+
 

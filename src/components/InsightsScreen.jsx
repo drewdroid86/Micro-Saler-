@@ -903,13 +903,23 @@ export const InsightsScreen = () => {
                           </span>
                         </td>
                         <td style={{ padding: '10px 8px', textAlign: 'center' }}>
-                          <button
-                            className="btn btn-xs btn-ghost"
-                            onClick={() => toggleExpandSale(s.sale_id)}
-                            style={{ fontSize: '0.78rem', padding: '2px 6px' }}
-                          >
-                            {isExpanded ? '▲ Hide' : '▼ View Items'}
-                          </button>
+                          <div className="flex-center gap-xs">
+                            <button
+                              className="btn btn-xs btn-ghost"
+                              onClick={() => toggleExpandSale(s.sale_id)}
+                              style={{ fontSize: '0.78rem', padding: '2px 6px' }}
+                            >
+                              {isExpanded ? '▲ Hide' : '▼ View Items'}
+                            </button>
+                            <button
+                              className="btn btn-xs btn-secondary"
+                              onClick={() => openModal('correctSale', { sale_id: s.sale_id })}
+                              title="Correct this sale"
+                              style={{ fontSize: '0.75rem', padding: '2px 6px' }}
+                            >
+                              ✏️ Correct
+                            </button>
+                          </div>
                         </td>
                       </tr>
 

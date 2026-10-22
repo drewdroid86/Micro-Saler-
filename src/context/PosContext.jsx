@@ -13,7 +13,17 @@ export const PosProvider = ({ children }) => {
   const [repo, setRepo] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const [currentTab, setCurrentTab] = useState('checkout');
+  const [currentTab, setCurrentTab] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get('tab');
+      const validTabs = ['checkout', 'inventory', 'pricing', 'customers', 'suppliers', 'reports', 'insights', 'history', 'audit'];
+      if (tabParam && validTabs.includes(tabParam)) {
+        return tabParam;
+      }
+    } catch (e) {}
+    return 'checkout';
+  });
   const [pigments, setPigments] = useState([]);
   const [priceTiers, setPriceTiers] = useState([]);
   const [customers, setCustomers] = useState([]);
