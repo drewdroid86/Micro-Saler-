@@ -54,7 +54,7 @@ export const Header = () => {
           <div className="header-brand-text">
             <div className="header-brand-title">
               <span>MICRO SALER</span>
-              <span className="header-version-pill">v1.6</span>
+              <span className="header-version-pill">v1.7</span>
             </div>
             <div className="header-brand-subtitle">Artisan Pigment POS</div>
           </div>

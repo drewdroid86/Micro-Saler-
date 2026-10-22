@@ -2,9 +2,9 @@
 
 [![Deploy Web App](https://github.com/drewdroid86/Micro-Saler-/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/drewdroid86/Micro-Saler-/actions/workflows/deploy-pages.yml)
 [![Live Web App](https://img.shields.io/badge/live--demo-GitHub%20Pages-4F46E5.svg)](https://drewdroid86.github.io/Micro-Saler-/)
-[![Version](https://img.shields.io/badge/version-1.6.0-059669.svg)](https://github.com/drewdroid86/Micro-Saler-)
+[![Version](https://img.shields.io/badge/version-1.7.0-059669.svg)](https://github.com/drewdroid86/Micro-Saler-)
 [![Offline First](https://img.shields.io/badge/pwa-100%25--offline--local-2563EB.svg)](https://github.com/drewdroid86/Micro-Saler-)
-[![Tests](https://img.shields.io/badge/tests-76%20passing-10B981.svg)](https://github.com/drewdroid86/Micro-Saler-)
+[![Tests](https://img.shields.io/badge/tests-78%20passing-10B981.svg)](https://github.com/drewdroid86/Micro-Saler-)
 
 **Micro Saler** is a high-precision, offline-first Point-of-Sale (POS), Inventory Management, and Double-Verified Ledger system engineered for artisan, market-stall, and wholesale mica pigment sales by weight.
 
@@ -18,22 +18,31 @@
 | :--- | :--- |
 | **UI & State** | React 18 (Functional Components, Context API, Custom Hooks) |
 | **Design System** | Modern SaaS Slate/Indigo CSS Token Architecture with Light & Dark Mode (`[data-theme="dark"]`) |
-| **Build & Bundler** | Vite 5 (with vendor code-splitting & PWA Service Worker `v1.6`) |
+| **Build & Bundler** | Vite 5 (with vendor code-splitting & SHA-256 Auto-Versioned PWA Service Worker `v1.7`) |
 | **Database** | IndexedDB (`MicroSalerDB`, Schema `v11` — 15 client-side object stores) |
-| **Testing** | Node.js Native Test Runner (`node:test` — 76 unit & integration tests) |
+| **Testing** | Node.js Native Test Runner (`node:test` — 78 unit & integration tests) |
 | **Analytics** | Vercel Speed Insights |
 
 ---
 
-## ✨ What's New in v1.6.0
+## ✨ What's New in v1.7.0
 
+- ✏️ **Full Atomic Sale Correction Workflow (`correctSale` & `CorrectSaleModal`)**:
+  - Edit any completed sale directly from **Sales History**, **Security Audit Log**, or **Business Insights** without having to void and re-ring the transaction.
+  - Atomically modifies line items (pigment, weight in grams, price charged, add/remove items, or proportional total override), assigned customer, pricing mode (`RETAIL` / `WHOLESALE` with 1-tap rate recalculation), and payment tender (`CASH`, `DIGITAL` with provider & fee calculation, `HOUSE_TAB`, `STORE_CREDIT`, or `SPLIT`).
+  - Automatically reconciles inventory stock (`stock_mg`), Weighted Average Cost (`total_cost_cents`), customer `HOUSE_TAB` / `STORE_CREDIT` ledger deltas (including customer reassignments), preserves existing `sale_item_id` return links, and writes a complete `before`/`after` snapshot to `audit_log`.
+- 🔒 **Complete & Retroactive Security Audit Trail**:
+  - Every `completeSale`, `processReturn`, `correctSale`, `restockPigment`, and `logShrinkage` operation writes structured records to `audit_log`.
+  - Retroactively synthesizes audit stream entries for pre-existing historical sales and returns so every transaction since day one appears in the **Security Audit Log**, complete with quick inspector actions (**🖨️ Receipt**, **✏️ Correct Sale**, and **🚫 Void**).
+- 📲 **Android App (WebAPK) & Automatic GitHub Updates**:
+  - Install Micro Saler as a standalone Android application with maskable icons and home-screen long-press shortcuts (**POS Register**, **Inventory & Stock**, **Customer Accounts**).
+  - Build-time Vite plugin (`swAutoVersionPlugin`) stamps a deterministic SHA-256 asset hash into `sw.js` on every push to `main`. Installed Android apps automatically detect and download updates in the background and surface a 1-tap **🔄 Update Ready** badge in the header while keeping local IndexedDB data 100% untouched.
+
+### Previous Highlights (v1.6.0)
 - 🎨 **Modern SaaS UI & Light/Dark Theme Engine**: Crisp Slate & Indigo palette with tabular numerals (`tabular-nums`), elevated cards, glassmorphic modals, and an instant **☀️ Light / 🌙 Dark** mode toggle persisted in `localStorage`.
-- 🧭 **Categorized Desktop Sidebar & Mobile Bottom Dock**: Organizes all 9 modules into 4 logical groups (**Point of Sale**, **Catalog & Stock**, **Accounts & Tabs**, **Analytics & System**) with live status badges (cart item count, low-stock alerts, open prepayments) and a thumb-friendly mobile dock.
-- 🛒 **Guided 3-Step Checkout Register**:
-  - **Step 1 — Select Pigment**: Instant search bar and finish-type filter pills (`Matte`, `Shimmer`, `Pearl`, `Metallic`, etc.) with selected checkmarks and live per-gram rate badges.
-  - **Step 2 — Tap Weight Tier**: Responsive grid of tactile preset cards (`¼g`, `½g`, `¾g`, `1g`, `1.5g`, `1.75g`, `3.5g`, `5g`, `7g`, `14g`, `28g`, plus `+ Custom`) displaying live calculated prices and fixed tier override indicators.
-  - **Step 3 — Receipt-Style Cart with Inline Steppers**: One-tap `−` / `+` weight steppers directly inside cart line items, perforated receipt summary with COGS, Recommended MSRP, customer savings banner, and 1-tap Cash or Multi-Tender checkout.
-- 🛡️ **Single-Writer Ledger & Audit Hardening**: Strict single-writer discipline on `customer_ledger` (`customer.balance`) and `suppliers` (`current_balance_cents`), proportional `HOUSE_TAB` debt reversal (`REFUND_TAB_REVERSAL`) and `STORE_CREDIT` restoration on partial/multi-item returns, and net return deductions across P&L and Business Insights.
+- 🧭 **Categorized Desktop Sidebar & Mobile Bottom Dock**: Organizes all 9 modules into 4 logical groups (**Point of Sale**, **Catalog & Stock**, **Accounts & Tabs**, **Analytics & System**) with live status badges and a thumb-friendly mobile dock.
+- 🛒 **Guided 3-Step Checkout Register**: Real-time pigment search & finish filter pills, tactile weight-tier preset cards (`¼g` to `28g` + custom), and a receipt-style cart with inline `−` / `+` weight steppers.
+- 🛡️ **Single-Writer Ledger & Audit Hardening**: Strict single-writer discipline on `customer_ledger` (`customer.balance`) and `suppliers` (`current_balance_cents`), proportional `HOUSE_TAB` debt reversal (`REFUND_TAB_REVERSAL`) and `STORE_CREDIT` restoration on returns, and net return deductions across P&L and Business Insights.
 
 ---
 
@@ -90,7 +99,7 @@ Micro Saler stores all data **100% locally on-device** in IndexedDB. There is no
 ```bash
 npm install      # Install dependencies
 npm run dev      # Start Vite dev server with HMR (http://localhost:3000)
-npm test         # Run all 76 unit & ledger integrity tests (node:test)
+npm test         # Run all 78 unit & ledger integrity tests (node:test)
 npm run build    # Build production bundle into dist/
 npm run preview  # Preview production build locally
 ```

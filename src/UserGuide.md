@@ -176,15 +176,13 @@ That raises their balance (store credit) — they can spend it on a future
 sale by choosing Store Credit at checkout.
 
 **Someone wants to return an item.**
-Find the sale in History and process a return there. If they originally
-paid with store credit, the refund path is a known rough edge right now
-— double check their balance actually updated after (see Root Cause note
-in the architect brief if this comes up).
+Find the sale in History and process a return there. Stock, WAC cost basis,
+and Store Credit or House Tab balances update automatically.
 
 **I rang something up wrong.**
-Void the sale in History rather than trying to manually fix inventory —
-voiding is what correctly restores stock and reverses any payment
-effects.
+Tap **✏️ Correct Sale** in History, Audit, or Business Insights to edit items,
+weights, prices, assigned customer, or payment tender in place — or **Void**
+the sale in History to cancel it completely and restore stock.
 
 **A number in Insights or Reports looks wrong.**
 Check the Audit log for that customer/sale — it's the one place that

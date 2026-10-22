@@ -6,7 +6,7 @@ export const PwaAppModal = () => {
   const [canInstall, setCanInstall] = useState(() => Boolean(window.__deferredPwaPrompt));
   const [updateReady, setUpdateReady] = useState(() => Boolean(window.__pwaUpdateReady));
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [cacheVersion, setCacheVersion] = useState('v1.6.0');
+  const [cacheVersion, setCacheVersion] = useState('v1.7.0');
   const [isStandalone, setIsStandalone] = useState(() => {
     try {
       return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;

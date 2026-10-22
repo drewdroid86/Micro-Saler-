@@ -5,6 +5,25 @@ All notable changes to the **Micro Saler POS** project will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-10-22
+
+### 🚀 Added
+- **Full Atomic Sale Correction Workflow (`PosRepository.correctSale` & `CorrectSaleModal.jsx`)**:
+  - Edit any completed sale in place from **Sales History**, **Security Audit Log**, or **Business Insights** (`✏️ Correct Sale`).
+  - Supports changing the assigned customer, switching pricing mode (`RETAIL` / `WHOLESALE`) with 1-tap price recalculation, editing/adding/removing line items (pigment, weight in grams, price charged, or proportional total override), and updating single or split payment tenders (`CASH`, `DIGITAL` with provider & fee calculation, `HOUSE_TAB`, `STORE_CREDIT`).
+  - Atomically restores and deducts net inventory weights (`stock_mg`) and WAC cost basis (`total_cost_cents`), preserves `sale_item_id` references for prior returns, reconciles `HOUSE_TAB` and `STORE_CREDIT` ledger balances via `_applyLedgerEntryInTx` (including customer reassignments), and logs a `CORRECT_SALE` audit record with full `before` and `after` snapshots.
+- **Complete & Retroactive Security Audit Trail (`AuditScreen.jsx` & `repository.js`)**:
+  - `completeSale`, `processReturn`, `restockPigment`, and `logShrinkage` now write structured `COMPLETE_SALE`, `PROCESS_RETURN`, `RESTOCK_PIGMENT`, and `LOG_SHRINKAGE` entries to `audit_log`.
+  - `AuditScreen.jsx` merges `audit_log` entries with retroactively synthesized records for any historical sales or returns created before v1.7.0, and adds quick inspector actions (**🖨️ Receipt**, **✏️ Correct Sale**, **🚫 Void**).
+- **Android App (WebAPK) & Auto-Update Engine (`PwaAppModal.jsx`, `vite.config.js`, `sw.js`, `manifest.json`)**:
+  - Added `swAutoVersionPlugin` in `vite.config.js` to stamp a deterministic SHA-256 build hash (`microsaler-v1.7.0-<hash>`) and built asset manifest into `dist/sw.js` on every build.
+  - Added Android WebAPK `manifest.json` shortcuts (**POS Register**, **Inventory & Stock**, **Customer Accounts**) with `?tab=` deep-link routing in `PosContext.jsx`.
+  - Added **📲 App / Install App** and live **🔄 Update Ready** controls in `Header.jsx` and `PwaAppModal.jsx` to trigger native Android app installation, check for GitHub Pages updates, and apply updates with 1 tap while keeping IndexedDB data intact.
+- **Repository Housekeeping & Tests**:
+  - Removed legacy August handoff/review notes from the repository root and expanded unit test coverage to **78 passing tests**.
+
+---
+
 ## [1.6.0] - 2026-10-19
 
 ### 🚀 Added

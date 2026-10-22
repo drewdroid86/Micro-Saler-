@@ -32,7 +32,7 @@ function swAutoVersionPlugin() {
       }
 
       const pkgPath = path.resolve(process.cwd(), 'package.json');
-      const pkg = fs.existsSync(pkgPath) ? JSON.parse(fs.readFileSync(pkgPath, 'utf8')) : { version: '1.6.0' };
+      const pkg = fs.existsSync(pkgPath) ? JSON.parse(fs.readFileSync(pkgPath, 'utf8')) : { version: '1.7.0' };
       const hash = crypto.createHash('sha256').update(builtAssets.join('|') + '|' + pkg.version).digest('hex').slice(0, 8);
       const cacheName = `microsaler-v${pkg.version}-${hash}`;
 

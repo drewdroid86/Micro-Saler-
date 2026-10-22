@@ -38,8 +38,8 @@ export const USER_GUIDE_SECTIONS = [
       { tab: 'Suppliers', icon: '🏭', purpose: 'Track vendor payables for restocks, pay them down.' },
       { tab: 'Reports & P&L', icon: '📊', purpose: 'Operating profit & loss over a custom date period.' },
       { tab: 'Business Insights', icon: '📈', purpose: 'KPIs, inventory velocity, top-selling items, receivables/payables, and shrinkage.' },
-      { tab: 'History', icon: '📋', purpose: 'Past sales — look one up, print receipts, void a sale, or process a return.' },
-      { tab: 'Audit', icon: '🔒', purpose: "Immutable log of everything that's happened — trace balance edits and data repairs." }
+      { tab: 'History', icon: '📋', purpose: 'Past sales — look one up, print receipts, correct items/payment/customer, void a sale, or process a return.' },
+      { tab: 'Audit', icon: '🔒', purpose: "Immutable log of all sales, returns, corrections, restocks, balance edits, and data repairs." }
     ]
   },
   {
@@ -182,10 +182,11 @@ export const USER_GUIDE_SECTIONS = [
     summary: 'P&L, velocity reorder flags, receivables, voiding sales, and audit logs.',
     keywords: ['insights', 'kpi', 'reports', 'profit', 'void', 'return', 'audit', 'velocity'],
     sections: [
-      { title: 'Business Insights', desc: 'KPIs, inventory velocity (with "reorder soon" alerts), receivables/payables at a glance, shrinkage, and profitability ranking.' },
+      { title: 'Business Insights', desc: 'KPIs, inventory velocity (with "reorder soon" alerts), receivables/payables at a glance, shrinkage, and profitability ranking with inline ✏️ Correct action.' },
       { title: 'Reports & P&L', desc: 'Profit and loss statements across selectable date ranges with merchant fee accounting.' },
-      { title: 'History & Returns', desc: 'Look up past sales, print official receipts, void erroneous sales, or process customer returns.' },
-      { title: 'Audit Trail', desc: 'Locked, append-only chronological record of every system event for immutable discrepancy tracing.' }
+      { title: 'History, Returns & Sale Corrections', desc: 'Look up past sales, print official receipts, use ✏️ Correct Sale to edit items/weights/prices/customer/payments atomically, void erroneous sales, or process partial/full customer returns.' },
+      { title: 'Audit Trail', desc: 'Locked, append-only chronological record of every sale, return, correction, restock, shrinkage, and ledger event with quick Receipt, Correct Sale, and Void actions.' },
+      { title: 'Android App & Auto-Updates (📲)', desc: 'Install Micro Saler as a standalone Android WebAPK from the top header (📲 App). Background updates download automatically whenever new releases deploy to GitHub Pages without affecting local IndexedDB data.' }
     ]
   },
   {
@@ -229,7 +230,7 @@ export const USER_GUIDE_SECTIONS = [
       },
       {
         q: 'I rang something up wrong.',
-        a: 'Void the sale in History rather than manually adjusting inventory — voiding automatically restores stock and reverses ledger/payment effects.'
+        a: 'Tap ✏️ Correct Sale (in History, Audit, or Business Insights) to atomically adjust items, weights, prices, customer, or payment method — or tap 🚫 Void to cancel the entire sale and restore stock.'
       },
       {
         q: 'A number in Insights or Reports looks unusual.',
